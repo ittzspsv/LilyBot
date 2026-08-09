@@ -8,6 +8,8 @@ Multi-purpose Discord bot designed to do almost any stuffs
 > [!WARNING]
 > Setting up this bot on your own currently requires some manual configuration. I'm working on improving the configuration system to make the setup process easier.
 
+[Contact me on Discord](https://discord.com/users/1488556914605428988) if you have any doubts about this project or want to set this up on your own.
+
 ---
 
 ## MODULES
