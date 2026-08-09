@@ -5,6 +5,9 @@
 
 Multi-purpose Discord bot designed to do almost any stuffs
 
+> [!WARNING]
+> Setting up this bot on your own currently requires some manual configuration. I'm working on improving the configuration system to make the setup process easier.
+
 ---
 
 ## MODULES
@@ -47,33 +50,45 @@ All modules are based on **Cogs**, meaning they can be removed or placed dependi
 
 ## BLOX FRUITS Modules (Images)
 
-| ![Stock](.github/misc/Stock.png) | ![Moderation](.github/misc/Combo.webp) |
-| :------------------------------: | :------------------------------------: |
-|         **Stock System**         |            **Combo System**            |
+| ![Stock](.github/misc/Stock.png) | ![FruitValues](.github/misc/FruitValues.png) |
+| :------------------------------: | :------------------------------------------: |
+|         **Stock System**         |               **Fruit Values**               |
 
-| ![FruitValues](.github/misc/FruitValues.png) | ![WinLoss](.github/misc/WinLoss.png) | ![Combo System](.github/misc/FruitSuggestor.webp) |
-| :------------------------------------------: | :----------------------------------: | :-----------------------------------------------: |
-|               **Fruit Values**               |            **Win / Loss**            |                **Fruit Suggestor**                |
+| ![WinLoss](.github/misc/WinLoss.png) | ![FruitSuggestor](.github/misc/FruitSuggestor.webp) |
+| :----------------------------------: | :-------------------------------------------------: |
+|            **Win / Loss**            |                 **Fruit Suggestor**                 |
 
 ---
 
 ## MODERATION TOOLS
 
-| ![Preview](.github/misc/Moderation.jpg) | ![Preview](.github/misc/Modstats.png) |
+| ![Preview](.github/misc/Moderation.png) | ![Preview](.github/misc/Modstats.png) |
 | :-------------------------------------: | :-----------------------------------: |
 |              **Mod Logs**               |             **Mod Stats**             |
 
-| ![Preview](.github/misc/CaseProofs.png) | ![Preview](.github/misc/Moderation.jpg) |
-| :-------------------------------------: | :-------------------------------------: |
-|           **Proof Retrieval**           |              **Mod Logs**               |
-
----
+| ![Preview](.github/misc/CaseProofs.png) |
+| :-------------------------------------: |
+|           **Proof Retrieval**           |
 
 ## STAFF MANAGEMENT TOOLS
 
-| ![Preview](.github/misc/Management.jpg) | ![Preview](.github/misc/StaffList.png) |
-| :-------------------------------------: | :------------------------------------: |
-|            **Staff Profile**            |             **Staff List**             |
+| ![Preview](.github/misc/StaffProfile.png) | ![Preview](.github/misc/StaffList.png) |
+| :---------------------------------------: | :------------------------------------: |
+|             **Staff Profile**             |             **Staff List**             |
+
+| ![Preview](.github/misc/Strike.png) |
+| :---------------------------------: |
+|        **Staff Infractions**        |
+
+### Quota System
+
+| ![Preview](.github/misc/QuotaList.png) | ![Preview](.github/misc/QuotaEvaluation.png) |
+| :------------------------------------: | :------------------------------------------: |
+|            **Staff Quota**             |               **Quota Check**                |
+
+| ![Preview](.github/misc/QuotaOverallEvaluation.png) |
+| :-------------------------------------------------: |
+|            **Quota Overall Evaluation**             |
 
 ---
 
