@@ -1,10 +1,12 @@
 from ....database.integrations.bot_globals import BotGlobalsDatabaseAccess
 from src.core.utils.embeds.sLilyEmbed import simple_embed
+from src.core.utils.lily_utility import length, truncate
 from src.core.features.application.types.lily_application_types import QuestionType
 from ..components.lily_application_components import CreateApplicationModal, ApplicationView, UpdateApplicationModal
 
 from discord import Interaction, app_commands, TextChannel, User, Embed, ForumChannel
 import discord
+from io import BytesIO
 from discord.ext import commands
 from src.core.configs.sBotDetails import img
 from typing import Optional, List, Dict, Any
@@ -547,23 +549,59 @@ class LilyApplicationController:
             forum_thread.id
         )
 
-        for group in groups:
-            embed = discord.Embed(
-                title=group["name"],
-                description=f'- {group["description"]}',
-                color=16777215
-            )
+        flag = 0
+        full_text = []
 
-            embed.set_image(url=img["border"])
-            group_questions = group["questions"]
-            for i, question in enumerate(group_questions):
-                embed.add_field(
-                    name=f'{i + 1}. {question["label"]}',
-                    value=question["answer"] or "**No Answer Provided**",
-                    inline=False
+        for group in groups:
+            try:
+                embed = discord.Embed(
+                    title=group["name"],
+                    description=f'- {group["description"]}',
+                    color=16777215
                 )
 
-            await forum_thread.send(embed=embed)
+                embed.set_image(url=img["border"])
+                group_questions = group["questions"]
+
+                for i, question in enumerate(group_questions):
+                    answer = question["answer"] or "**No Answer Provided**"
+
+                    if length(answer) > 1024:
+                        flag = 1
+
+                        full_text.extend([
+                            group["name"],
+                            f'{i + 1}. {question["label"]}',
+                            f'* {answer}',
+                            ""
+                        ])
+
+                        answer = truncate(answer)
+
+                    embed.add_field(
+                        name=f'{i + 1}. {question["label"]}',
+                        value=answer,
+                        inline=False
+                    )
+
+                await forum_thread.send(embed=embed)
+            except Exception as e:
+                print(e)
+
+
+        if flag == 1:
+            file_content = "\n".join(full_text)
+
+            file = discord.File(
+                BytesIO(file_content.encode("utf-8")),
+                filename="application.txt"
+            )
+
+            await forum_thread.send(
+                content="Some answers exceeded Discord's embed limit. They are attached below",
+                file=file
+            )
+
 
     async def update_applicant(
         self,
