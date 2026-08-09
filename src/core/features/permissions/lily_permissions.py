@@ -132,3 +132,88 @@ def app_permission(command_name: str, restrict: bool = False):
         return True
 
     return app_commands.check(predicate)
+
+def has_permission(
+    ctx: commands.Context,
+    command_name: str,
+    restrict: bool = False,
+) -> bool:
+    """ Permission based commands cannot be executed throu' bot DM """
+    if ctx.guild is None or isinstance(ctx.author, discord.User):
+        return False
+
+    if ctx.author.id in (1488556914605428988, 798533737943138314, 999309816914792630):
+        return True
+
+    """ Guild owners and administrators have access to any commands, unless restrict = False """
+    if ctx.author.id == ctx.guild.owner_id:
+        if restrict:
+            return False
+        return True
+
+    if ctx.author.guild_permissions.administrator:
+        if restrict:
+            return False
+        return True
+
+    """ Normal permission checking based on commands """
+    bot: "Lily" = ctx.bot
+    db: Optional[BotGlobalsDatabaseAccess] = bot.db
+
+    if db is None:
+        return False
+
+    role_ids = [role.id for role in ctx.author.roles]
+
+    has_perm = db.has_permission(
+        ctx.guild.id,
+        command_name,
+        role_ids
+    )
+
+    if restrict:
+        return not has_perm
+
+    return has_perm
+
+async def has_app_permission(
+    interaction: Interaction,
+    command_name: str,
+    restrict: bool = False,
+) -> bool:
+    if interaction.guild is None:
+        return False
+
+    member = interaction.user
+    if not isinstance(member, discord.Member):
+        return False
+
+    if member.id in (1488556914605428988, 798533737943138314, 999309816914792630):
+        return True
+
+    if member.id == interaction.guild.owner_id:
+        if restrict:
+            return False
+        return True
+
+    if member.guild_permissions.administrator:
+        if restrict:
+            return False
+        return True
+
+    bot: "Lily" = cast("Lily", interaction.client)
+    db: Optional[BotGlobalsDatabaseAccess] = bot.db
+    assert db is not None
+
+    role_ids = [role.id for role in member.roles]
+
+    has_perm = db.has_permission(
+        interaction.guild.id,
+        command_name,
+        role_ids,
+    )
+
+    if restrict:
+        return not has_perm
+
+    return has_perm

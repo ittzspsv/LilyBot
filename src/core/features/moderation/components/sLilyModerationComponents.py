@@ -830,3 +830,4 @@ class CaseProofsView(discord.ui.View):
     ):
         assert isinstance(self.message, discord.Message)
         await interaction.response.send_modal(ProofsComponentCommandModal(controller=self.controller, case_id=self.case_id, cmd_view=self, msg=self.message))
+

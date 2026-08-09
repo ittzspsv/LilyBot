@@ -8,13 +8,14 @@ import time
 
 from io import BytesIO
 from src.core.utils.embeds.sLilyEmbed import simple_embed
+from src.core.utils.lily_utility import *
 from src.core.features.permissions.lily_permissions import app_permission, permission
 from src.core.utils.components.sLIlyGlobalComponents import CommandInfo as CI
 from src.core.utils.embeds.sLilyEmbed import ParseAdvancedEmbed
 from src.core.utils.types.types import ChannelEnum, CommandEnum, NotifiersEnum
 from src.core.logging.lily_logging import LilyLoggingController
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
-from src.core.utils.components.sLIlyGlobalComponents import RoleCustomizationModal, Avatar
+from src.core.utils.components.sLIlyGlobalComponents import RoleCustomizationModal, Avatar, AutomodUpdate
 from src.core.visuals.cards.quote import make_quote_card
 from discord.ext import commands
 from discord import app_commands
@@ -23,6 +24,8 @@ from discord import app_commands
 class LilyUtility(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+
+        self.automod_cache = {}
 
         self.ctx_menu = app_commands.ContextMenu(
             name="Quote",
@@ -149,17 +152,20 @@ class LilyUtility(commands.Cog):
             print(f"Exception [SERVER LIST] {e}")
 
     #UID UTILITY
-    @app_commands.command(name='id', description='returns the id of a specific usertype')
-    async def id(self, interaction: discord.Interaction, user: discord.Member | None =None):
+    @commands.command(name="id")
+    async def id(self, ctx: commands.Context, user: discord.Member | None = None):
         if user is None:
-            await interaction.response.send_message(str(interaction.user.id))
+            await ctx.reply(str(ctx.author.id))
         else:
-            await interaction.response.send_message(content=f'{user.id}')
+            await ctx.reply(str(user.id))
         
     @app_commands.command(name='purge',description='Purge Message with specified amount')
     @app_commands.checks.cooldown(1, 10.0)
     @app_permission(command_name="purge")
     async def purge(self, interaction: discord.Interaction, amount: int=0, member: discord.Member | None = None):
+
+        if amount <= 0:
+            await interaction.response.send_message(embed=simple_embed("Specify a valid amount", 'cross'))
         if amount > 1000:
             await interaction.response.send_message(embed=simple_embed("You cannot purge more than 1000 messages!", 'cross'))
             return
@@ -179,16 +185,15 @@ class LilyUtility(commands.Cog):
         except discord.HTTPException as e:
             await interaction.followup.send(embed=simple_embed("An Unknown error occured", 'cross'))
 
-    @app_commands.command(name='ping',description='sends the latency of the bot')
-    @app_commands.checks.cooldown(1, 5.0)
-    async def ping(self, interaction: discord.Interaction):
+    @commands.command(name="ping")
+    async def ping(self, ctx: commands.Context):
         ws_latency = round(self.bot.latency * 1000, 2)
 
         start = time.perf_counter()
-        await interaction.response.send_message("Evaluating...")
+        msg = await ctx.reply("Evaluating...")
         roundtrip = round((time.perf_counter() - start) * 1000, 2)
 
-        await interaction.edit_original_response(
+        await msg.edit(
             content=(
                 f"WebSocket Latency: `{ws_latency}ms`\n"
                 f"Roundtrip: `{roundtrip}ms`"
@@ -223,20 +228,17 @@ class LilyUtility(commands.Cog):
 
         bot_db: BotGlobalsDatabaseAccess = self.bot.db
         author_role_ids = [r.id for r in author.roles]
-        try:
-            allowed = bot_db.can_assign_role(interaction.guild.id, author_role_ids, role.id)
+        allowed = bot_db.can_assign_role(interaction.guild.id, author_role_ids, role.id)
 
-            if not allowed:
-                return await interaction.response.send_message(embed=simple_embed("You are not allowed to assign this role.", 'cross'))
+        if not allowed:
+            return await interaction.response.send_message(embed=simple_embed("You are not allowed to assign this role.", 'cross'))
 
-            if role in user.roles:
-                await user.remove_roles(role, reason=f"Role removed by {author}")
-                return await interaction.response.send_message(embed=simple_embed(f"Removed role **{role.name}** from **{user.name}**."))
-            else:
-                await user.add_roles(role, reason=f"Role given by {author}")
-                return await interaction.response.send_message(embed=simple_embed(f"Added role **{role.name}** to **{user.name}**."))
-        except Exception as e:
-            print(e)
+        if role in user.roles:
+            await user.remove_roles(role, reason=f"Role removed by {author}")
+            return await interaction.response.send_message(embed=simple_embed(f"Removed role **{role.name}** from **{user.name}**."))
+        else:
+            await user.add_roles(role, reason=f"Role given by {author}")
+            return await interaction.response.send_message(embed=simple_embed(f"Added role **{role.name}** to **{user.name}**."))
 
     @customize.command(name="role", description="Customize your role")
     @app_commands.checks.cooldown(1, 5.0)
@@ -331,7 +333,6 @@ class LilyUtility(commands.Cog):
 
         await interaction.response.send_message(embed=simple_embed(f"Successfully removed customizable entry for {role.mention} assigned to {member.mention}"))
         await member.send(f"Hey, You can no longer customize {role.name} (dev_id: {role.id}) in {interaction.guild.name}.")
-
 
     @customize.command(name='bot', description='Customize the bot for this server (visually)')
     @app_commands.checks.cooldown(1, 5.0)
@@ -444,7 +445,6 @@ class LilyUtility(commands.Cog):
         await db.set_channel(interaction.guild.id, channel.id, type.value)
 
         await interaction.response.send_message(embed=simple_embed(f"Successfully assigned `{type.value.title()}` for {channel.mention}"))
-
 
     @set.command(name="notifiers", description="Creates a notifier (webhook) when an value updates")
     @app_commands.checks.cooldown(1, 20.0)
@@ -577,57 +577,63 @@ class LilyUtility(commands.Cog):
 
     @app_commands.command(name="nick", description="Set a nickname for a member")
     @app_permission(command_name="nick")
-    async def set_nickname(self, interaction: discord.Interaction, member: discord.Member, name: str):
-        if member is None and name is None:
-            bot_mention = interaction.guild.me.mention if interaction.guild else "@Lily"
-            await interaction.response.send_message(view=CI(interaction, "Nick", ["nick {user} {nickname}", f"nick {bot_mention} Lilyy", f"nick lily Lilly"]))
-            return
-        
-
+    async def set_nickname(
+        self,
+        interaction: discord.Interaction,
+        member: discord.Member,
+        name: str
+    ):
         assert interaction.guild is not None
-        assert isinstance(member, discord.Member)
         assert isinstance(interaction.user, discord.Member)
         assert isinstance(interaction.guild.me, discord.Member)
 
-        if member != interaction.user and interaction.user.top_role <= member.top_role:
-            return await interaction.response.send_message(embed=simple_embed(
-                "You cannot act on this user their role is higher than or equal to yours.", 'cross'
-            ))
+        error = await change_nickname(
+            interaction.user,
+            interaction.guild.me,
+            member,
+            name
+        )
 
-        if member.top_role >= interaction.guild.me.top_role:
-            return await interaction.response.send_message(embed=simple_embed(
-                "I can't change that member's nickname their top role is higher or equal to mine.", 'cross'
-            ))
-
-        if name is not None and len(name) > 32:
-            return await interaction.response.send_message(embed=simple_embed(
-                "Nicknames cannot be longer than 32 characters.", 'cross'
-            ))
-
-        try:
-            await member.edit(
-                nick=name,
-                reason=f"Changed by {interaction.user}"
+        if error:
+            return await interaction.response.send_message(
+                embed=simple_embed(error, "cross")
             )
 
-            await interaction.response.send_message(
-                embed=simple_embed(
-                    f"Successfully changed {member.mention}'s nickname to **{name}**."
-                ))
+        await interaction.response.send_message(
+            embed=simple_embed(
+                f"Successfully changed {member.mention}'s nickname to **{name}**."
+            )
+        )
 
-        except discord.Forbidden:
-            await interaction.response.send_message(
-                embed=simple_embed(
-                    "I don't have app_permission to change that member's nickname.", 'cross'
-                )
+    @commands.command(name="nick", aliases=["nickname"])
+    async def nick(
+        self,
+        ctx: commands.Context,
+        member: discord.Member,
+        *,
+        name: str
+    ):
+        assert ctx.guild is not None
+        assert isinstance(ctx.author, discord.Member)
+        assert isinstance(ctx.guild.me, discord.Member)
+
+        error = await change_nickname(
+            ctx.author,
+            ctx.guild.me,
+            member,
+            name
+        )
+
+        if error:
+            return await ctx.reply(
+                embed=simple_embed(error, "cross")
             )
 
-        except discord.HTTPException as e:
-            await interaction.response.send_message(
-                embed=simple_embed(
-                    f"Failed to change nickname: {e}", 'cross'
-                )
+        await ctx.reply(
+            embed=simple_embed(
+                f"Successfully changed {member.mention}'s nickname to **{name}**."
             )
+        )
 
     async def quote(self, interaction: discord.Interaction, message: discord.Message) -> None:
         await interaction.response.defer()
@@ -682,6 +688,64 @@ class LilyUtility(commands.Cog):
     @app_commands.command(name='avatar', description='Get avatar of yourself or other member')
     async def avatar(self, interaction: discord.Interaction, member: discord.Member | None = None):
         await interaction.response.send_message(view=Avatar(member or interaction.user))
+
+    @commands.command(name="avatar", aliases=["av"])
+    async def _avatar(self, ctx: commands.Context, member: discord.Member | None):
+        await ctx.reply(view=Avatar(member or ctx.author))
+
+    @app_commands.command(name="evaluate", description="Evaluates an expression in any form")
+    @app_permission(command_name="evaluate", restrict=True)
+    async def message(
+        self,
+        interaction: discord.Interaction,
+        message: str,
+        snowflake: str | None = None
+    ):
+        channel = interaction.channel
+
+        if not isinstance(channel, (discord.Thread, discord.TextChannel)):
+            await interaction.response.send_message(
+                "Cannot send messages here.",
+                ephemeral=True
+            )
+            return
+
+        if snowflake is not None:
+            try:
+                msg = await channel.fetch_message(int(snowflake))
+                await msg.reply(content=message)
+            except discord.NotFound:
+                await interaction.response.send_message(
+                    "Message not found.",
+                    ephemeral=True
+                )
+                return
+        else:
+            await channel.send(content=message)
+
+        await interaction.response.send_message(
+            "Successfully sent!",
+            ephemeral=True
+        )
+
+
+    @set.command(name="automod", description="Updates an automod (add / remove new entries)")
+    @app_permission(command_name="set_automod")
+    @app_commands.guild_only()
+    async def set_automod(
+        self,
+        interaction: discord.Interaction,
+    ) -> None:
+
+        assert interaction.guild is not None
+        
+        rules = await interaction.guild.fetch_automod_rules()
+        
+        
+        view = AutomodUpdate(rules)
+        await interaction.response.send_message(view=view, ephemeral=True)
+
+
 
 
 async def setup(bot):

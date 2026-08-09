@@ -404,6 +404,23 @@ class ApplicationQuestionView(discord.ui.LayoutView):
     async def additional_components_callback(self, interaction: discord.Interaction):
         await interaction.response.send_message("Successfully selected. Please press the Submit button once you've confirmed your choice.", ephemeral=True)
 
+class Confirm(discord.ui.View):
+    def __init__(self):
+        super().__init__()
+        self.value = None
+
+    @discord.ui.button(label='Confirm', style=discord.ButtonStyle.secondary)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(embed=simple_embed("I've sent you the application in DMs. Please continue it there."), ephemeral=True)
+        self.value = True
+        self.stop()
+
+    @discord.ui.button(label='Cancel', style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(embed=simple_embed('Process has been cancelled.', 'cross'), ephemeral=True)
+        self.value = False
+        self.stop()
+
 class ApplicationView(discord.ui.LayoutView):  
     def __init__(
             self,
@@ -484,11 +501,13 @@ class ApplicationView(discord.ui.LayoutView):
     async def submit_button_callback(self, interaction: discord.Interaction):
         if interaction.guild is None:
             return
-        
-        blocked = await self.db.app_management_db.is_applicant_blocked(interaction.guild.id, interaction.user.id)
+
+        blocked = await self.db.app_management_db.is_applicant_blocked(
+            interaction.guild.id, interaction.user.id
+        )
         if blocked:
             await interaction.response.send_message(
-                "You have been blocked.",
+                embed=simple_embed("You have been blocked.", 'cross'),
                 ephemeral=True,
             )
             return
@@ -511,6 +530,28 @@ class ApplicationView(discord.ui.LayoutView):
             wave=self.current_wave,
         )
 
+        if submission is not None and submission["status"] in ("submitted", "accepted", "rejected"):
+            await interaction.response.send_message(
+                "You have already submitted an application for this wave.",
+                ephemeral=True,
+            )
+            return
+
+        view = Confirm()
+        await interaction.response.send_message(
+            embed=simple_embed("Are you sure you want to start this application?", 'warn'),
+            view=view,
+            ephemeral=True,
+        )
+
+        await view.wait()
+
+        if view.value is None:
+            return
+
+        if not view.value:
+            return
+
         if submission is None:
             submission = await self.db.app_management_db.create_application_submission(
                 guild_id=interaction.guild.id,
@@ -519,39 +560,26 @@ class ApplicationView(discord.ui.LayoutView):
                 wave=self.current_wave,
             )
 
-        if submission["status"] in ("submitted", "accepted", "rejected"):
-            await interaction.response.send_message(
-                "You have already submitted an application for this wave.",
-                ephemeral=True,
-            )
-            return
-
         question = await self.db.app_management_db.get_unanswered_application_question(
             submission["id"]
         )
 
         if question is None:
-            await interaction.response.send_message(
-                "Your application is already complete.",
+            await interaction.followup.send(
+                embed=simple_embed("Your application is already complete."),
                 ephemeral=True,
             )
             return
 
         try:
             await interaction.user.send(
-                view=ApplicationQuestionView(
-                    self.db,
-                    question,
-                )
+                view=ApplicationQuestionView(self.db, question)
             )
         except discord.Forbidden:
-            await interaction.response.send_message(
-                "I couldn't send you a DM. Please enable Direct Messages from server members and try again.",
+            await interaction.followup.send(
+                embed=simple_embed("I couldn't send you a DM. Please enable Direct Messages from server members and try again.", 'cross'),
                 ephemeral=True,
             )
             return
 
-        await interaction.response.send_message(
-            "I've sent you the application in DMs. Please continue it there.",
-            ephemeral=True,
-        )
+        

@@ -46,6 +46,9 @@ class ApplicationManagement:
             return None
 
         return dict(row)
+
+    async def get_pending_application(self, guild_id: int):
+        ...
     
     async def get_application_with_view(
         self,
@@ -652,6 +655,12 @@ class ApplicationManagement:
 
         return dict(row) if row else None
 
+    async def ensure_member(self, member_id: int, guild_id: int) -> None:
+        await self.db.execute(
+            "INSERT OR IGNORE INTO members (member_id, guild_id) VALUES (?, ?)",
+            (member_id, guild_id),
+        )
+
     async def save_application_answer(
         self,
         submission_id: int,
@@ -691,6 +700,9 @@ class ApplicationManagement:
         member_id: int,
         wave: int,
     ) -> Dict[str, Any]:
+
+        await self.ensure_member(member_id, guild_id)
+
         submission_id = await self.db.execute(
             """
             INSERT INTO application_submissions (
@@ -740,11 +752,38 @@ class ApplicationManagement:
         )
 
         return dict(row) if row else None
+
+    async def delete_submission(
+        self,
+        guild_id: int,
+        submission_id: int,
+        member_id: int,
+        wave: int,
+    ) -> bool:
+        row_count = await self.db.execute(
+            """
+            DELETE FROM application_submissions
+            WHERE guild_id = ?
+            AND id = ?
+            AND member_id = ?
+            AND wave = ?
+            """,
+            (
+                guild_id,
+                submission_id,
+                member_id,
+                wave,
+            ),
+            row_count=True,
+        )
+
+        return row_count is not None and row_count > 0
     
     async def get_pending_submission(
         self,
         member_id: int,
     ) -> Optional[Dict[str, Any]]:
+        
         row = await self.db.fetch_one(
             """
             SELECT *
@@ -758,6 +797,47 @@ class ApplicationManagement:
         )
 
         return dict(row) if row else None
+
+    async def get_pending_submissions(
+        self,
+        guild_id: int,
+        application_id: Optional[int] = None
+    ) -> Optional[List[Dict[str, Any]]]:
+
+        query = """
+            SELECT
+                s.id AS submission_id,
+                s.guild_id,
+                s.application_id,
+                s.member_id,
+                s.wave,
+                s.status,
+                s.verification_status,
+                s.submitted_at,
+                s.submission_thread_reference,
+                a.name AS application_name,
+                a.description AS application_description,
+                a.submit_btn_label,
+                a.active AS application_active,
+                a.current_wave AS application_current_wave,
+                a.submission_forum_id
+            FROM application_submissions s
+            JOIN application a ON a.id = s.application_id
+            WHERE s.guild_id = ?
+            AND s.status = 'in_progress'
+        """
+
+        params: List[Any] = [guild_id]
+
+        if application_id is not None:
+            query += " AND s.application_id = ?"
+            params.append(application_id)
+
+        query += " ORDER BY s.submitted_at ASC"
+
+        rows = await self.db.fetch_all(query, tuple(params))
+
+        return [dict(row) for row in rows] if rows else None
     
     async def update_submission_status(
         self,
@@ -959,6 +1039,7 @@ class ApplicationManagement:
         guild_id: int,
         member_id: int
     ) -> bool:
+        await self.ensure_member(member_id, guild_id)
         row = await self.db.fetch_one(
             """
             SELECT 1
@@ -983,6 +1064,7 @@ class ApplicationManagement:
         update: str,
         reason: str | None = None,
     ) -> None:
+        await self.ensure_member(member_id, guild_id)
         if update == "block":
             await self.db.execute(
                 """
@@ -1022,3 +1104,96 @@ class ApplicationManagement:
 
         else:
             raise ValueError(f"Unknown update action: {update}")
+
+    async def get_applicant_status(
+        self,
+        guild_id: int,
+        member_id: int
+    ):
+        block_row = await self.db.fetch_one(
+            """
+            SELECT reason, blocked_by, blocked_at
+            FROM application_blocked_users
+            WHERE guild_id = ? AND member_id = ?
+            """,
+            (guild_id, member_id),
+        )
+
+        block_status = {
+            "blocked": block_row is not None,
+            "reason": block_row["reason"] if block_row else None,
+            "blocked_by": block_row["blocked_by"] if block_row else None,
+            "blocked_at": block_row["blocked_at"] if block_row else None,
+        }
+
+        submissions = await self.db.fetch_all(
+            """
+            SELECT
+                s.id AS submission_id,
+                s.application_id,
+                a.name AS application_name,
+                s.wave,
+                s.status,
+                s.verification_status,
+                s.submitted_at
+            FROM application_submissions s
+            JOIN application a ON a.id = s.application_id
+            WHERE s.guild_id = ? AND s.member_id = ?
+            ORDER BY s.submitted_at DESC
+            """,
+            (guild_id, member_id),
+        )
+
+        applications = []
+
+        for sub in submissions:
+            entry = {
+                "application_id": sub["application_id"],
+                "application_name": sub["application_name"],
+                "submission_id": sub["submission_id"],
+                "wave": sub["wave"],
+                "status": sub["status"],
+                "verification_status": sub["verification_status"],
+                "submitted_at": sub["submitted_at"],
+                "answers": None,
+            }
+
+            questions = await self.db.fetch_all(
+                """
+                SELECT
+                    q.id AS question_id,
+                    q.label,
+                    q.description,
+                    q.type,
+                    ans.answer_value
+                FROM application_group_assignments ga
+                JOIN application_group_questions gq
+                    ON gq.group_id = ga.group_id
+                JOIN application_questions q
+                    ON q.id = gq.question_id
+                LEFT JOIN application_submission_answers ans
+                    ON ans.question_id = q.id
+                    AND ans.submission_id = ?
+                WHERE ga.application_id = ?
+                ORDER BY ga.position, gq.position
+                """,
+                (sub["submission_id"], sub["application_id"]),
+            )
+
+            entry["answers"] = [
+                {
+                    "question_id": q["question_id"],
+                    "label": q["label"],
+                    "description": q["description"],
+                    "type": q["type"],
+                    "answer_value": q["answer_value"], 
+                }
+                for q in questions
+            ]
+
+            applications.append(entry)
+
+        return {
+            "block_status": block_status,
+            "applications": applications,
+        }

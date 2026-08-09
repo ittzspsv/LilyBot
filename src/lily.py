@@ -64,8 +64,7 @@ class Lily(commands.Bot):
                 print(f"Load failed {ext}: {e}")
 
         self.tree.on_error = self.on_app_command_error
-        
-    
+            
     def prefix(self, bot: commands.Bot, message: discord.Message):
         if bot.user is None:
             return []
@@ -108,13 +107,11 @@ class Lily(commands.Bot):
         activity = discord.Activity(type=discord.ActivityType.watching, name=f"{member_count:,} members!")
         await self.change_presence(activity=activity)
 
-
     async def on_message(self, message:discord.Message): 
         if message.author == self.user:
               return
         #await self.agent_controller.on_message(self, message=message)
         await self.process_commands(message)
-
 
     async def on_command_error(self, ctx, error):
         if isinstance(error, commands.CheckFailure):
@@ -141,3 +138,23 @@ class Lily(commands.Bot):
                     embed=simple_embed(str(error), "cross"),
                     ephemeral=True,
                 )
+
+    async def send(
+        self,
+        ctx: commands.Context | discord.Interaction,
+        **kwargs,
+    ) -> discord.Message | None:
+        if isinstance(ctx, commands.Context):
+            return await ctx.reply(**kwargs)
+
+        if isinstance(ctx, discord.Interaction):
+            if ctx.response.is_done():
+                return await ctx.followup.send(**kwargs)
+            else:
+                await ctx.response.send_message(**kwargs)
+                try:
+                    return await ctx.original_response()
+                except discord.NotFound:
+                    return None
+
+        raise TypeError(f"Unsupported context type: {type(ctx)!r}")

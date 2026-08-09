@@ -6,10 +6,28 @@ from enum import Enum
 
 from src.core.utils.components.sLIlyGlobalComponents import CommandInfo
 from src.core.utils.embeds.sLilyEmbed import simple_embed
-from src.core.features.moderation.controller.lily_moderation_controller import LilyModerationController
 from src.core.features.moderation.components.sLilyModerationComponents import AppealForumCustomize
 from src.core.features.permissions.lily_permissions import permission, app_permission
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
+from src.core.logging.lily_logging import LilyLoggingController
+
+from src.core.features.moderation.controller.lily_moderation_controller import (
+    ban_user,
+    quarantine_user,
+    mute_user,
+    unmute as unmute_fn,
+    unban as unban_fn,
+    release as release_fn,
+    warn as warn_fn,
+    case_edit as case_edit_fn,
+    case_delete as case_delete_fn,
+    ms as ms_fn,
+    mod_logs,
+    moderation_insights as moderation_insights_fn,
+    setup_mod_appeal,
+    accept_appeal as accept_appeal_fn,
+    reject_appeal as reject_appeal_fn,
+)
 
 
 class ModType(str, Enum):
@@ -25,11 +43,15 @@ class ModType(str, Enum):
 class LilyModeration(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.controller: Optional[LilyModerationController] = None
         self.cached_members: Dict[int, discord.Member] = {}
 
-    async def on_load(self):
-        self.controller = LilyModerationController(self.bot.db, self.bot.logging_controller)
+    @property
+    def bot_db(self) -> BotGlobalsDatabaseAccess:
+        return self.bot.db
+
+    @property
+    def logging_controller(self) -> LilyLoggingController:
+        return self.bot.logging_controller
 
     def strip_mention(self, content: str, bot_user_id: int) -> str:
         return re.sub(rf"<@!?{bot_user_id}>", "", content).strip()
@@ -154,8 +176,6 @@ class LilyModeration(commands.Cog):
     @commands.command(name='ban', description='Ban a user from the server', aliases=['b'])
     @permission(command_name="ban")
     async def ban(self, ctx: commands.Context, member: discord.User | discord.Member | None = None, *, reason="No reason provided"):
-        if self.controller is None:
-            return
         if not member:
             return await ctx.reply(
                 view=CommandInfo(ctx, "Ban", ["ban user reason", f"ban {ctx.me.mention} Toxicity!", f"b {ctx.me.mention} Not obeying rules!"])
@@ -178,14 +198,12 @@ class LilyModeration(commands.Cog):
         if not target_user:
             return
 
-        await self.controller.ban_user(ctx, target_user, reason, proofs)
+        await ban_user(self.bot_db, self.logging_controller, ctx, target_user, reason, proofs)
 
     @commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
     @commands.command(name='quarantine', description='Quarantines an user from this server', aliases=['jail', 'j', 'q'])
     @permission(command_name="quarantine")
     async def quarantine(self, ctx: commands.Context, member: discord.Member | discord.User | None = None, *, reason="No reason provided"):
-        if self.controller is None:
-            return
         if not member:
             return await ctx.reply(
                 view=CommandInfo(ctx, "Quarantine", ["quarantine user reason", f"j {ctx.me.mention} Toxicity!", f"q {ctx.me.mention} Not obeying rules" , f"quarantine {ctx.me.mention} breaking server rules",f"jail {ctx.me.mention} Toxicity!"])
@@ -200,38 +218,33 @@ class LilyModeration(commands.Cog):
             if att.content_type and att.content_type.startswith(("image/", "video/"))
         ]
 
-        await self.controller.quarantine_user(ctx, member, reason, proofs)
+        await quarantine_user(ctx, member, reason, proofs)
+
 
     @commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
     @commands.command(name='unban', description='Unban a Particular User', aliases=['ub'])
     @permission(command_name="unban")
     async def unban(self, ctx, user: discord.User | None = None, * ,reason: str="No reason provided"):
-        if self.controller is None:
-            return
         if user is None:
             await ctx.reply(view=CommandInfo(ctx, "Unban", ["unban user", f"unban {ctx.me.mention} Appealed", f"ub {ctx.me.mention} Appealed"]))
             return
         
-        await self.controller.unban(ctx, user, self.bot, reason)
+        await unban_fn(ctx, user, reason)
 
     @commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
     @commands.command(name='release', description='Release a member from quarantine', aliases=['qr', 'r'])
     @permission(command_name="unban")
     async def release(self, ctx, user: discord.Member | None =None, * ,reason: str="No reason provided"):
-        if self.controller is None:
-            return
         if user is None:
             await ctx.reply(view=CommandInfo(ctx, "Release", ["release user reason", f"release {ctx.me.mention} Appealed", f"qr {ctx.me.mention} Appealed", f'r {ctx.me.mention} Appealed!']))
             return
         
-        await self.controller.release(ctx, user, reason)
+        await release_fn(ctx, user, reason)
 
     @commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
     @commands.command(name='mute', description='Mute a user with desired input', aliases=['m'])
     @permission(command_name="mute")
     async def mute(self, ctx:commands.Context, member:discord.Member | discord.User | None = None, duration:str="1",*, reason="No reason provided"):
-        if self.controller is None:
-            return
         await ctx.defer()
 
         if member is None:
@@ -239,44 +252,37 @@ class LilyModeration(commands.Cog):
             return
 
         proofs = [att for att in ctx.message.attachments if att.content_type and any(att.content_type.startswith(t) for t in ["image/", "video/"])]
-        await self.controller.mute_user(ctx, member, duration, reason, proofs)
+        await mute_user(ctx, member, duration, reason, proofs)
 
     @commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
     @commands.command(name='warn', description='Warn a user with a specific reason')
     @permission(command_name="warn")
     async def warn(self, ctx:commands.Context, member:discord.Member | discord.User | None = None,*, reason="No reason provided"):
-        if self.controller is None:
-            return
         await ctx.defer()
         if member is None:
             await ctx.reply(view=CommandInfo(ctx, "Warn", ["warn user reason", f"warn {ctx.me.mention} Not Obeying Rules!"]))
             return
-        proofs = proofs = [att for att in ctx.message.attachments if att.content_type and any(att.content_type.startswith(t) for t in ["image/", "video/"])]
-        await self.controller.warn(ctx, member, reason, proofs)
+        proofs = [att for att in ctx.message.attachments if att.content_type and any(att.content_type.startswith(t) for t in ["image/", "video/"])]
+        await warn_fn(ctx, member, reason, proofs)
 
     @commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
     @commands.hybrid_command(name='unmute', description='unmutes a user with desired input')
     @permission(command_name="unmute")
     async def unmute(self, ctx: commands.Context, member: discord.Member | discord.User | None =None, *, reason: str="No reason provided"):
-        if self.controller is None:
-            return
         if member is None:
             return await ctx.reply(
                 view=CommandInfo(ctx, "Unmute", ["unmute user reason", f"unmute {ctx.me.mention} Appealed"])
             )
 
         await ctx.defer()
-        await self.controller.unmute(ctx, member, reason)
+        await unmute_fn(ctx, member, reason)
 
     @mod.command(name='stats', description='checks stats for a particular moderator or yourself')
     @app_permission(command_name="ms")
     async def ms(self, interaction: discord.Interaction, member: discord.Member | discord.User | None = None, page_start: int = 0, page_end: int = 0):
-        if self.controller is None:
-            return
-
         user = member or interaction.user
 
-        await self.controller.ms(
+        await ms_fn(
             interaction=interaction,
             moderator=user,
             page_start=page_start,
@@ -293,9 +299,6 @@ class LilyModeration(commands.Cog):
         mod_type: ModType = ModType.All,
         moderator: discord.User | discord.Member | None = None
     ):
-        if self.controller is None:
-            return
-
         target_id = member.id if member else interaction.user.id
 
         try:
@@ -304,7 +307,7 @@ class LilyModeration(commands.Cog):
             return
 
         try:
-            await self.controller.mod_logs(
+            await mod_logs(
                 interaction,
                 target_user_id=target_id,
                 user=user,
@@ -318,52 +321,28 @@ class LilyModeration(commands.Cog):
     @mod.command(name='insights', description='Get detailed moderation insights')
     @app_permission(command_name="moderation_insights")
     async def moderation_insights(self, interaction: discord.Interaction):
-        if self.controller is None:
-            return
-        await self.controller.moderation_insights(interaction)
+        await moderation_insights_fn(interaction)
 
     @case.command(name='edit', description='Edit a case')
     @app_permission(command_name="case_edit")
     async def case_edit(self, interaction: discord.Interaction, case_id: str, *, new_reason: str):
-        if self.controller is None:
-            return
         if case_id is None or new_reason is None:
-            return await ctx.reply(
-                view=CommandInfo(ctx, "Case Edit", ["edit_case case_id new_reason"])
+            return await interaction.response.send_message(
+                view=CommandInfo(interaction, "Case Edit", ["edit_case case_id new_reason"])
             )
 
-        await self.controller.case_edit(interaction, int(case_id), new_reason, False)
+        await case_edit_fn(interaction, int(case_id), new_reason, False)
 
     @case.command(name='edit_absolute', description='Edit any case')
     @app_permission(command_name="case_edit_absolute")
     async def case_edit_absolute(self, interaction: discord.Interaction, case_id: int, *, new_reason: str):
-        if self.controller is None:
-            return
-        await self.controller.case_edit(interaction, case_id, new_reason, True)
+        await case_edit_fn(interaction, case_id, new_reason, True)
 
     @case.command(name='delete', description='Delete a case')
     @app_permission(command_name="case_delete")
     async def case_delete(self, interaction: discord.Interaction, case_id: str):
-        if self.controller is None:
-            return
-        await self.controller.case_delete(interaction, int(case_id))
+        await case_delete_fn(interaction, int(case_id))
 
-    @case.command(name='attach', description='Attach proofs for a case')
-    @app_permission(command_name="case_attach")
-    async def case_attach(self, interaction: discord.Interaction):
-        if self.controller is None:
-            return
-        
-        await self.controller.logging_controller.log_proofs(interaction)
-
-    @case.command(name='proofs', description='Retrieve all proofs of an case')
-    @app_permission(command_name="case_proofs")
-    async def case_retrieve(self, interaction: discord.Interaction, case_id: str):
-        if self.controller is None:
-            return
-        
-        await self.controller.logging_controller.retrieve_proofs(interaction, int(case_id))
-  
     @mod.command(name="acronym_add", description="Add an reason acronym")
     @app_permission(command_name = "mod_acronym_add")
     async def add_mod_acronym(self, interaction: discord.Interaction, key: str, * ,value: str):
@@ -437,10 +416,7 @@ class LilyModeration(commands.Cog):
         if interaction.guild is None:
             return await interaction.response.send_message(embed=simple_embed("This command can only be executed inside an guild", 'cross'))
         
-        if self.controller is not None:
-            await self.controller.setup_mod_appeal(
-                interaction
-            )
+        await setup_mod_appeal(interaction)
 
     @appeal.command(
         name="forum",
@@ -459,27 +435,21 @@ class LilyModeration(commands.Cog):
                 )
             )
 
-        if self.controller is not None:
-            await interaction.response.send_modal(
-                AppealForumCustomize(self.bot.db)
-            )
+        await interaction.response.send_modal(
+            AppealForumCustomize(self.bot.db)
+        )
 
     @appeal.command(name="accept", description="Accept an appeal")
     @app_permission(command_name = "mod_appeal_handlers")
     async def accept_appeal(self, interaction: discord.Interaction):
-        if self.controller is not None:
-            await self.controller.accept_appeal(interaction)
+        await accept_appeal_fn(interaction)
 
     @appeal.command(name="reject", description="Deny an appeal")
     @app_permission(command_name = "mod_appeal_handlers")
     async def reject_appeal(self, interaction: discord.Interaction, reason: str):
-        if self.controller is not None:
-            await self.controller.reject_appeal(interaction, reason)
+        await reject_appeal_fn(interaction, reason)
 
 
 async def setup(bot):
     cog = LilyModeration(bot)
     await bot.add_cog(cog)
-
-    if hasattr(cog, "on_load"):
-        await cog.on_load()

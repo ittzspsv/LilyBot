@@ -7,7 +7,6 @@ from typing import Optional
 
 import discord
 from discord.ext import commands
-from discord.ext.commands import MemberConverter
 
 # Constants
 UTC = timezone.utc
@@ -68,40 +67,30 @@ def iso(dt: datetime) -> str:
 def proper_capatilize(text):
     return " ".join(word[:1].upper() + word[1:] for word in text.split())
 
-async def get_safe_member(*,bot: Optional[commands.Bot],guild: Union[discord.Guild, int], id: int) -> Optional[discord.Member]:
-    if isinstance(guild, discord.Guild):
-        member = guild.get_member(id)
+async def change_nickname(
+    actor: discord.Member,
+    bot_member: discord.Member,
+    member: discord.Member,
+    name: str | None
+) -> str | None:
+    if member != actor and actor.top_role <= member.top_role:
+        return "You cannot act on this user their role is higher than or equal to yours."
 
-        if member:
-            return member
+    if member.top_role >= bot_member.top_role:
+        return "I can't change that member's nickname their top role is higher or equal to mine."
 
-        try:
-            return await guild.fetch_member(id)
-        except:
-            return None
-
-    guild_obj = bot.get_guild(guild) if bot else None
-
-    if not guild_obj:
-        try:
-            guild_obj = await bot.fetch_guild(guild)
-        except:
-            return None
+    if name is not None and len(name) > 32:
+        return "Nicknames cannot be longer than 32 characters."
 
     try:
-        return await guild_obj.fetch_member(id)
-    except:
+        await member.edit(
+            nick=name,
+            reason=f"Changed by {actor}"
+        )
         return None
-    
-async def get_member_from_user(bot, interaction: discord.Interaction, user: Union[int, str]):
-    converter = MemberConverter()
 
-    try:
-        ctx = await bot.get_context(interaction.message)
-        member: Optional[discord.Member] = await converter.convert(ctx, str(user))
-        print(member.id)
-    except commands.CommandError:
-        print("Error Processing the command")
+    except discord.Forbidden:
+        return "I don't have permission to change that member's nickname."
 
 async def fetch_json(session, url, method="GET", **kwargs):
     async with session.request(method, url, **kwargs) as resp:

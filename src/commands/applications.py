@@ -416,9 +416,50 @@ class LilyApplications(commands.Cog):
                member.id,
                "unblock",
                reason
-           ) 
+           )
 
-    
+    @app_permission(command_name="application_management")
+    @app_commands.autocomplete(application=applications_autocomplete)
+    @applicant.command(name="entrydelete", description="Delete an applicant's application entry")
+    async def applicant_entry_delete(
+        self,
+        interaction: Interaction,
+        member: Member | User,
+        application: int
+    ):
+        if self.controller is not None:
+            await self.controller.applicant_entry_delete(
+                interaction,
+                member,
+                application
+            )
+
+    @app_permission(command_name="application_staff")
+    @applicant.command(name="status", description="Show an applicant status")
+    async def applicant_status(
+        self,
+        interaction: Interaction,
+        member: Member | User
+    ):
+        if self.controller is not None:
+            await self.controller.get_applicant_status(
+                interaction,
+                member
+            )
+
+    @app_permission(command_name="application_management")
+    @app.command(name="invalidate", description="Removes all the pending submissions")
+    @app_commands.autocomplete(application=applications_autocomplete)
+    async def application_invalidate(
+        self,
+        interaction: Interaction,
+        application: int,
+    ):
+        if self.controller is not None:
+            await self.controller.application_invalidate(
+                interaction,
+                application
+            )
 
 async def setup(bot):
     cog = LilyApplications(bot)

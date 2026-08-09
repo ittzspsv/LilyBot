@@ -229,6 +229,15 @@ class FruitValueComponent(discord.ui.LayoutView):
         )
 
         self.add_item(self.container)
+        self.add_item(
+            discord.ui.ActionRow(
+                discord.ui.Button(
+                    label="Add Bot",
+                    url="https://discord.com/oauth2/authorize?client_id=1240222509811499050&permissions=140794709184&integration_type=0&scope=bot",
+                    style=discord.ButtonStyle.link
+                )
+            )  
+        )
 
 class WinLossComponent(discord.ui.LayoutView):
     def __init__(self, 
@@ -311,6 +320,15 @@ class WinLossComponent(discord.ui.LayoutView):
         )
 
         self.add_item(self.container)
+        self.add_item(
+            discord.ui.ActionRow(
+                discord.ui.Button(
+                    label="Add Bot",
+                    url="https://discord.com/oauth2/authorize?client_id=1240222509811499050&permissions=140794709184&integration_type=0&scope=bot",
+                    style=discord.ButtonStyle.link
+                )
+            )  
+        )
 
     def build_fruit_details(self, fruits: List[str], fruit_types: List[str]) -> str:
         details = ""

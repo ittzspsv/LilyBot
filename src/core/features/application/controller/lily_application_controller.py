@@ -6,6 +6,8 @@ from ..components.lily_application_components import CreateApplicationModal, App
 
 from discord import Interaction, app_commands, TextChannel, User, Embed, ForumChannel
 import discord
+import json
+import asyncio
 from io import BytesIO
 from discord.ext import commands
 from src.core.configs.sBotDetails import img
@@ -469,9 +471,102 @@ class LilyApplicationController:
 
         else:
             raise app_commands.CheckFailure("Group not found.")
-    
 
-    """ Submit application (create a form and push all answers to the form with some details) """
+    async def get_applicant_status(
+        self,
+        interaction: discord.Interaction,
+        member: discord.Member | discord.User
+    ):
+        assert interaction.guild is not None
+
+        status = await self.bot_db.app_management_db.get_applicant_status(
+            interaction.guild.id, member.id
+        )
+
+        block_status = status["block_status"]
+        applications = status["applications"]
+
+        embed = discord.Embed(
+            title=f"{member.display_name}'s Status",
+            color=16777215,
+        )
+        embed.set_thumbnail(url=member.display_avatar.url)
+
+        embed.set_image(url=img["border"])
+
+        embed.add_field(
+            name="Block Status",
+            value="Blocked" if block_status["blocked"] else "Not Blocked",
+            inline=False,
+        )
+
+        if block_status["blocked"]:
+            blocked_by = f"<@{block_status['blocked_by']}>" if block_status["blocked_by"] else "Unknown"
+            embed.add_field(name="Reason", value=block_status["reason"] or "No reason provided", inline=True)
+            embed.add_field(name="Blocked By", value=blocked_by, inline=True)
+            embed.add_field(name="Blocked At", value=block_status["blocked_at"] or "Unknown", inline=True)
+
+        embed.set_footer(text="Full application data attached as JSON")
+
+        json_bytes = json.dumps(applications, indent=2, default=str).encode("utf-8")
+        file = discord.File(
+            BytesIO(json_bytes),
+            filename=f"applications_{member.id}.json",
+        )
+
+        await interaction.response.send_message(embed=embed, file=file, ephemeral=True)
+
+    async def applicant_entry_delete(
+        self,
+        interaction: Interaction,
+        member: discord.Member | User,
+        application: int
+    ):
+
+        assert interaction.guild is not None
+
+        _application = await self.bot_db.app_management_db.get_application(interaction.guild.id, application)
+        if _application is None:
+            return
+        
+        wave = _application["current_wave"]
+        application_submission = await self.bot_db.app_management_db.get_submission(
+            interaction.guild.id,
+            application,
+            member.id,
+            wave
+        )
+
+        if application_submission is None:
+            await interaction.response.send_message(embed=simple_embed("This applicant has not submitted any application", 'cross'))
+            return
+
+        submission_thread: int | None = application_submission["submission_thread_reference"]
+        if submission_thread:
+            try:
+                thread = await interaction.guild.fetch_channel(submission_thread)
+
+                if isinstance(thread, discord.Thread):
+                    await thread.delete()
+
+            except discord.NotFound:
+                pass
+            except discord.Forbidden:
+                pass
+
+        success = await self.bot_db.app_management_db.delete_submission(
+            interaction.guild.id,
+            application_submission["id"],
+            member.id,
+            wave
+        )
+
+        if success:
+            await interaction.response.send_message(embed=simple_embed("Successfully Deleted Submission"))
+
+        else:
+            await interaction.response.send_message(embed=simple_embed("Failed to Delete Submission", 'cross'))
+
     async def push_submission(self, user: User):
         pending_submission: Dict[str, Any] | None = await self.bot_db.app_management_db.get_pending_submission(
             user.id
@@ -636,3 +731,64 @@ class LilyApplicationController:
         await interaction.response.send_message(
             embed=simple_embed(message)
         )
+
+    async def application_invalidate(
+        self,
+        interaction: Interaction,
+        application: int,
+    ):
+        assert interaction.guild is not None
+
+        targeted = await self.bot_db.app_management_db.get_pending_submissions(
+            interaction.guild.id,
+            application_id=application
+        )
+
+        if not targeted:
+            await interaction.response.send_message(
+                embed=simple_embed("There are no pending submissions for that application.", 'warn'),
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        invalidated_count = 0
+        dm_failures = []
+
+        for sub in targeted:
+            deleted = await self.bot_db.app_management_db.delete_submission(
+                guild_id=sub["guild_id"],
+                submission_id=sub["submission_id"],
+                member_id=sub["member_id"],
+                wave=sub["wave"],
+            )
+
+            if not deleted:
+                continue
+
+            invalidated_count += 1
+
+            member = interaction.guild.get_member(sub["member_id"])
+            if member is None:
+                try:
+                    member = await interaction.guild.fetch_member(sub["member_id"])
+                except discord.NotFound:
+                    dm_failures.append(sub["member_id"])
+                    continue
+
+            try:
+                await member.send(
+                    f"Your application for **{sub['application_name']}** has timed out and "
+                    f"was invalidated. You're welcome to apply again."
+                )
+            except discord.Forbidden:
+                dm_failures.append(sub["member_id"])
+
+            await asyncio.sleep(0.5)
+
+        summary = f"Invalidated {invalidated_count} pending submission(s) for this application."
+        if dm_failures:
+            summary += f"\nCouldn't DM {len(dm_failures)} member(s) (DMs disabled or left the server)."
+
+        await interaction.followup.send(summary, ephemeral=True)

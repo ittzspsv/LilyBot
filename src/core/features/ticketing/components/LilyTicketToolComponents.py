@@ -16,23 +16,20 @@ from src.core.features.moderation.components.sLilyModerationComponents import (
     CaseListView
 )
 
-from src.core.features.moderation.utils.moderation_utils import (
-    mute_parser,
-)
 
 from src.core.utils.embeds.sLilyEmbed import (
     simple_embed,
 )
 
-from src.core.utils.lily_utility import (
-    utcnow,
+from src.core.features.moderation.controller.lily_moderation_controller import (
+    mute_user,
+    quarantine_user,
+    warn
 )
 
 from ..classes.ticketing_classes import (
     DatabaseAccess,
 )
-
-
 
 bot = None
 
@@ -77,10 +74,6 @@ class MuteModal(discord.ui.Modal):
             await interaction.response.send_message(embed=simple_embed("Command requires guild object inorder to execute", 'cross'), ephemeral=True)
             return
         
-        if isinstance(interaction.user, discord.User):
-            await interaction.response.send_message(embed=simple_embed("Command requires member object inorder to execute", 'cross'), ephemeral=True)
-            return
-        
         user: Optional[discord.Member] = None
         try:
             user = await interaction.guild.fetch_member(self.member_id)
@@ -96,48 +89,13 @@ class MuteModal(discord.ui.Modal):
         
         await interaction.response.defer()
         
-        if user.timed_out_until and user.timed_out_until > discord.utils.utcnow():
-            await interaction.followup.send(embed=simple_embed("This user is already muted", 'cross'), ephemeral=True)
-            return
-
-        if user.top_role >= interaction.guild.me.top_role:
-            await interaction.followup.send(embed=simple_embed("I cannot mute this user", 'cross'), ephemeral=True)
-            return
-
-        if user.top_role >= interaction.user.top_role:
-            await interaction.followup.send(embed=simple_embed("I cannot mute a user with a role equal to or higher than yours.", 'cross'), ephemeral=True)
-            return
-
-        if user.id == interaction.guild.owner_id:
-            await interaction.followup.send(embed=simple_embed("You cannot mute the server owner", 'cross'), ephemeral=True)
-            return
-        
-        if user.id == interaction.user.id:
-            await interaction.followup.send(embed=simple_embed("You cannot mute yourself", 'cross'), ephemeral=True)
-            return
-        
-        
-        
-        if user.id == interaction.guild.me.id:
-            await interaction.followup.send(embed=simple_embed("You cannot mute me baka~", 'cross'), ephemeral=True)
-            return
-
-        
-        seconds = mute_parser(self.duration.component.value)
-        until = utcnow() + timedelta(seconds=seconds)
-
-        try:
-            embed = action_log("mute", self.reason.component.value, interaction.guild.name)
-            await user.send(embed=embed)
-        except Exception as e:
-            print("DM failed:", e)
-
-        await user.edit(timed_out_until=until, reason=self.reason.component.value)
-        await self.db.logging_controller.log_moderation_action(interaction, interaction.user, user, "mute", self.reason.component.value, self.proofs)
-
-        await interaction.followup.send(embed=simple_embed(
-            f"Muted: <@{user.id}>"
-        ))
+        await mute_user(
+            interaction,
+            user,
+            self.duration.component.value,
+            self.reason.component.value,
+            self.proofs
+        )
 
 class BanModal(discord.ui.Modal):
     reason = discord.ui.Label(
@@ -172,12 +130,6 @@ class BanModal(discord.ui.Modal):
         if isinstance(interaction.user, discord.User):
             await interaction.response.send_message(embed=simple_embed("Command requires member object inorder to execute", 'cross'), ephemeral=True)
             return
-        
-        
-        role_ids = [str(r.id) for r in interaction.user.roles]
-        if not role_ids:
-            await interaction.response.send_message(embed=simple_embed("No permission.", 'cross'), ephemeral=True)
-            return
 
         member: Optional[discord.Member] = None
 
@@ -195,117 +147,12 @@ class BanModal(discord.ui.Modal):
         
         await interaction.response.defer()
 
-        if member.id == interaction.user.id:
-            await interaction.followup.send(
-                embed=simple_embed(
-                    "You cannot quarantine yourself",
-                    "cross"
-                ),
-                ephemeral=True
-            )
-
-            return
-
-        if member.id == interaction.guild.me.id:
-            await interaction.followup.send(
-                embed=simple_embed(
-                    "You cannot quarantine me",
-                    "cross"
-                ),
-                ephemeral=True
-            )
-
-            return
-
-        if member.id == interaction.guild.owner_id:
-            await interaction.followup.send(
-                embed=simple_embed(
-                    "You cannot quarantine the server owner.",
-                    "cross"
-                ),
-                ephemeral=True
-            )
-
-            return
-
-        if member.top_role >= interaction.guild.me.top_role:
-            await interaction.followup.send(
-                embed=simple_embed(
-                    "I cannot take action on this user because their role is higher than or equal to mine.",
-                    "cross"
-                ),
-                ephemeral=True
-            )
-
-            return
-
-        if member.top_role >= interaction.user.top_role:
-            await interaction.followup.send(
-                embed=simple_embed(
-                    "You cannot take action on this user because their role is higher than or equal to yours.",
-                    "cross"
-                ),
-                ephemeral=True
-            )
-
-            return
-        author_roles = [role.id for role in interaction.user.roles if role.name != "@everyone"]
-        status = await self.db.bot_db.get_ban_limit_status(interaction.guild.id, interaction.user.id, author_roles)
-
-        if status.exceeded:
-            await interaction.followup.send(embed=simple_embed(
-                f"Daily limit exceeded.\n{status.remaining_time}", 'cross'
-            ), ephemeral=True)
-
-            return
-
-            if response.get("success"):
-                return await interaction.followup.send(embed=simple_embed(str(response.get("message"))), ephemeral=True)
-                
-        async def notify_and_log(action: str) -> int | None:
-            assert isinstance(self.reason.component, discord.ui.TextInput)
-            if interaction.guild is None:
-                return
-
-            if not isinstance(interaction.user, discord.Member):
-                return
-            
-            try:
-                await member.send(embed=action_log("quarantine",
-                   self.reason.component.value, interaction.guild.name
-                ))
-            except Exception:
-                pass
-
-            case_id = await self.db.logging_controller.log_moderation_action(
-                interaction, interaction.user, member, action, self.reason.component.value, self.proofs.copy()
-            )
-
-            return case_id
-        
-        quarantine_role = (
-                discord.utils.get(interaction.guild.roles, name="Quarantine")
-                or discord.utils.get(interaction.guild.roles, name="Prisoner")
-            )
-
-        if not quarantine_role or quarantine_role >= interaction.guild.me.top_role:
-            await interaction.followup.send(embed=simple_embed("Quarantine role is higher than my role.", 'cross'), ephemeral=True)
-            return
-
-        if quarantine_role in member.roles:
-            await interaction.followup.send(embed=simple_embed("Already quarantined.", 'cross'), ephemeral=True)
-            return
-        
-        await member.add_roles(
-            quarantine_role,
-            reason=f"Quarantine by {interaction.user} | {self.reason.component.value}",
+        await quarantine_user(
+            interaction,
+            member,
+            self.reason.component.value,
+            self.proofs
         )
-
-        await notify_and_log("quarantine")
-
-        await interaction.followup.send(embed=simple_embed(
-            f"Quarantined: <@{member.id}>\n**Remaining:** {max(0, status.remaining_count - 1)}"
-        ))
 
 class WarnModal(discord.ui.Modal):
     reason = discord.ui.Label(
@@ -339,23 +186,29 @@ class WarnModal(discord.ui.Modal):
             await interaction.response.send_message(embed=simple_embed("Command requires member object inorder to execute", 'cross'), ephemeral=True)
             return
         
+        await interaction.response.defer()
+
+        assert isinstance(self.reason.component, discord.ui.TextInput)
+        member: Optional[discord.Member] = None
+        
         try:
-            await interaction.response.defer()
-
-            assert isinstance(self.reason.component, discord.ui.TextInput)
-            member: discord.Member = await interaction.guild.fetch_member(self.member_id)
-
-            await interaction.followup.send(embed=simple_embed(f"{member.mention} has been warned"))
-
-            await self.db.logging_controller.log_moderation_action(interaction, interaction.user, member, "warn", self.reason.component.value, self.proofs)
-
-            embed = action_log("warn" , self.reason.component.value, interaction.guild.name)
-            try:
-                await member.send(embed=embed)
-            except Exception as e:
-                print(e)
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            await interaction.followup.send(embed=simple_embed("Failed to warn the user. Maybe they left?", 'cross'), ephemeral=True)
+            member = await interaction.guild.fetch_member(self.member_id)
+        except discord.NotFound:
+            await interaction.response.send_message(embed=simple_embed("User should be in the guild in-order to quarantine him", 'cross'), ephemeral=True)
+            return
+        except discord.HTTPException:
+            await interaction.response.send_message(embed=simple_embed("Failed to fetch the member due to network error!", 'cross'), ephemeral=True)
+            return
+        except Exception:
+            await interaction.response.send_message(embed=simple_embed("Failed to fetch the member due to unknown error!", 'cross'), ephemeral=True)
+            return
+        
+        await warn(
+            interaction,
+            member,
+            self.reason.component.value,
+            self.proofs
+        )
 
 class TicketRatingModal(discord.ui.Modal):
     def __init__(self) -> None:
@@ -778,6 +631,7 @@ class TicketComponentEmbed(discord.ui.LayoutView):
             allowed_mentions=discord.AllowedMentions.none(),
             ephemeral=True
         )
+
     async def ban_callback(self, interaction: discord.Interaction):
         if not await self._check_permissions(interaction):
             return
