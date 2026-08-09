@@ -109,3 +109,21 @@ async def fetch_json(session, url, method="GET", **kwargs):
             text = await resp.text()
             raise Exception(f"HTTP {resp.status}: {text}")
         return await resp.json()
+
+
+def length(text: str) -> int:
+    return len(text.encode("utf-16-le")) // 2
+
+def truncate(text: str, limit: int = 1024) -> str:
+    suffix = "\n[...]"
+
+    if length(text) <= limit:
+        return text
+
+    suffix_length = length(suffix)
+    max_text_length = limit - suffix_length
+
+    encoded = text.encode("utf-16-le")
+    truncated = encoded[:max_text_length * 2]
+
+    return truncated.decode("utf-16-le", errors="ignore") + suffix
