@@ -10,7 +10,6 @@ from src.core.logging.lily_logging import LilyLoggingController
 from src.core.utils.embeds.sLilyEmbed import simple_embed
 from src.core.features.moderation.components.sLilyModerationComponents import AppealButton
 from src.core.configs.path import CONFIG_DB
-from src.api.app import LilyAPI
 import uvicorn
 import re
 
@@ -29,18 +28,10 @@ class Lily(commands.Bot):
 
         super().__init__(command_prefix=self.prefix,intents=intents,help_command=None, owner_ids={1488556914605428988})
 
-    async def start_api(self):
-        config = uvicorn.Config(self.api.app, host="0.0.0.0", port=8000, loop="asyncio")
-        server = uvicorn.Server(config)
-        await server.serve()
-
     async def setup_hook(self):
         """ Bot Globals Database """
         self.db = await BotGlobalsDatabaseAccess.connect(str(CONFIG_DB))
         self.logging_controller = LilyLoggingController(self.db)
-
-        self.api = LilyAPI(self.db)
-        self.loop.create_task(self.start_api())
 
         self.add_dynamic_items(AppealButton)
 
