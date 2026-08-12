@@ -4,12 +4,16 @@ from typing import BinaryIO
 import boto3
 import zipfile
 import asyncio
+import sqlite3
+import logging
 
 
 from datetime import datetime, timezone
 from botocore.exceptions import ClientError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+
+logger = logging.getLogger(__name__)
 
 
 class ObjectStorageService:
@@ -176,13 +180,15 @@ class ObjectStorageService:
         file_path: str | Path,
         object_prefix: str = "backups",
     ) -> None:
-        """
-        Zip the backup file and upload it to object storage.
-        """
-
         file_path = Path(file_path)
 
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime(
+            "%Y%m%d_%H%M%S"
+        )
+
+        backup_path = file_path.with_name(
+            f"{file_path.stem}_{timestamp}.db"
+        )
 
         zip_path = file_path.with_name(
             f"{file_path.stem}_{timestamp}.zip"
@@ -191,6 +197,31 @@ class ObjectStorageService:
         object_key = f"{object_prefix}/{zip_path.name}"
 
         try:
+            def create_sqlite_backup() -> None:
+                source = sqlite3.connect(
+                    file_path,
+                    timeout=30,
+                )
+
+                destination = sqlite3.connect(
+                    backup_path,
+                )
+
+                try:
+                    source.backup(destination)
+                finally:
+                    destination.close()
+                    source.close()
+
+            await asyncio.to_thread(
+                create_sqlite_backup
+            )
+
+            logger.info(
+                "SQLite backup snapshot created: %s",
+                backup_path,
+            )
+
             def create_zip() -> None:
                 with zipfile.ZipFile(
                     zip_path,
@@ -198,11 +229,16 @@ class ObjectStorageService:
                     compression=zipfile.ZIP_DEFLATED,
                 ) as archive:
                     archive.write(
-                        file_path,
-                        arcname=file_path.name,
+                        backup_path,
+                        arcname=backup_path.name,
                     )
 
             await asyncio.to_thread(create_zip)
+
+            logger.info(
+                "Backup archive created: %s",
+                zip_path,
+            )
 
             await asyncio.to_thread(
                 self.upload_file,
@@ -211,7 +247,21 @@ class ObjectStorageService:
                 "application/zip",
             )
 
+            logger.info(
+                "Backup uploaded successfully: %s",
+                object_key,
+            )
+
+        except Exception:
+            logger.exception(
+                "Failed to create or upload database backup."
+            )
+            raise
+
         finally:
+            if backup_path.exists():
+                backup_path.unlink()
+
             if zip_path.exists():
                 zip_path.unlink()
 
