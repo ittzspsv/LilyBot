@@ -605,6 +605,7 @@ class LilyUtility(commands.Cog):
             )
         )
 
+    @permission(command_name="nick")
     @commands.command(name="nick", aliases=["nickname"])
     async def nick(
         self,
@@ -694,7 +695,7 @@ class LilyUtility(commands.Cog):
         await ctx.reply(view=Avatar(member or ctx.author))
 
     @app_commands.command(name="evaluate", description="Evaluates an expression in any form")
-    @app_permission(command_name="evaluate", restrict=True)
+    @app_permission(command_name="evaluate")
     async def message(
         self,
         interaction: discord.Interaction,
@@ -721,7 +722,7 @@ class LilyUtility(commands.Cog):
                 )
                 return
         else:
-            await channel.send(content=message)
+            await channel.send(content=message, allowed_mentions=discord.AllowedMentions(roles=False, everyone=False))
 
         await interaction.response.send_message(
             "Successfully sent!",
