@@ -11,6 +11,5 @@ lavalink
 python-dotenv
 DiscordTranscript
 asqlite
-fastapi
-uvicorn
 apscheduler
+boto3
