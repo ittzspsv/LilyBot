@@ -24,9 +24,6 @@ async def lily_bot():
     if not token:
         raise ValueError("TOKEN environment variable is missing")
 
-    logger.info("Starting Lily")
-
-    await bot.start(token=token)
 
     """ 
     Note: 
@@ -84,6 +81,9 @@ async def lily_bot():
             "Backup scheduling started. %s will be backed up every 6 hours.",
             path,
         )
+
+    logger.info("Starting Lily")
+    await bot.start(token=token)
 
 
 asyncio.run(lily_bot())
