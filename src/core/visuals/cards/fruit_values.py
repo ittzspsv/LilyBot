@@ -1,7 +1,7 @@
 from PIL import Image, ImageDraw, ImageFilter
-from core.utils.lily_utility import format_currency
+from src.core.utils.lily_utility import format_currency
 from typing import Final
-from core.visuals.utils.pillow_utils import load_font, fit_font_size, get_icon_path
+from src.core.visuals.utils.pillow_utils import load_font, fit_font_size, get_icon_path
 
 FONT_PATH: Final = "public/fonts/Berlin Sans FB Bold.ttf"
 NUMBER_FONT_PATH: Final = "public/fonts/Game Bubble.ttf"

@@ -1,9 +1,9 @@
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops
-from core.utils.lily_utility import format_currency
+from src.core.utils.lily_utility import format_currency
 from typing import List, Final
-from core.visuals.components.gradient_text import draw_gradient_text
-from core.visuals.components.gradient_bar import draw_gradient_bar
-from core.visuals.utils.pillow_utils import apply_glow
+from src.core.visuals.components.gradient_text import draw_gradient_text
+from src.core.visuals.components.gradient_bar import draw_gradient_bar
+from src.core.visuals.utils.pillow_utils import apply_glow
 
 
 OPTIMIZED: Final = False

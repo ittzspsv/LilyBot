@@ -2,8 +2,8 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from typing import Final, Dict
 from ..utils.pillow_utils import get_icon_path, get_text_size
 from ..components.neon_text import draw_neon_text
-from core.utils.lily_utility import format_currency
-from core.visuals.utils.pillow_utils import apply_glow 
+from src.core.utils.lily_utility import format_currency
+from src.core.visuals.utils.pillow_utils import apply_glow 
 
 
 fruits = {
