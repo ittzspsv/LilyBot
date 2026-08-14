@@ -115,7 +115,6 @@ class LilyApplications(commands.Cog):
         views = await self.db.app_management_db.get_application_views()
 
         for view in views:
-            print(view["application"])
             _view = ApplicationView(
                 self.db,
                 view["channel_id"],
