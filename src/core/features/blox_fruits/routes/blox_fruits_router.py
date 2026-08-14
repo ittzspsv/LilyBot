@@ -1,12 +1,15 @@
 from ....database.integrations.blox_fruits import BloxFruitsDatabase
 from ...blox_fruits.utils.trade_matcher import match_fruit_set
-from ..embeds.blox_fruits_embed import build_fruit_value_embed, build_win_loss_embed
 from ..utils.trade_extractor import extract_trade_details
 from ..utils.trade_calculator import win_or_lose
+from ....visuals.cards.fruit_values import value_img
+from ....visuals.cards.win_loss import win_loss_img
 from typing import Optional, Any
-from ..components.blox_fruits_components import TradeSuggestorComponent, InviteView, FruitValueComponent, WinLossComponent
+from ..components.blox_fruits_components import TradeSuggestorComponent, FruitValueComponent, WinLossComponent
+from io import BytesIO
 
 import re
+import asyncio
 import discord
 
 class BloxFruitsController:
@@ -75,7 +78,13 @@ class BloxFruitsController:
                 }
 
                 if self.img_mode == 1:
-                    pass
+                    img = await asyncio.to_thread(value_img, overload_data)
+                    buffer = BytesIO()
+                    img.save(buffer, format="PNG")
+                    buffer.seek(0)
+
+                    file = discord.File(buffer, filename=f"value.png")
+                    await message.reply(file=file)
 
                 else:
                     #embed = build_fruit_value_embed(item_data)
@@ -112,6 +121,24 @@ class BloxFruitsController:
 
             if self.img_mode == 1:
                 """ Generate win-loss image """
+                img = await asyncio.to_thread(
+                    win_loss_img, 
+                    your_fruits, 
+                    calculated_result["your_individual_values"], 
+                    their_fruits,
+                    calculated_result["their_individual_values"],
+                    your_fruit_types,
+                    their_fruit_types,
+                    calculated_result["conclusion"],
+                    calculated_result["conclusion_expansion"],
+                    calculated_result["percentage"]
+                )
+                buffer = BytesIO()
+                img.save(buffer, format="PNG")
+                buffer.seek(0)
+
+                file = discord.File(buffer, filename=f"value.png")
+                await message.reply(file=file)
             else:
                 """ Send embed """
                 """
