@@ -3,10 +3,11 @@ from src.core.utils.lily_utility import format_currency
 from typing import List, Final
 from src.core.visuals.components.gradient_text import draw_gradient_text
 from src.core.visuals.components.gradient_bar import draw_gradient_bar
-from src.core.visuals.utils.pillow_utils import apply_glow
+from src.core.visuals.utils.pillow_utils import apply_glow, load_font
 
 
 OPTIMIZED: Final = False
+FONT_PATH: Final = "public/fonts/Berlin Sans FB Bold.ttf"
 ICON_SIZE: Final = 120
 VALUE_FONT_OFFSET: Final = 6
 W_OR_L_BASE: Final = "public/assets/blox_fruits/win_loss/WORLBase.png"
@@ -44,16 +45,10 @@ def win_loss_img(
 
     ImageDraw.Draw(img)
 
-    def load_font(size):
-        try:
-            return ImageFont.truetype("src/ui/font/Berlin Sans FB Bold.ttf", size)
-        except:
-            return ImageFont.load_default()
-
-    font_small = load_font(20)
-    font_percentage = load_font(32)
-    font_result = load_font(45)
-    font_total = load_font(22)
+    font_small = load_font(FONT_PATH, 20)
+    font_percentage = load_font(FONT_PATH, 32)
+    font_result = load_font(FONT_PATH, 45)
+    font_total = load_font(FONT_PATH, 22)
 
     def paste_fruits(fruits, coords, values, fruit_types):
         total_slots = 4
