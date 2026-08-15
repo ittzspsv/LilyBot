@@ -3,7 +3,7 @@ from __future__ import annotations
 from discord.ext import commands
 from discord import app_commands, Interaction
 from ...database.integrations.bot_globals import BotGlobalsDatabaseAccess
-from typing import Optional, TYPE_CHECKING, List, cast, Final
+from typing import Optional, TYPE_CHECKING, Set, cast, Final
 
 if TYPE_CHECKING:
     from lily import Lily
@@ -18,8 +18,11 @@ super_users: Final = (
     999309816914792630,
 )
 
+registered_permissions: Set[str] = set()
+
 
 def permission(command_name: str, restrict: bool = False):
+    registered_permissions.add(command_name)
     def decorator(func):
         async def predicate(ctx: commands.Context):
             if ctx.guild is None:
@@ -86,6 +89,7 @@ def permission(command_name: str, restrict: bool = False):
 
 
 def app_permission(command_name: str, restrict: bool = False):
+    registered_permissions.add(command_name)
     async def predicate(interaction: Interaction):
         if interaction.guild is None:
             return False
@@ -187,7 +191,6 @@ def has_permission(
         command_name,
         role_ids
     )
-
 
 async def has_app_permission(
     interaction: Interaction,
