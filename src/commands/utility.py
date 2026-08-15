@@ -9,10 +9,10 @@ import time
 from io import BytesIO
 from src.core.utils.embeds.sLilyEmbed import simple_embed
 from src.core.utils.lily_utility import *
-from src.core.features.permissions.lily_permissions import app_permission, permission
+from src.core.features.permissions.lily_permissions import app_permission, permission, registered_permissions
 from src.core.utils.components.sLIlyGlobalComponents import CommandInfo as CI
 from src.core.utils.embeds.sLilyEmbed import ParseAdvancedEmbed
-from src.core.utils.types.types import ChannelEnum, CommandEnum, NotifiersEnum
+from src.core.utils.types.types import ChannelEnum, NotifiersEnum
 from src.core.logging.lily_logging import LilyLoggingController
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
 from src.core.utils.components.sLIlyGlobalComponents import RoleCustomizationModal, Avatar, AutomodUpdate
@@ -100,9 +100,9 @@ class LilyUtility(commands.Cog):
         current = current.lower()
 
         return [
-            app_commands.Choice(name=command.name, value=command.value)
-            for command in CommandEnum
-            if current in command.value.lower()
+            app_commands.Choice(name=command.replace("_", " ").title(), value=command)
+            for command in registered_permissions
+            if current in command.lower()
         ][:25]
 
     set = app_commands.Group(
@@ -711,10 +711,12 @@ class LilyUtility(commands.Cog):
             )
             return
 
+        message = message.replace("@everyone", "").replace("@here", "").strip()
+
         if snowflake is not None:
             try:
                 msg = await channel.fetch_message(int(snowflake))
-                await msg.reply(content=message)
+                msg = await msg.reply(content=message)
             except discord.NotFound:
                 await interaction.response.send_message(
                     "Message not found.",
@@ -722,8 +724,14 @@ class LilyUtility(commands.Cog):
                 )
                 return
         else:
-            await channel.send(content=message, allowed_mentions=discord.AllowedMentions(roles=False, everyone=False))
+            msg = await channel.send(content=message, allowed_mentions=discord.AllowedMentions(roles=False, everyone=False))
 
+
+        print(f"Message Sent By {interaction.user.id} reference {msg.jump_url}")
+        with open("bot.log", "a", encoding="utf-8") as f:
+            f.write(
+                f"Message Sent By {interaction.user.id} reference {msg.jump_url}\n"
+            )
         await interaction.response.send_message(
             "Successfully sent!",
             ephemeral=True
@@ -745,9 +753,6 @@ class LilyUtility(commands.Cog):
         
         view = AutomodUpdate(rules)
         await interaction.response.send_message(view=view, ephemeral=True)
-
-
-
 
 async def setup(bot):
     await bot.add_cog(LilyUtility(bot))
