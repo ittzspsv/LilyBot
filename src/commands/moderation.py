@@ -67,13 +67,37 @@ class LilyModeration(commands.Cog):
 
         return False
 
+    async def evaluate_quarantine_bypass(self, message: discord.Message):
+        bot_db: BotGlobalsDatabaseAccess = self.bot.db
+
+        if not isinstance(message.guild, discord.Guild):
+            return
+
+        if not isinstance(message.author, discord.Member):
+            return
+
+
+        if message.author.top_role >= message.guild.me.top_role:
+            return
+
+        bypass, case_id = await bot_db.is_quarantine_bypassing(
+            message.author.id,
+            message.guild.id
+        )
+
+        if bypass:
+            target_user = message.author
+            _message = await message.channel.send(f"Eliminating {target_user.mention} for attempting to bypass Quarantine")
+            ctx = await self.bot.get_context(_message)
+            await quarantine_user(ctx, target_user, f"Quarantine Bypass (Ref #{case_id})")
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot:
             return
         
+        await self.evaluate_quarantine_bypass(message)
         bot_db: BotGlobalsDatabaseAccess = self.bot.db
-
         if message.guild is not None:
             if not isinstance(message.channel, discord.Thread):
                 return

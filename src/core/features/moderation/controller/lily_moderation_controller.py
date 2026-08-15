@@ -30,10 +30,47 @@ async def _validate_moderation_target(
 
     if isinstance(ctx, commands.Context):
         bot = cast("Lily", ctx.bot)
+        assert bot.user is not None
         author = ctx.author
+        myself = bot.user.id == ctx.author.id
     else:
         bot = cast("Lily", ctx.client)
+        assert bot.user is not None
         author = ctx.user
+        myself = bot.user.id == ctx.user.id
+
+    if myself:
+        if ctx.guild is None:
+            return None
+
+        if not isinstance(user_input, discord.Member):
+            return None
+
+        if not isinstance(author, discord.Member):
+            return None
+
+        user_id = user_input.id
+        if not user_id:
+            return None
+
+        if user_id == ctx.guild.owner_id:
+            return None
+
+        if user_input.top_role >= ctx.guild.me.top_role:
+            return None
+
+        if user_input.top_role >= author.top_role:
+            return None
+
+        mock_status = BanLimitStatus(
+            exceeded=False,
+            max_limit=999999,
+            recent_ban_count=0,
+            remaining_count=999999,
+            remaining_time=None,
+            cooldown_breakdown=None,
+        )
+        return user_input, mock_status, []
 
     if ctx.guild is None:
         await bot.send(ctx, embed=simple_embed("Command requires a guild object to execute.", "cross"))
@@ -167,7 +204,7 @@ async def quarantine_user(
     result = await _validate_moderation_target(ctx, user_input)
     if result is None:
         return
-    member, status, author_roles = result
+    member, status, _ = result
 
     if not isinstance(member, discord.Member):
         await bot.send(ctx, embed=simple_embed("User should be in the guild inorder to quarantine them", 'cross'))

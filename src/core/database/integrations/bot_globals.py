@@ -249,6 +249,35 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         limits = [role_limits[rid]["limit"] for rid in role_ids if rid in role_limits]
         return max(limits) if limits else 0
 
+    async def is_quarantine_bypassing(self, member_id: int, guild_id: int) -> Tuple:
+        row = await self.fetch_one(
+            """
+            SELECT q.id AS case_id
+            FROM modlogs q
+            WHERE q.guild_id = ?
+            AND q.target_user_id = ?
+            AND q.mod_type = 'quarantine'
+            AND q.deleted = 0
+            AND NOT EXISTS (
+                SELECT 1
+                FROM modlogs r
+                WHERE r.guild_id = q.guild_id
+                    AND r.target_user_id = q.target_user_id
+                    AND r.mod_type = 'quarantine_release'
+                    AND r.id > q.id
+                    AND r.deleted = 0
+            )
+            ORDER BY q.id DESC
+            LIMIT 1;
+            """,
+            (guild_id, member_id)
+        )
+
+        if row is None:
+            return (False, None)
+
+        return (True, row["case_id"])
+
     def ban_queue(self, guild_id: int, role_ids: List[int]) -> bool:
         guild = self.cache.get(guild_id)
         if not guild:
@@ -322,7 +351,6 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
 
         effective_except = except_ids - specific_ids
         return has_all, has_except_scope, effective_except, specific_ids
-
 
     def can_assign_role(self, guild_id: int, author_role_ids: List[int], target_role_id: int) -> bool:
         has_all, has_except_scope, effective_except, specific_ids = self.get_role_assignment_rules(guild_id, author_role_ids)
