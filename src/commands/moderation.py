@@ -2,6 +2,7 @@ import discord, discord.app_commands as app_commands
 from discord.ext import commands
 from typing import Optional, Any, Dict
 import re
+import random
 from enum import Enum
 
 from src.core.utils.components.sLIlyGlobalComponents import CommandInfo
@@ -87,9 +88,16 @@ class LilyModeration(commands.Cog):
 
         if bypass:
             target_user = message.author
-            _message = await message.channel.send(f"Eliminating {target_user.mention} for attempting to bypass Quarantine")
+            _messages = [
+                f"Eliminating {target_user.mention} for attempting to bypass Quarantine",
+                f"The worst she can say is 'No'\nShe:- Proceeds to quaratine {target_user.mention} (Bypassing quarantine)",
+                f"{target_user.mention} shall be eliminated for defying the Quarantine.",
+                f"Someone as weak as {target_user.mention} attempting to bypass Quarantine.",
+                f"Even someone as weak as {target_user.mention} thought they could bypass Quarantine."
+            ]
+            _message = await message.channel.send(random.choice(_messages))
             ctx = await self.bot.get_context(_message)
-            await quarantine_user(ctx, target_user, f"Quarantine Bypass (Ref #{case_id})")
+            await quarantine_user(ctx, target_user, f"Quarantine Bypass (Ref #{case_id})", [], True)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
