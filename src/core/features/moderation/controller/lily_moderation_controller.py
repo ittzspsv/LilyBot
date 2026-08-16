@@ -62,6 +62,14 @@ async def _validate_moderation_target(
         if user_input.top_role >= author.top_role:
             return None
 
+        quarantine_role = (
+            discord.utils.get(ctx.guild.roles, name="Quarantine")
+            or discord.utils.get(ctx.guild.roles, name="Prisoner")
+        )
+
+        if quarantine_role in user_input.roles:
+            return None
+
         mock_status = BanLimitStatus(
             exceeded=False,
             max_limit=999999,
@@ -185,7 +193,8 @@ async def quarantine_user(
     ctx: commands.Context | discord.Interaction,
     user_input: discord.User | discord.Member,
     reason="No reason provided",
-    proofs: list = []
+    proofs: list = [],
+    _force_no_proofs: bool = False
 ):
     if isinstance(ctx, commands.Context):
         bot = cast("Lily", ctx.bot)
@@ -203,6 +212,9 @@ async def quarantine_user(
 
     result = await _validate_moderation_target(ctx, user_input)
     if result is None:
+        if ctx.message is not None:
+            await ctx.message.delete()
+            return
         return
     member, status, _ = result
 
@@ -234,7 +246,7 @@ async def quarantine_user(
         case_id = await logging_controller.log_moderation_action(
             ctx, author, member, "quarantine", reason, proofs.copy()
         )
-        if case_id:
+        if case_id and not _force_no_proofs:
             view = CaseProofsView(case_id, logging_controller, None)
             msg = await bot.send(ctx, embed=simple_embed(quarantine_message), view=view)
             view.message = msg
