@@ -346,7 +346,7 @@ async def unmute(
     ctx: commands.Context | discord.Interaction,
     user: discord.Member | discord.User,
     reason: str = "No reason provided"
-):
+) -> None:
     if isinstance(ctx, commands.Context):
         bot = cast("Lily", ctx.bot)
         author = ctx.author

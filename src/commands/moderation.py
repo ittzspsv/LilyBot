@@ -7,10 +7,11 @@ from enum import Enum
 
 from src.core.utils.components.sLIlyGlobalComponents import CommandInfo
 from src.core.utils.embeds.sLilyEmbed import simple_embed
-from src.core.features.moderation.components.sLilyModerationComponents import AppealForumCustomize
+from src.core.features.moderation.components.sLilyModerationComponents import AppealForumCustomize, AppealMessageView
 from src.core.features.permissions.lily_permissions import permission, app_permission
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
 from src.core.logging.lily_logging import LilyLoggingController
+from src.core.features.permissions.lily_permissions import has_permission
 
 from src.core.features.moderation.controller.lily_moderation_controller import (
     ban_user,
@@ -121,7 +122,8 @@ class LilyModeration(commands.Cog):
             if appeal is None:
                 return
 
-            if appeal["moderator_id"] != message.author.id:
+            ctx = await self.bot.get_context(message)
+            if appeal["moderator_id"] != message.author.id and has_permission(ctx, "mod_appeal_management") is False:
                 await message.add_reaction("❌")
                 return
             
@@ -143,12 +145,13 @@ class LilyModeration(commands.Cog):
                 return
 
             try:
+                view = AppealMessageView(
+                    f"{self.strip_mention(message.content, message.guild.me.id)}",
+                    message.guild.name,
+                    message.attachments
+                )
                 await member.send(
-                    embed = discord.Embed(
-                        title=f"Message From {message.guild.name}'s Staff Team",
-                        color=16777215,
-                        description=f'### > {self.strip_mention(message.content, message.guild.me.id)}',
-                    )
+                    view=view
                 )
 
                 await message.add_reaction("✅")

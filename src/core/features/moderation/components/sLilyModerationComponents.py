@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import discord
 from src.core.utils.embeds.sLilyEmbed import simple_embed
-from typing import Optional, cast, Any, TYPE_CHECKING, List, Dict, Tuple
+from typing import Optional, cast, Any, TYPE_CHECKING, List, Dict, Tuple, Union
 from datetime import datetime, timezone
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
 from src.core.logging.components.logging_components import ProofsComponentCommandModal
@@ -831,3 +831,31 @@ class CaseProofsView(discord.ui.View):
         assert isinstance(self.message, discord.Message)
         await interaction.response.send_modal(ProofsComponentCommandModal(controller=self.controller, case_id=self.case_id, cmd_view=self, msg=self.message))
 
+
+class AppealMessageView(discord.ui.LayoutView):
+    def __init__(self, message: str, server: str, attachments: List[discord.Attachment]) -> None:
+        super().__init__(timeout=None)
+
+        gallery_items = [
+            discord.MediaGalleryItem(media=attachment.url)
+            for attachment in attachments
+        ]
+
+        components: List[
+            Union[discord.ui.TextDisplay, discord.ui.MediaGallery, discord.ui.Separator]
+        ] = [
+            discord.ui.TextDisplay(content=f"### {message}"),
+        ]
+
+        if gallery_items:
+            components.append(discord.ui.MediaGallery(*gallery_items))
+
+        components.append(
+            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small)
+        )
+        components.append(
+            discord.ui.TextDisplay(content=f"-# Message From {server}'s Staff Team")
+        )
+
+        self.container1 = discord.ui.Container(*components)
+        self.add_item(self.container1)
