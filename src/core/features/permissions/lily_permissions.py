@@ -192,7 +192,7 @@ def has_permission(
         role_ids
     )
 
-async def has_app_permission(
+def has_app_permission(
     interaction: Interaction,
     command_name: str,
     restrict: bool = False,
