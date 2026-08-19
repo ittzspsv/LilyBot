@@ -193,6 +193,7 @@ class LilyTicketingController:
                 allowed_mentions=discord.AllowedMentions.none(),
                 file=transcripts_file
             )
+            
             return message.id
         except Exception as e:
             print(f"Exception [TicketLogAction] {e}")
@@ -274,7 +275,71 @@ class LilyTicketingController:
                 )
             )
 
-    async def close_ticket_thread(self, interaction: discord.Interaction, reason: str="No reason provided"):
+    async def ticket_remove_user(
+        self,
+        interaction: discord.Interaction,
+        user: discord.Member
+    ):
+        if not isinstance(interaction.channel, discord.TextChannel):
+            return
+        
+        try:
+            owner = await self.bot_db.get_ticket_owner(interaction.channel.id)
+
+            if not owner:
+                await interaction.response.send_message(
+                    embed=simple_embed(
+                        "Attempted to remove a member to an invalid instigator ticket.",
+                        "cross"
+                    )
+                )
+                return
+
+            await interaction.channel.set_permissions(
+                user,
+                view_channel=False,
+                send_messages=False,
+                read_message_history=False,
+                attach_files=False,
+                embed_links=False,
+                add_reactions=False,
+                use_external_emojis=False,
+                use_application_commands=False
+            )
+
+            await interaction.response.send_message(
+                embed=simple_embed(
+                    f"Successfully removed {user.mention} from this ticket."
+                )
+            )
+
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                embed=simple_embed(
+                    "Missing permissions to modify channel access.",
+                    "cross"
+                )
+            )
+
+        except discord.HTTPException as e:
+            await interaction.response.send_message(
+                embed=simple_embed(
+                    f"Failed to add user: {e}",
+                    "cross"
+                )
+            )
+
+        except Exception as e:
+            print(f"[TICKET ADD USER ERROR] {e}")
+
+            await interaction.response.send_message(
+                embed=simple_embed(
+                    "An internal error occurred while adding the user.",
+                    "cross"
+                )
+            )
+
+    async def ticket_close(self, interaction: discord.Interaction, reason: str="No reason provided"):
         if interaction.guild is None:
             await interaction.response.send_message(
                 embed=simple_embed(

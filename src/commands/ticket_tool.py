@@ -52,7 +52,7 @@ class LilyTicketTool(commands.Cog):
     @app_commands.checks.cooldown(1, 20)
     async def CloseTicket(self, interaction: discord.Interaction, * ,reason: str="No reason provided"):
          if self.controller is not None:
-            await self.controller.close_ticket_thread(interaction, reason)
+            await self.controller.ticket_close(interaction, reason)
          
     @app_commands.guild_only()
     @ticket.command(name='rename', description='renames a ticket channel')
@@ -69,6 +69,16 @@ class LilyTicketTool(commands.Cog):
     async def ticket_add(self, interaction: discord.Interaction, user: discord.Member):
          if self.controller is not None:
             await self.controller.ticket_add_user(interaction, user)
+
+
+    @app_commands.guild_only()
+    @ticket.command(name='remove', description='Remove a user from the ticket')
+    @app_permission(command_name="ticket_remove")
+    @app_commands.checks.cooldown(1, 5)
+    async def ticket_remove(self, interaction: discord.Interaction, user: discord.Member):
+        if self.controller is not None:
+            await self.controller.ticket_remove_user(interaction, user)
+
 
     @app_commands.guild_only()
     @ticket.command(name='stats', description='Retrive your ticket stats')
