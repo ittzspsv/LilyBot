@@ -25,6 +25,7 @@ from ..classes.ticketing_classes import (
 )
 from ..components.LilyTicketToolComponents import (
     TicketComponentEmbed,
+    TicketOpenerComponent,
     TicketSelectComponent,
     TicketLogComponent,
     TicketLogDirectMessage
@@ -68,7 +69,6 @@ class LilyTicketingController:
                     try:
                         if message_id:
                             message = await channel.fetch_message(message_id)
-
                             await message.edit(
                                 content=None,
                                 embeds=[],
@@ -94,17 +94,28 @@ class LilyTicketingController:
                     try:
                         tickets = await self.bot_db.get_guild_tickets(guild_id)
 
-                        for ticket_id, opener_user_id, submission_json, ticket_message_id in tickets:
+                        for ticket_id, _, submission_json, ticket_message_id, ticket_details_message_id in tickets:
                             view = TicketComponentEmbed(
-                                opener_user_id,
                                 ticket_id,
                                 json.loads(submission_json),
                                 config,
                                 DatabaseAccess(self.bot_db, self.logging_controller)
                             )
 
+                            opener_view = TicketOpenerComponent(
+                                json.loads(submission_json),
+                                config,
+                                ticket_id,
+                                DatabaseAccess(self.bot_db, self.logging_controller)
+                            )
+
                             bot.add_view(
                                 view,
+                                message_id=ticket_details_message_id
+                            )
+
+                            bot.add_view(
+                                opener_view,
                                 message_id=ticket_message_id
                             )
 
@@ -277,7 +288,8 @@ class LilyTicketingController:
         await interaction.response.send_message(
             embed=simple_embed(
                 "Ticket close scheduling has been initiated. The channel will be deleted shortly."
-            )
+            ),
+            ephemeral=True
         )
 
         message = await interaction.original_response()
@@ -318,6 +330,19 @@ class LilyTicketingController:
 
                 return
 
+            
+            await interaction.channel.send(
+                view=TicketComponentEmbed(
+                    interaction.channel.id,
+                    submission_json,
+                    {},
+                    DatabaseAccess(
+                        self.bot_db,
+                        self.logging_controller
+                    ),
+                    False
+                )
+            )
             logs_channel = interaction.guild.get_channel(logs_channel_id)
 
             if not isinstance(logs_channel, discord.TextChannel):
@@ -341,6 +366,9 @@ class LilyTicketingController:
                     tz_info="America/New_York",
                     military_time=True,
                     bot=interaction.client,
+                    attachment_handler=DiscordTranscript.AttachmentToDiscordChannelHandler(
+                        channel=logs_channel
+                    ) if logs_channel else None
                 )
 
                 if transcript is None:
