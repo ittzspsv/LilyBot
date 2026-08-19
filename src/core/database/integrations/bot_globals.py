@@ -1184,7 +1184,7 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
     async def get_guild_tickets(self, guild_id: int) -> List[Tuple]:
         rows = await self.fetch_all(
             """
-            SELECT ticket_id, opened_user_id, submission_json, message_id
+            SELECT ticket_id, opened_user_id, submission_json, message_id, ticket_details_message_id
             FROM tickets WHERE guild_id = ?
             """,
             (guild_id,),
@@ -1326,15 +1326,16 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         log_channel_id: int,
         submission_json: dict,
         message_id: Optional[int] = None,
+        ticket_details_message_id: Optional[int] = None
     ) -> None:
         await self.ensure_member(opened_user_id, guild_id)
         await self.execute(
             """
             INSERT INTO tickets (
                 ticket_id, guild_id, opened_user_id, ticket_type,
-                log_channel_id, submission_json, message_id
+                log_channel_id, submission_json, message_id, ticket_details_message_id
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 ticket_id,
@@ -1344,6 +1345,7 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
                 log_channel_id,
                 json.dumps(submission_json),
                 message_id,
+                ticket_details_message_id
             ),
         )
 
