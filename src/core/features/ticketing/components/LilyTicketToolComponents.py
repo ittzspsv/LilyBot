@@ -12,7 +12,6 @@ from src.core.configs.sBotDetails import (
 )
 
 from src.core.features.moderation.components.sLilyModerationComponents import (
-    action_log,
     CaseListView
 )
 
@@ -33,7 +32,7 @@ from ..classes.ticketing_classes import (
 
 bot = None
 
-""" Modals for ticket panel moderation. This is indeed redundant, but we only have access to logging database, so we need to evaluate it again!"""
+""" Modals for ticket panel moderation. """
 class MuteModal(discord.ui.Modal):
     duration = discord.ui.Label(
         text="Duration",
@@ -256,18 +255,190 @@ class TicketRatingModal(discord.ui.Modal):
     async def on_submit(self, interaction: discord.Interaction):
         ...
 
-class TicketComponentEmbed(discord.ui.LayoutView):
-    def __init__(self, opener: discord.Member | int, ticket_channel_id: int, submission_json: dict, core_json: dict, db: DatabaseAccess):
+class TicketOpenerComponent(discord.ui.LayoutView):
+    def __init__(
+        self,
+        submission_json: dict,
+        core_json: dict,
+        ticket_channel_id: int,
+        db: DatabaseAccess,
+    ) -> None:
         super().__init__(timeout=None)
 
-        self.opener: Optional[discord.Member] = opener if isinstance(opener, discord.Member) else None
+        base_name = submission_json.get("ticket_name_base", "ticket")
+        ticket_name: str = base_name.replace("_", " ").title()
+        roles = submission_json.get("ping_roles", [])
+        ticket_mentions: str = " ".join(f"<@&{role_id}>" for role_id in roles) if roles else "No Mentions!"
+
+        opener_details: dict = submission_json.get("opener", {})
+        self.ticket_channel_id: int = ticket_channel_id
         self.db = db
-        if isinstance(opener, discord.Member):
-            self.opener_id = opener.id
-        elif isinstance(opener, int):
-            self.opener_id = opener
-        else:
-            raise ValueError("Invalid Opener Type")
+
+        self.allowed_roles = set(submission_json.get("ping_roles", []))
+        self.higher_staff_role_ids = set(
+            core_json.get("BasicConfigurations", {}).get("higher_staffs_role_id", [])
+        )
+
+        content = (
+            f"- **ID**: {opener_details.get('member_id', 0)}\n"
+            f"- **Created on**: {opener_details.get('created_on')}\n"
+            f"- **Joined on**: {opener_details.get('joined_on')}"
+            if opener_details is not None
+            else "**User information unavailable**"
+        )
+
+        self.claim_ticket: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            emoji=emoji["user_claim"],
+            label="Claim Ticket",
+            custom_id=f"claim-ticket{self.ticket_channel_id}",
+        )
+
+        self.revoke_claim: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            emoji=emoji["user_unclaim"],
+            label="Revoke Claim",
+            custom_id=f"revoke-claim{self.ticket_channel_id}",
+        )
+
+        self.claim_ticket.callback = self.claim_ticket_callback
+        self.revoke_claim.callback = self.revoke_claim_callback
+
+        container = discord.ui.Container(
+            discord.ui.TextDisplay(content=f"# {ticket_name}"),
+            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+            discord.ui.Section(
+                discord.ui.TextDisplay(
+                    content=f"### Ticket Opener Information | <@{opener_details.get('member_id', 0)}>"
+                ),
+                discord.ui.TextDisplay(content=content),
+                accessory=discord.ui.Thumbnail(
+                    media=opener_details.get("avatar", 0),
+                ),
+            ),
+            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+            discord.ui.TextDisplay(content=f"-# {ticket_mentions}"),
+        )
+
+        self.add_item(container)
+        self.add_item(discord.ui.ActionRow(self.claim_ticket, self.revoke_claim))
+
+    async def claim_ticket_callback(self, interaction: discord.Interaction) -> None:
+        if interaction.channel is None or interaction.guild is None:
+            return
+
+        await interaction.response.defer()
+        assert isinstance(interaction.user, discord.Member)
+
+        is_staff = any(role.id in self.allowed_roles for role in interaction.user.roles)
+
+        if not is_staff:
+            await interaction.followup.send(
+                embed=simple_embed("You are not allowed to claim this ticket!", 'cross'),
+                ephemeral=True
+            )
+            return
+
+        success = await self.db.bot_db.set_ticket_claimer(
+            interaction.user.id, interaction.channel.id, interaction.guild.id
+        )
+        if not success:
+            claimer = await self.db.bot_db.get_ticket_claimer(interaction.channel.id)
+            await interaction.followup.send(
+                embed=simple_embed(f"<@{claimer}> has already claimed this ticket!", 'cross'),
+                ephemeral=True
+            )
+            return
+
+        channel = interaction.channel
+        if isinstance(channel, discord.TextChannel) and isinstance(interaction.user, discord.Member):
+            await channel.set_permissions(
+                interaction.user,
+                send_messages=True,
+                embed_links=True,
+                attach_files=True,
+                add_reactions=True,
+                use_external_emojis=True,
+                read_message_history=True
+            )
+
+        self.claim_ticket.disabled = True
+        self.claim_ticket.label = "Claimed"
+        self.claim_ticket.style = discord.ButtonStyle.secondary
+
+        assert interaction.message is not None
+        await interaction.message.edit(view=self)
+        await interaction.followup.send(embed=simple_embed(f"{interaction.user.mention} has claimed the ticket!"))
+
+    async def revoke_claim_callback(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
+
+        if interaction.channel is None or interaction.guild is None:
+            return
+
+        claimer = await self.db.bot_db.get_ticket_claimer(interaction.channel.id)
+
+        if claimer is None:
+            await interaction.followup.send(
+                embed=simple_embed("No one has claimed this ticket!", 'cross'),
+                ephemeral=True
+            )
+            return
+
+        claimer_member: Optional[discord.Member] = None
+        try:
+            claimer_member = await interaction.guild.fetch_member(claimer)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            claimer_member = None
+
+        assert isinstance(interaction.user, discord.Member)
+        if (
+            interaction.user.id != claimer
+            and not any(role.id in self.higher_staff_role_ids for role in interaction.user.roles)
+        ):
+            await interaction.followup.send(
+                embed=simple_embed("You are not allowed to revoke ticket claims!", 'cross'),
+                ephemeral=True
+            )
+            return
+
+        channel = interaction.channel
+        if claimer_member is not None and isinstance(channel, discord.TextChannel):
+            await channel.set_permissions(claimer_member, overwrite=None)
+
+        self.claim_ticket.disabled = False
+        self.claim_ticket.label = "Claim"
+        self.claim_ticket.style = discord.ButtonStyle.secondary
+
+        await self.db.bot_db.reset_ticket_claimer(interaction.channel.id)
+
+        if interaction.message:
+            await interaction.message.edit(view=self)
+
+        await interaction.followup.send(
+            embed=simple_embed("Ticket claim has been revoked!"),
+            ephemeral=True
+        )
+
+        assert isinstance(channel, discord.TextChannel)
+        await channel.send(
+            embed=simple_embed(f"{interaction.user.mention} revoked the ticket claim.")
+        )
+
+class TicketComponentEmbed(discord.ui.LayoutView):
+    def __init__(self, 
+                 ticket_channel_id: int, 
+                 submission_json: dict, 
+                 core_json: dict, 
+                 db: DatabaseAccess,
+                 buttons: bool = True # Either to invoke buttons or just create a stale view
+        ):
+
+        timeout = None if buttons else 10
+        super().__init__(timeout=timeout)
+
+        self.db = db
+        self.buttons = buttons
         
         self.ticket_channel_id: int = ticket_channel_id
         self.misc: Dict = {}
@@ -281,97 +452,45 @@ class TicketComponentEmbed(discord.ui.LayoutView):
         self.ticket_mentions: str = " ".join(f"<@&{role_id}>" for role_id in roles) if roles else "No Mentions!"
 
 
-        self.allowed_roles = set(submission_json.get("ping_roles", []))
-        self.higher_staff_role_ids = set(self.core_json.get("BasicConfigurations").get("higher_staffs_role_id"))
-
-
-        self.claim_ticket: discord.ui.Button = discord.ui.Button(
-            style=discord.ButtonStyle.secondary,
-            emoji=emoji["user_claim"],
-            label="Claim Ticket",
-            custom_id=f"claim-ticket{self.ticket_channel_id}",
+        self.allowed_roles = set(submission_json.get("ping_roles", [])) if buttons else set()
+        self.higher_staff_role_ids = (
+            set(self.core_json.get("BasicConfigurations", {}).get("higher_staffs_role_id", []))
+            if buttons else set()
         )
 
-        self.revoke_claim: discord.ui.Button = discord.ui.Button(
+
+        if buttons:
+            self.case_list_button: discord.ui.Button = discord.ui.Button(
                 style=discord.ButtonStyle.secondary,
-                emoji=emoji["user_unclaim"],
-                label="Revoke Claim",
-                custom_id=f"revoke-claim{self.ticket_channel_id}",
+                emoji=emoji["logs"],
+                custom_id=f"case-list{self.ticket_channel_id}",
             )
 
-        
-        self.case_list_button: discord.ui.Button = discord.ui.Button(
-            style=discord.ButtonStyle.secondary,
-            emoji=emoji["logs"],
-            custom_id=f"case-list{self.ticket_channel_id}",
-        )
 
-        self.case_list_button.callback = self.case_list_callback
-
-        self.ban_button: discord.ui.Button = discord.ui.Button(
-            style=discord.ButtonStyle.secondary,
-            emoji=emoji["ban_hammer"],
-            custom_id=f"ban{self.ticket_channel_id}",
-        )
-
-        self.ban_button.callback = self.ban_callback
-
-        self.mute_button: discord.ui.Button = discord.ui.Button(
-            style=discord.ButtonStyle.secondary,
-            emoji=emoji["member"],
-            custom_id=f"mute{self.ticket_channel_id}",
-        )
-
-        self.mute_button.callback = self.mute_callback
-
-        self.warn_button: discord.ui.Button = discord.ui.Button(
-            style=discord.ButtonStyle.secondary,
-            emoji=emoji["warn"],
-            custom_id=f"warn{self.ticket_channel_id}",
-        )
-
-        self.warn_button.callback = self.warn_callback
-
-        self.claim_ticket.callback = self.claim_ticket_callback
-        self.revoke_claim.callback = self.revoke_claim_callback
-
-        opener_details = submission_json.get("opener", {})
-
-        avatar_url = (
-            self.opener.display_avatar.url
-            if isinstance(self.opener, discord.Member)
-            else opener_details.get("avatar")
-        )
+            self.ban_button: discord.ui.Button = discord.ui.Button(
+                style=discord.ButtonStyle.secondary,
+                emoji=emoji["ban_hammer"],
+                custom_id=f"ban{self.ticket_channel_id}",
+            )
 
 
-        content = (
-            f"- **ID**: {opener_details.get("member_id", 0)}\n"
-            f"- **Created on**: {opener_details.get("created_on")}\n"
-            f"- **Joined on**: {opener_details.get("joined_on")}"
-            if opener_details is not None
-            else "**User information unavailable**"
-        ) 
-
-        mention = (
-            self.opener.mention
-            if isinstance(self.opener, discord.Member)
-            else f"<@{opener_details.get("member_id")}>"
-        )
+            self.mute_button: discord.ui.Button = discord.ui.Button(
+                style=discord.ButtonStyle.secondary,
+                emoji=emoji["member"],
+                custom_id=f"mute{self.ticket_channel_id}",
+            )
 
 
-        base_container = discord.ui.Container(
-            discord.ui.TextDisplay(content=f"# {self.ticket_name}"),
-            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
-            discord.ui.Section(
-                discord.ui.TextDisplay(content=f"### Ticket Opener Information | {mention}"),
-                discord.ui.TextDisplay(content=content),
-                accessory=discord.ui.Thumbnail(
-                    media=avatar_url,
-                ),
-            ),
-            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
-            discord.ui.TextDisplay(content=f"-# {self.ticket_mentions}"),
-        )
+            self.warn_button: discord.ui.Button = discord.ui.Button(
+                style=discord.ButtonStyle.secondary,
+                emoji=emoji["warn"],
+                custom_id=f"warn{self.ticket_channel_id}",
+            )
+
+            self.ban_button.callback = self.ban_callback
+            self.mute_button.callback = self.mute_callback
+            self.warn_button.callback = self.warn_callback
+            self.case_list_button.callback = self.case_list_callback
 
         ticket_details = []
         field_data = self.submission_json["field_data"]
@@ -408,14 +527,15 @@ class TicketComponentEmbed(discord.ui.LayoutView):
                             ),
                         )
                     )
-                    ticket_details.append(
-                        discord.ui.ActionRow(
-                            self.case_list_button,
-                            self.ban_button,
-                            self.mute_button,
-                            self.warn_button
+                    if buttons:
+                        ticket_details.append(
+                            discord.ui.ActionRow(
+                                self.case_list_button,
+                                self.ban_button,
+                                self.mute_button,
+                                self.warn_button
+                            )
                         )
-                    )
                 else:
                     ticket_details.append(
                     discord.ui.TextDisplay(
@@ -461,16 +581,13 @@ class TicketComponentEmbed(discord.ui.LayoutView):
             *ticket_details
         )
 
-        self.add_item(base_container)
         self.add_item(ticket_details_container)
-        self.add_item(discord.ui.ActionRow(self.claim_ticket, self.revoke_claim))
 
     async def _check_permissions(self, interaction: discord.Interaction) -> bool:
         assert isinstance(interaction.user, discord.Member)
         is_staff = any(role.id in self.allowed_roles for role in interaction.user.roles)
-        is_opener = interaction.user.id == self.opener_id
 
-        if not is_staff or is_opener:
+        if not is_staff:
             await interaction.response.send_message(
                 embed=simple_embed("You are not allowed to use this!", 'cross'),
                 ephemeral=True
@@ -481,117 +598,6 @@ class TicketComponentEmbed(discord.ui.LayoutView):
             return False
 
         return True
-
-    async def claim_ticket_callback(self, interaction: discord.Interaction) -> None:
-        if interaction.channel is None or interaction.guild is None:
-            return
-
-        await interaction.response.defer()
-        assert isinstance(interaction.user, discord.Member)
-
-        is_staff = any(role.id in self.allowed_roles for role in interaction.user.roles)
-        is_opener = interaction.user.id == self.opener_id
-
-        if not is_staff or is_opener:
-            await interaction.followup.send(
-                embed=simple_embed("You are not allowed to claim this ticket!", 'cross'),
-                ephemeral=True
-            )
-            return
-
-        success = await self.db.bot_db.set_ticket_claimer(interaction.user.id, interaction.channel.id, interaction.guild.id)
-        if not success:
-            claimer = await self.db.bot_db.get_ticket_claimer(interaction.channel.id)
-            await interaction.followup.send(
-                embed=simple_embed(f"<@{claimer}> has already claimed this ticket!", 'cross'),
-                ephemeral=True
-            )
-            return
-
-        channel = interaction.channel
-        if isinstance(channel, discord.TextChannel) and isinstance(interaction.user, discord.Member):
-            await channel.set_permissions(
-                interaction.user,
-                send_messages=True,
-                embed_links=True,
-                attach_files=True,
-                add_reactions=True,
-                use_external_emojis=True,
-                read_message_history=True
-            )
-
-        self.claim_ticket.disabled = True
-        self.claim_ticket.label = "Claimed"
-        self.claim_ticket.style = discord.ButtonStyle.secondary
-        self.ticket_message = interaction.message
-        assert interaction.message is not None
-        await interaction.message.edit(view=self)
-        await interaction.followup.send(embed=simple_embed(f"{interaction.user.mention} has claimed the ticket!"))
-
-    async def revoke_claim_callback(self, interaction: discord.Interaction) -> None:
-        await interaction.response.defer()
-
-        if interaction.channel is None or interaction.guild is None:
-            return
-        
-        claimer = await self.db.bot_db.get_ticket_claimer(interaction.channel.id)
-
-
-        if claimer is None:
-            await interaction.followup.send(
-                embed=simple_embed("No one has claimed this ticket!", 'cross'),
-                ephemeral=True
-            )
-            return
-        
-
-        claimer_member: Optional[discord.Member] = None
-
-        if claimer is not None:
-            try:
-                claimer_member = await interaction.guild.fetch_member(claimer)
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                claimer_member = None
-
-        assert isinstance(interaction.user, discord.Member)
-        if (interaction.user.id != claimer and not any(role.id in self.higher_staff_role_ids for role in interaction.user.roles)):            
-            await interaction.followup.send(
-                embed=simple_embed("You are not allowed to revoke ticket claims!", 'cross'),
-                ephemeral=True
-            )
-            return
-
-        if claimer is None:
-            await interaction.followup.send(
-                embed=simple_embed("This ticket is not currently claimed.", 'cross'),
-                ephemeral=True
-            )
-            return
-
-        channel = interaction.channel
-        if claimer_member is not None and isinstance(channel, discord.TextChannel):
-            await channel.set_permissions(claimer_member, overwrite=None)  
-
-
-        self.claim_ticket.disabled = False
-        self.claim_ticket.label = "Claim"
-        self.claim_ticket.style = discord.ButtonStyle.secondary
-
-        await self.db.bot_db.reset_ticket_claimer(interaction.channel.id)
-
-        if interaction.message:
-            await interaction.message.edit(view=self)
-
-        await interaction.followup.send(
-            embed=simple_embed("Ticket claim has been revoked!"),
-            ephemeral=True
-        )
-
-        assert isinstance(channel, discord.TextChannel)
-
-        await channel.send(
-            embed=simple_embed(f"{interaction.user.mention} revoked the ticket claim.")
-        )
 
     async def case_list_callback(self, interaction: discord.Interaction):
         if not await self._check_permissions(interaction):
@@ -667,7 +673,7 @@ class TicketComponentEmbed(discord.ui.LayoutView):
                 proofs=self.misc["proofs"]
             )
         )
-        
+
 class TicketModal(discord.ui.Modal):
     def __init__(self, title: str, modal_data: dict, json_data, db: DatabaseAccess, message: discord.Message):
         super().__init__(title=title)
@@ -792,7 +798,10 @@ class TicketModal(discord.ui.Modal):
             attach_files=True,
             add_reactions=True,
             use_external_emojis=True,
-            read_message_history=True
+            read_message_history=True,
+            create_public_threads=True,
+            create_private_threads=False,
+            send_messages_in_threads=False
         )
 
         for role_id in roles:
@@ -807,7 +816,8 @@ class TicketModal(discord.ui.Modal):
                     use_external_emojis=True,
                     read_message_history=True,
                     create_public_threads=False,
-                    create_private_threads=False
+                    create_private_threads=False,
+                    send_messages_in_threads=False
                 )
         for role_id in higher_staff_roles_ids:
             role = interaction.guild.get_role(role_id)
@@ -821,7 +831,8 @@ class TicketModal(discord.ui.Modal):
                     use_external_emojis=True,
                     read_message_history=True,
                     create_public_threads=False,
-                    create_private_threads=False
+                    create_private_threads=False,
+                    send_messages_in_threads=False
                 )
         if isinstance(channel_category, discord.CategoryChannel):
             text_channel: discord.TextChannel = await interaction.guild.create_text_channel(
@@ -838,10 +849,18 @@ class TicketModal(discord.ui.Modal):
         if not isinstance(opener, discord.Member):
             return
 
-        view = TicketComponentEmbed(opener=opener, ticket_channel_id=text_channel.id, submission_json=submission_json, core_json=core_json, db=self.db)
-        ticket_message: discord.Message = await text_channel.send(view=view)
+        opener_view = TicketOpenerComponent(submission_json=submission_json, core_json=core_json, db=self.db, ticket_channel_id=text_channel.id)
+        view = TicketComponentEmbed(ticket_channel_id=text_channel.id, submission_json=submission_json, core_json=core_json, db=self.db)
 
-        """ Pin the message to the channel so that it's easily viewable """
+        ticket_message: discord.Message = await text_channel.send(view=opener_view)
+        ticket_details_thread = await ticket_message.create_thread(
+            name="Ticket Details"
+        )
+
+        ticket_details_message: discord.Message = await ticket_details_thread.send(
+            view=view
+        )
+
         try:
             await ticket_message.pin()
         except discord.Forbidden:
@@ -857,7 +876,8 @@ class TicketModal(discord.ui.Modal):
             ticket_name_base,
             logging_channel_id,
             submission_json,
-            ticket_message.id
+            ticket_message.id,
+            ticket_details_message.id
         )
         return text_channel
 
@@ -899,11 +919,13 @@ class TicketModal(discord.ui.Modal):
             field_type = field["type"]
 
             if field_type == "file_upload":
+                assert isinstance(item.component, discord.ui.FileUpload)
                 field_data.append({
                     "field": field,
                     "value": [attachment.url for attachment in item.component.values]
                 })
             elif field_type == "member":
+                assert isinstance(item.component, discord.ui.TextInput)
                 # Try fetching the member details.
                 try:
                     user = re.sub(r"[^\w.]", "", str(item.component.value).lstrip("@")).lower()
@@ -936,12 +958,14 @@ class TicketModal(discord.ui.Modal):
                 ...
             
             elif field_type == "role_select":
+                assert isinstance(item.component, discord.ui.RoleSelect)
                 field_data.append({
                     "field": field,
                     "value": [role.name for role in item.component.values]
                 })
 
             else:
+                assert isinstance(item.component, discord.ui.TextInput)
                 field_data.append({
                     "field": field,
                     "value": item.component.value
