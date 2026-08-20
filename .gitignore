@@ -155,7 +155,7 @@ cython_debug/
 storage/*
 storage/configs/Configs_schema.sql
 
-public/*
+public/assets/temp
 backups/*
 .configs/*
 
