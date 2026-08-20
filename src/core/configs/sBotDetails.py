@@ -1,41 +1,3 @@
-# Command prefix for the bot
-bot_command_prefix = "."
-
-# Bot display settings
-bot_name = "BloxTrade"
-bot_icon_link_url = "https://cdn.discordapp.com/icons/970643838047760384/a_a6cfa91910d8e2fff68defeda76dd902.png?size=256"
-embed_color_code = 0xfa0064
-# Server display settings
-server_name = "Blox Trade"
-server_invite_link = "https://discord.com/invite/bloxtrade"
-
-# Port system (0 = test environment, 1 = production environment)
-port = 1 # Currently set to Production Server
-
-# ENVIRONMENT SETTINGS
-if port == 0:
-    # DEVELOPMENT SERVER SETTINGS
-
-    #Core Channel Config
-    stock_fetch_guild_id = 1099482621161001113
-    stock_fetch_channel_id = 1431687087928905821
-    stock_fetch_channel_id_pvb = 1431687232074551307
-    weather_fetch_channel_id_pvb = 1431687357555277995
-
-else:
-    appeal_server_link = "https://discord.gg/StcA9GaEUU"
-
-    role_creation_limit = 1
-
-    #GUILD REFERENCE
-    GUILD_ID = 970643838047760384
-
-    #Core Channel Config
-    stock_fetch_guild_id = 1099482621161001113
-    stock_fetch_channel_id = 1431687087928905821
-    stock_fetch_channel_id_pvb = 1431687232074551307
-    weather_fetch_channel_id_pvb = 1431687357555277995
-
 # Embed colors based on item type
 embed_color_codes = {
     "common": 0xa1a4a5,
@@ -48,43 +10,43 @@ embed_color_codes = {
 }
 
 emoji = {
-    'clock' : '<:clock3:1528472395327869030>',
-    'shield' : '<:shield:1528472618582151349>',
-    'calender' : '<:calendar:1528472399392145601>',
-    'bookmark' : '<:bookmark:1528472620880756939>',
-    'logs' : '<:logs:1528473004168708256>',
-    'warn' : '<:trianglealert:1528472405482406008>',
-    'staff' : '<:shielduser:1528472433420533860>',
-    'pencil' : '<:squarepen:1528472410578227230>',
-    'mute' : '<:mute:1438045595695710230>',
-    'member' : '<:userround:1528472408053387365>',
-    'gift' : '<:gift1:1528472415213060156>',
-    'ban_hammer' : '<:gavel:1528472417436176494>',
-    'arrow' : '<:arrow:1438045578721493062>',
-    'online' : '<:circlecheckbig:1528472419990245618>',
-    'invisible' : '<:eyeoff:1528472422209163324>',
-    'dnd' : '<:circleminus:1528472424541323437>',
-    'cross' : '<:cross:1528468933001089164>',
-    'checked' : '<:check:1528468938390896710>',
-    'bot' : '<:bot:1528473808648933549>',
-    'ticket' : '<:ticket:1528473907211010161>',
-    'music_play' : '<:MusicPlay:1443189668307931268>',
-    'music_shuffle' : '<:MusicShuffle:1443189671105400896>',
-    'music_repeat' : '<:MusicRepeat:1443189674897182841>',
-    'music_author' : '<:MusicAuthor:1443189678269268019>',
-    'music_folder' : '<:MusicFolder:1443189682077962312>',
-    'music_playlist' : '<:MusicPlaylist:1443189686712537098>',
-    'coin' : '<:coin:1444123040538693662>',
-    'verified' : '<:verified:1460394848761675828>',
-    'perm' : '<:PermanentIcon:1467159355119108116>',
-    'beli' : '<:beli:1467159970842939443>',
-    "user_claim": '<:userroundcheck:1528470542238224548>',
-    "user_unclaim": '<:userroundminus:1528470540300583073>',
-    "pin": "<:pin:1528474571391631514>",
-    "right": "<:chevronright:1529917528929992845>",
-    "left": "<:chevronleft:1529917525901578331>",
-    "paper_clip": "<:paperclip:1529917520847310988>"
-}
+    "clock": "<:clock:1540071155296112681>",
+    "shield": "<:shield:1540071158614069359>",
+    "calender": "<:calender:1540071161545752667>",
+    "bookmark": "<:bookmark:1540071164020400208>",
+    "logs": "<:logs:1540071166641709056>",
+    "warn": "<:warn:1540071170018246746>",
+    "staff": "<:staff:1540071172065067029>",
+    "pencil": "<:pencil:1540071175139491874>",
+    "mute": "<:mute:1540071177266135091>",
+    "gift": "<:gift:1540071183859458148>",
+    "ban_hammer": "<:ban_hammer:1540071186019516416>",
+    "arrow": "<:arrow:1540071188267536424>",
+    "online": "<:online:1540071190893306018>",
+    "invisible": "<:invisible:1540071192973811853>",
+    "dnd": "<:dnd:1540071195452506152>",
+    "cross": "<:cross:1540071204361084948>",
+    "checked": "<:checked:1540071197516234852>",
+    "bot": "<:bot:1540071208702181457>",
+    "ticket": "<:ticket:1540071211160182794>",
+    "music_play": "<:music_play:1540071213295083680>",
+    "music_shuffle": "<:music_shuffle:1540071215430111243>",
+    "music_repeat": "<:music_repeat:1540071221293490186>",
+    "music_author": "<:music_author:1540071179363029092>",
+    "music_folder": "<:music_folder:1540071223743086694>",
+    "music_playlist": "<:music_playlist:1540071225974591578>",
+    "coin": "<:coin:1540071228155625502>",
+    "verified": "<:verified:1540071230613364767>",
+    "perm": "<:perm:1540071236997095434>",
+    "beli": "<:beli:1540071239106953418>",
+    "user_claim": "<:user_claim:1540071244026880131>",
+    "user_unclaim": "<:user_unclaim:1540071241631793292>",
+    "pin": "<:pin:1540071246224556043>",
+    "right": "<:right:1540071248703393852>",
+    "left": "<:left:1540071250976833556>",
+    "paper_clip": "<:paper_clip:1540071254286139462>"
+    }
+    
 
 img = {
     'border' : 'https://cdn.discordapp.com/attachments/1438505067341680690/1438507704275570869/Border.png?ex=69172232&is=6915d0b2&hm=6fc4724fb6fb44c83c8fb82425f287c19c762d161ff882420f69abaaf725ad3a&',
