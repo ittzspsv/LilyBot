@@ -28,8 +28,11 @@ from ..components.LilyTicketToolComponents import (
     TicketOpenerComponent,
     TicketSelectComponent,
     TicketLogComponent,
-    TicketLogDirectMessage
+    TicketLogDirectMessage,
+    build_ticket_summary
 )
+
+from ..transcript import transcript
 
 
 class LilyTicketingController:
@@ -397,16 +400,7 @@ class LilyTicketingController:
 
             
             await interaction.channel.send(
-                view=TicketComponentEmbed(
-                    interaction.channel.id,
-                    submission_json,
-                    {},
-                    DatabaseAccess(
-                        self.bot_db,
-                        self.logging_controller
-                    ),
-                    False
-                )
+                embed=build_ticket_summary(submission_json)
             )
             logs_channel = interaction.guild.get_channel(logs_channel_id)
 
@@ -425,21 +419,12 @@ class LilyTicketingController:
                     logs_channel = None
 
             if isinstance(channel, discord.TextChannel):
-                transcript = await DiscordTranscript.export(
-                    channel,
-                    limit=None,
-                    tz_info="America/New_York",
-                    military_time=True,
-                    bot=interaction.client,
-                    attachment_handler=DiscordTranscript.AttachmentToDiscordChannelHandler(
-                        channel=logs_channel
-                    ) if logs_channel else None
+                transcript_bytes = await transcript(
+                    interaction=interaction
                 )
 
-                if transcript is None:
+                if transcript_bytes is None:
                     return await interaction.response.send_message("Failed to generate transcript.")
-
-                transcript_bytes = transcript.encode()
 
 
                 transcript_file = discord.File(

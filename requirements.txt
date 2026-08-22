@@ -9,7 +9,6 @@ aiohttp
 aiofiles
 lavalink
 python-dotenv
-DiscordTranscript
 asqlite
 apscheduler
 boto3

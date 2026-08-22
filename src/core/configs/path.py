@@ -16,3 +16,14 @@ VALUE_DB: Final[Path] = CONFIG_DIR / "ValueData.db"
 PUBLIC = PROJECT_ROOT / "public"
 FONTS = PUBLIC / "fonts"
 ASSETS = PUBLIC / "assets"
+
+TRANSCRIPT_DIR: Final[Path] = (
+    PROJECT_ROOT
+    / "src"
+    / "core"
+    / "features"
+    / "ticketing"
+    / "transcript"
+)
+
+TRANSCRIPT_TEMPLATE_DIR: Final[Path] = TRANSCRIPT_DIR / "static"
