@@ -13,7 +13,12 @@ from src.core.features.moderation.components.sLilyModerationComponents import Ap
 import discord
 import io
 import re
+import logging
 import aiohttp
+import asyncio
+
+logger = logging.getLogger("lily")
+
 
 class LilyLoggingController:
     def __init__(self, bot_db: BotGlobalsDatabaseAccess) -> None:
@@ -59,8 +64,11 @@ class LilyLoggingController:
         mod_type: str,
         reason: str = "No reason provided",
         proofs: Optional[Sequence[Union[discord.Attachment, str]]] = None,
-        metadata: Dict[str, Any] = {}
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> int | None:
+        if metadata is None:
+            metadata = {}
+
         if ctx.guild is None:
             content = "Guild object is required for this command to be executed"
             if isinstance(ctx, commands.Context):
@@ -70,15 +78,14 @@ class LilyLoggingController:
                     await ctx.followup.send(content)
                 else:
                     await ctx.response.send_message(content)
+            return None
 
-            return
-        
         acronyms: dict[str, str] = await self.bot_db.get_moderation_acronyms(moderator.id, ctx.guild.id)
         reason = re.sub(
-                    r"\b\w+\b",
-                    lambda m: acronyms.get(m.group(0).lower(), m.group(0)),
-                    reason
-                )
+            r"\b\w+\b",
+            lambda m: acronyms.get(m.group(0).lower(), m.group(0)),
+            reason
+        )
 
         case_id = await self.bot_db.log_moderation_action(
             ctx.guild.id,
@@ -89,14 +96,9 @@ class LilyLoggingController:
             metadata
         )
 
-        """ Send Action DM to the User"""
         a_log = None
         if mod_type in ('ban', 'mute', 'quarantine', 'warn'):
-            a_log = action_log(
-                mod_type,
-                reason,
-                ctx.guild.name,
-            )
+            a_log = action_log(mod_type, reason, ctx.guild.name)
 
         try:
             view = discord.ui.View(timeout=None)
@@ -105,7 +107,7 @@ class LilyLoggingController:
                 await target_user.send(embed=a_log, view=view)
         except Exception:
             pass
-                
+
         embeds_to_send = moderation_embed(
             moderator.id,
             target_user.id,
@@ -126,54 +128,68 @@ class LilyLoggingController:
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 return case_id
 
-        if isinstance(channel, discord.TextChannel):
-            await channel.send(
-                content=f"{target_user.mention}",
-                embeds=embeds_to_send
-            )
+        if not isinstance(channel, discord.TextChannel):
+            return case_id
 
-            """ Also try sending proofs If the staff member has attached proofs"""
-            if proofs and case_id:
-                async with aiohttp.ClientSession() as session:
-                    files: List[discord.File] = []
-                    for proof in proofs:
-                        if isinstance(proof, discord.Attachment):
+        await channel.send(
+            content=f"{target_user.mention}",
+            embeds=embeds_to_send
+        )
+
+        if proofs and case_id:
+            files: List[discord.File] = []
+            failed_proofs: List[str] = []
+
+            timeout = aiohttp.ClientTimeout(total=15)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                for proof in proofs:
+                    if isinstance(proof, discord.Attachment):
+                        try:
                             data = await proof.read()
-                            file = discord.File(
-                                fp=io.BytesIO(data),
-                                filename=proof.filename
-                            )
-                            files.append(file)
-                        elif isinstance(proof, str):
+                        except (discord.NotFound, discord.HTTPException) as e:
+                            logger.warning(f"Failed to read attachment {proof.filename} for case {case_id}: {e}")
+                            failed_proofs.append(proof.filename)
+                            continue
+
+                        files.append(discord.File(fp=io.BytesIO(data), filename=proof.filename))
+
+                    elif isinstance(proof, str):
+                        try:
                             async with session.get(proof) as resp:
                                 if resp.status != 200:
-                                    raise ValueError(f"Failed to fetch image: {proof}")
+                                    logger.warning(
+                                        f"Failed to fetch proof image for case {case_id}: "
+                                        f"{proof} returned status {resp.status}"
+                                    )
+                                    failed_proofs.append(proof)
+                                    continue
 
                                 data = await resp.read()
-
-                                filename = proof.split("?")[0].split("/")[-1]
-                                if not filename.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
-                                    filename += ".png"
-
-                                file = discord.File(
-                                    fp=io.BytesIO(data),
-                                    filename=filename
-                                )
-
-                                files.append(file)
-                        else:
+                        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                            logger.warning(f"Failed to fetch proof image for case {case_id}: {proof} ({e})")
+                            failed_proofs.append(proof)
                             continue
-                """ Send the proofs to the logging channel """
+
+                        filename = proof.split("?")[0].split("/")[-1]
+                        if not filename.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
+                            filename += ".png"
+
+                        files.append(discord.File(fp=io.BytesIO(data), filename=filename))
+
+            if files:
                 message = await channel.send(
                     content=f"Proofs {target_user.mention}",
                     files=files
                 )
 
-                """ Store the message id on the database for future retrieval """
                 if isinstance(ctx, commands.Context):
                     await self.bot_db.log_proof_action(ctx.guild.id, case_id, message.id, ctx.author.id)
                 elif isinstance(ctx, discord.Interaction):
                     await self.bot_db.log_proof_action(ctx.guild.id, case_id, message.id, ctx.user.id)
+
+            if failed_proofs:
+                note = f"{len(failed_proofs)} proof(s) could not be fetched (link expired or inaccessible)."
+                await channel.send(content=note)
 
         return case_id
 
