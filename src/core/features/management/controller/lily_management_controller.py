@@ -1,9 +1,10 @@
+from __future__ import annotations
+
 from ....database.integrations.bot_globals import BotGlobalsDatabaseAccess
-from src.core.configs.sBotDetails import emoji, img, bot_command_prefix
-from discord.ext import commands
+from src.core.configs.sBotDetails import emoji, img
 from src.core.utils.embeds.sLilyEmbed import simple_embed
 from ..types.staff_management_types import QuotaCheckBy
-from typing import Optional, cast, Final
+from typing import Optional, cast, Final, TYPE_CHECKING
 from ..embeds.staff_management_embed import *
 
 import matplotlib.pyplot as plt
@@ -16,9 +17,11 @@ from ..components.staff_management_components import (
 
 import discord
 import asyncio
-import re
 
 from io import BytesIO
+
+if TYPE_CHECKING:
+    from src.lily import Lily
 
 
 quota_conclusion_mapping: Final = {
@@ -28,293 +31,261 @@ quota_conclusion_mapping: Final = {
 }
 
 
-class LilyManagementController:
-    def __init__(self, bot_db: BotGlobalsDatabaseAccess) -> None:
-        self.bot_db: BotGlobalsDatabaseAccess = bot_db
+async def fetch_staff_detail(interaction: discord.Interaction ,staff: discord.Member | discord.User) -> None:
+    try:
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
 
-    async def fetch_staff_detail(self, interaction: discord.Interaction ,staff: discord.Member | discord.User) -> None:
-        try:
-            assert isinstance(interaction.guild, discord.Guild)
-            data_dict = await self.bot_db.fetch_staff_detail(staff.id, interaction.guild.id)
+        assert isinstance(interaction.guild, discord.Guild)
+        data_dict = await bot_db.fetch_staff_detail(staff.id, interaction.guild.id)
 
-            if not data_dict:
-                raise ValueError("Staff data not found in database.")
+        if not data_dict:
+            raise ValueError("Staff data not found in database.")
 
-            embed = build_staff_embed(staff, data_dict)
-            await interaction.response.send_message(embed=embed)
+        embed = build_staff_embed(staff, data_dict)
+        await interaction.response.send_message(embed=embed)
 
-        except Exception as e:
-            embed = discord.Embed(
-                color=0xFF0000,
-                description=f"{emoji['cross']} failed to fetch staff data. please check the database.",
-            )
+    except Exception as e:
+        embed = discord.Embed(
+            color=0xFF0000,
+            description=f"{emoji['cross']} failed to fetch staff data. please check the database.",
+        )
 
-            await interaction.response.send_message(embed=embed)
-        
-    async def fetch_all_staffs(self, interaction: discord.Interaction) -> None:
-        if interaction.guild is None:
-            embed = discord.Embed(
-                title=f"{emoji['cross']} Error",
-                description="Cannot execute this command without an guild object",
-                colour=0xf50000
-            )
-
-            await interaction.response.send_message(embed=embed)
-            return
-        try:
-            data = await self.bot_db.fetch_all_staffs(interaction.guild.id)
-
-            overall_details = data["overall"]
-            role_user_map = data["roles"]
-
-            view = StaffsView(interaction, self.bot_db ,overall_details, role_user_map)
-            await interaction.response.send_message(view=view)
-            view.message = await interaction.original_response()
-
-        except Exception as e:
-            print(f"Error fetching staff list: {e}")
-
-            embed = discord.Embed(
-                title=f"{emoji['cross']} Error",
-                description="Failed to fetch staff data. Please check the database.",
-                colour=0xf50000
-            )
-
-            await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embed=embed)
     
-    async def update_all_staffs(self, interaction: discord.Interaction) -> None:
-        if interaction.guild is None:
-            embed = discord.Embed(
-                title=f"{emoji['cross']} Error",
-                description="Cannot execute this command without a guild object",
-                colour=0xf50000
-            )
-            await interaction.response.send_message(embed=embed)
-            return
-
-        guild_id = interaction.guild.id
-
-        rows = await self.bot_db.fetch_all(
-            "SELECT staff_id FROM staffs WHERE retired = 0 AND on_loa = 0 AND guild_id = ?",
-            (guild_id,)
+async def fetch_all_staffs(interaction: discord.Interaction) -> None:
+    if interaction.guild is None:
+        embed = discord.Embed(
+            title=f"{emoji['cross']} Error",
+            description="Cannot execute this command without an guild object",
+            colour=0xf50000
         )
-        staff_ids = [row["staff_id"] for row in rows]
 
-        db_roles = await self.bot_db.fetch_all(
-            "SELECT role_id, role_type FROM roles WHERE guild_id = ?",
-            (guild_id,)
+        await interaction.response.send_message(embed=embed)
+        return
+    bot_db = cast("Lily", interaction.client).db
+    assert bot_db is not None
+    try:
+        data = await bot_db.fetch_all_staffs(interaction.guild.id)
+
+        overall_details = data["overall"]
+        role_user_map = data["roles"]
+
+        view = StaffsView(interaction, bot_db ,overall_details, role_user_map)
+        await interaction.response.send_message(view=view)
+        view.message = await interaction.original_response()
+
+    except Exception as e:
+        print(f"Error fetching staff list: {e}")
+
+        embed = discord.Embed(
+            title=f"{emoji['cross']} Error",
+            description="Failed to fetch staff data. Please check the database.",
+            colour=0xf50000
         )
-        staff_role_ids          = {r["role_id"] for r in db_roles if r["role_type"] == "staff"}
-        responsibility_role_ids = {r["role_id"] for r in db_roles if r["role_type"] == "responsibility"}
 
-        for staff_id in staff_ids:
-            try:
-                staff_member = interaction.guild.get_member(staff_id)
-                if not staff_member:
-                    try:
-                        staff_member = await interaction.guild.fetch_member(staff_id)
-                    except discord.NotFound:
-                        continue
+        await interaction.response.send_message(embed=embed)
 
-                top_staff_role = None
-                for role in reversed(staff_member.roles):
-                    if role.id in staff_role_ids:
-                        top_staff_role = role
-                        break
+async def update_all_staffs(interaction: discord.Interaction) -> None:
+    if interaction.guild is None:
+        embed = discord.Embed(
+            title=f"{emoji['cross']} Error",
+            description="Cannot execute this command without a guild object",
+            colour=0xf50000
+        )
+        await interaction.response.send_message(embed=embed)
+        return
 
-                discord_responsibilities = {
-                    role.id for role in staff_member.roles
-                    if role.id in responsibility_role_ids
-                }
+    bot_db = cast("Lily", interaction.client).db
+    assert bot_db is not None
 
-                await self.bot_db.execute(
-                    "DELETE FROM staff_roles WHERE staff_id = ? AND guild_id = ?",
-                    (staff_id, guild_id)
-                )
+    guild_id = interaction.guild.id
+    
+    rows = await bot_db.fetch_all(
+        "SELECT staff_id FROM staffs WHERE retired = 0 AND on_loa = 0 AND guild_id = ?",
+        (guild_id,)
+    )
+    staff_ids = [row["staff_id"] for row in rows]
 
-                if top_staff_role is None and not discord_responsibilities:
-                    await self.bot_db.execute(
-                        "UPDATE staffs SET retired = 1 WHERE staff_id = ? AND guild_id = ?",
-                        (staff_id, guild_id)
-                    )
+    db_roles = await bot_db.fetch_all(
+        "SELECT role_id, role_type FROM roles WHERE guild_id = ?",
+        (guild_id,)
+    )
+    staff_role_ids          = {r["role_id"] for r in db_roles if r["role_type"] == "staff"}
+    responsibility_role_ids = {r["role_id"] for r in db_roles if r["role_type"] == "responsibility"}
+
+    for staff_id in staff_ids:
+        try:
+            staff_member = interaction.guild.get_member(staff_id)
+            if not staff_member:
+                try:
+                    staff_member = await interaction.guild.fetch_member(staff_id)
+                except discord.NotFound:
                     continue
 
-                await self.bot_db.execute(
-                    """
-                    UPDATE staffs
-                    SET retired = 0, avatar_url = ?
-                    WHERE staff_id = ? AND guild_id = ?
-                    """,
-                    (staff_member.display_avatar.url, staff_id, guild_id)
+            top_staff_role = None
+            for role in reversed(staff_member.roles):
+                if role.id in staff_role_ids:
+                    top_staff_role = role
+                    break
+
+            discord_responsibilities = {
+                role.id for role in staff_member.roles
+                if role.id in responsibility_role_ids
+            }
+
+            await bot_db.execute(
+                "DELETE FROM staff_roles WHERE staff_id = ? AND guild_id = ?",
+                (staff_id, guild_id)
+            )
+
+            if top_staff_role is None and not discord_responsibilities:
+                await bot_db.execute(
+                    "UPDATE staffs SET retired = 1 WHERE staff_id = ? AND guild_id = ?",
+                    (staff_id, guild_id)
                 )
-
-                if top_staff_role is not None:
-                    await self.bot_db.execute(
-                        """
-                        INSERT OR IGNORE INTO staff_roles (staff_id, guild_id, role_id)
-                        VALUES (?, ?, ?)
-                        """,
-                        (staff_id, guild_id, top_staff_role.id)
-                    )
-
-                if discord_responsibilities:
-                    await self.bot_db.executemany(
-                        """
-                        INSERT OR IGNORE INTO staff_roles (staff_id, guild_id, role_id)
-                        VALUES (?, ?, ?)
-                        """,
-                        [(staff_id, guild_id, rid) for rid in discord_responsibilities]
-                    )
-
-                print(f"[Update_All_Staffs] Updated {staff_member.name}")
-
-            except Exception as e:
-                print(f"Exception [Update_All_Staffs] {e}")
                 continue
 
-            await asyncio.sleep(1)
-
-        await interaction.response.send_message(embed=simple_embed("Updated every staff role in the database!"))
-    
-    async def add_staff(self, interaction: discord.Interaction, staff: discord.Member) -> None:
-        if interaction.guild is None:
-            embed = discord.Embed(
-                title=f"{emoji['cross']} Error",
-                description="Cannot execute this command without an guild object",
-                colour=0xf50000
+            await bot_db.execute(
+                """
+                UPDATE staffs
+                SET retired = 0, avatar_url = ?
+                WHERE staff_id = ? AND guild_id = ?
+                """,
+                (staff_member.display_avatar.url, staff_id, guild_id)
             )
 
-            await interaction.response.send_message(embed=embed)
-            return
-        response = await self.bot_db.add_staff(staff.id, interaction.guild.id, staff.display_name, staff.display_avatar.url)
-
-        if not response.get("success"):
-            await interaction.response.send_message(embed=simple_embed(response.get("message") or "Unknown Object Passed and Failed", "cross"))
-            return
-
-        roles_to_add = set(response.get("roles_to_add", ()))
-
-        add_roles = {
-            interaction.guild.get_role(role_id)
-            for role_id in roles_to_add
-        }
-        add_roles = {r for r in add_roles if r}
-
-        if add_roles:
-            await staff.add_roles(*add_roles, reason=f"Staff added by {interaction.user.id}")
-
-        await interaction.response.send_message(embed=simple_embed(response.get("message") or "Unknown object passed as an output, But it's a success!"))
-    
-    async def remove_staff(self, interaction: discord.Interaction,staff: discord.Member | discord.User ,reason: str) -> None:
-        if interaction.guild is None:
-            embed = discord.Embed(
-                title=f"{emoji['cross']} Error",
-                description="Cannot execute this command without an guild object",
-                colour=0xf50000
-            )
-
-            await interaction.response.send_message(embed=embed)
-            return
-
-        response = await self.bot_db.remove_staff(staff.id, interaction.guild.id)
-
-        if not response.get("success"):
-            await interaction.response.send_message(embed=simple_embed(response.get("message") or "Unknown object has been passed and it failed!", "cross"))
-            return
-        
-        roles_to_remove = set(response.get("roles_to_remove", ()))
-        channel_id = self.bot_db.get_channel(interaction.guild.id, "staff_updates")
-
-        staff_updates_channel: discord.TextChannel | None = None
-
-        if channel_id is not None:
-            channel = interaction.guild.get_channel(channel_id)
-
-            if channel is None:
-                try:
-                    channel = await interaction.guild.fetch_channel(channel_id)
-                except Exception:
-                    channel = None
-
-            if isinstance(channel, discord.TextChannel):
-                staff_updates_channel = channel
-
-        if staff:
-            remove_roles = {
-                interaction.guild.get_role(role_id)
-                for role_id in roles_to_remove
-            }
-            remove_roles = {r for r in remove_roles if r}
-
-            if remove_roles and isinstance(staff, discord.Member):
-                await staff.remove_roles(
-                    *remove_roles,
-                    reason=f"Staff removed by {interaction.user.id} | {reason}"
-                )
-            if staff_updates_channel:
-                embed = build_staff_update_embed(
-                    staff=staff,
-                    handled_staff=interaction.user,
-                    reason=reason,
-                    img=img
-                )
-                await staff_updates_channel.send(
-                    embed=embed
-                )
-        await interaction.response.send_message(embed=simple_embed(response.get("message") or "Unknown object has been passed, but it's an success!"))
-        """ Send DM'S If Available """
-
-        if staff is not None:
-            assert isinstance(interaction.user, discord.Member)
-            await staff.send(
-                embed=staff_remove_embed(
-                    interaction.user,
-                    reason,
-                    interaction.guild.name
-                )
-            )
-
-    async def edit_staff(self, interaction: discord.Interaction,staff_id: int,name: str ,joined_on: Optional[str] = None,timezone: Optional[str] = None, responsibility: Optional[str] = None):
-        try:
-            if interaction.guild is None:
-                embed = discord.Embed(
-                    title=f"{emoji['cross']} Error",
-                    description="Cannot execute this command without an guild object",
-                    colour=0xf50000
+            if top_staff_role is not None:
+                await bot_db.execute(
+                    """
+                    INSERT OR IGNORE INTO staff_roles (staff_id, guild_id, role_id)
+                    VALUES (?, ?, ?)
+                    """,
+                    (staff_id, guild_id, top_staff_role.id)
                 )
 
-                await interaction.response.send_message(embed=embed)
-                return
-            payload = {
-                "staff_id": staff_id,
-                "guild_id": interaction.guild.id,
-                "name": name,
-                "joined_on": joined_on,
-                "timezone": timezone,
-                "responsibility": responsibility
-            }
-
-            result = await self.bot_db.edit_staff(**payload)
-
-            if result.get("success"):
-                await interaction.response.send_message(
-                    embed=simple_embed(
-                        result["message"]
-                    )
+            if discord_responsibilities:
+                await bot_db.executemany(
+                    """
+                    INSERT OR IGNORE INTO staff_roles (staff_id, guild_id, role_id)
+                    VALUES (?, ?, ?)
+                    """,
+                    [(staff_id, guild_id, rid) for rid in discord_responsibilities]
                 )
-            else:
-                await interaction.response.send_message(
-                    embed=simple_embed(
-                        result["message"],'cross'
-                    )
-                )
+
+            print(f"[Update_All_Staffs] Updated {staff_member.name}")
+
         except Exception as e:
-            print(f"Staff Edit Exception {e}")
+            print(f"Exception [Update_All_Staffs] {e}")
+            continue
 
-    async def strike_staff(self, interaction: discord.Interaction, staff: discord.Member):
-        await interaction.response.send_modal(InfractionModal(self.bot_db, staff))
+        await asyncio.sleep(1)
 
-    async def remove_strike_staff(self, interaction: discord.Interaction, strike_id: int):
+    await interaction.response.send_message(embed=simple_embed("Updated every staff role in the database!"))
+
+async def add_staff(interaction: discord.Interaction, staff: discord.Member) -> None:
+    if interaction.guild is None:
+        embed = discord.Embed(
+            title=f"{emoji['cross']} Error",
+            description="Cannot execute this command without an guild object",
+            colour=0xf50000
+        )
+
+        await interaction.response.send_message(embed=embed)
+        return
+    bot_db = cast("Lily", interaction.client).db
+    assert bot_db is not None    
+    response = await bot_db.add_staff(staff.id, interaction.guild.id, staff.display_name, staff.display_avatar.url)
+
+    if not response.get("success"):
+        await interaction.response.send_message(embed=simple_embed(response.get("message") or "Unknown Object Passed and Failed", "cross"))
+        return
+
+    roles_to_add = set(response.get("roles_to_add", ()))
+
+    add_roles = {
+        interaction.guild.get_role(role_id)
+        for role_id in roles_to_add
+    }
+    add_roles = {r for r in add_roles if r}
+
+    if add_roles:
+        await staff.add_roles(*add_roles, reason=f"Staff added by {interaction.user.id}")
+
+    await interaction.response.send_message(embed=simple_embed(response.get("message") or "Unknown object passed as an output, But it's a success!"))
+
+async def remove_staff(interaction: discord.Interaction,staff: discord.Member | discord.User ,reason: str) -> None:
+    if interaction.guild is None:
+        embed = discord.Embed(
+            title=f"{emoji['cross']} Error",
+            description="Cannot execute this command without an guild object",
+            colour=0xf50000
+        )
+
+        await interaction.response.send_message(embed=embed)
+        return
+    bot_db = cast("Lily", interaction.client).db
+    assert bot_db is not None    
+    response = await bot_db.remove_staff(staff.id, interaction.guild.id)
+
+    if not response.get("success"):
+        await interaction.response.send_message(embed=simple_embed(response.get("message") or "Unknown object has been passed and it failed!", "cross"))
+        return
+    
+    roles_to_remove = set(response.get("roles_to_remove", ()))
+    channel_id = bot_db.get_channel(interaction.guild.id, "staff_updates")
+
+    staff_updates_channel: discord.TextChannel | None = None
+
+    if channel_id is not None:
+        channel = interaction.guild.get_channel(channel_id)
+
+        if channel is None:
+            try:
+                channel = await interaction.guild.fetch_channel(channel_id)
+            except Exception:
+                channel = None
+
+        if isinstance(channel, discord.TextChannel):
+            staff_updates_channel = channel
+
+    if staff:
+        remove_roles = {
+            interaction.guild.get_role(role_id)
+            for role_id in roles_to_remove
+        }
+        remove_roles = {r for r in remove_roles if r}
+
+        if remove_roles and isinstance(staff, discord.Member):
+            await staff.remove_roles(
+                *remove_roles,
+                reason=f"Staff removed by {interaction.user.id} | {reason}"
+            )
+        if staff_updates_channel:
+            embed = build_staff_update_embed(
+                staff=staff,
+                handled_staff=interaction.user,
+                reason=reason,
+                img=img
+            )
+            await staff_updates_channel.send(
+                embed=embed
+            )
+    await interaction.response.send_message(embed=simple_embed(response.get("message") or "Unknown object has been passed, but it's an success!"))
+    """ Send DM'S If Available """
+
+    if staff is not None:
+        assert isinstance(interaction.user, discord.Member)
+        await staff.send(
+            embed=staff_remove_embed(
+                interaction.user,
+                reason,
+                interaction.guild.name
+            )
+        )
+
+async def edit_staff(interaction: discord.Interaction,staff_id: int,name: str ,joined_on: Optional[str] = None,timezone: Optional[str] = None, responsibility: Optional[str] = None):
+    try:
         if interaction.guild is None:
             embed = discord.Embed(
                 title=f"{emoji['cross']} Error",
@@ -325,146 +296,155 @@ class LilyManagementController:
             await interaction.response.send_message(embed=embed)
             return
         payload = {
-            "strike_id": strike_id,
-            "guild_id": interaction.guild.id
+            "staff_id": staff_id,
+            "guild_id": interaction.guild.id,
+            "name": name,
+            "joined_on": joined_on,
+            "timezone": timezone,
+            "responsibility": responsibility
         }
 
-        result = await self.bot_db.remove_strike(**payload)
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None    
+        result = await bot_db.edit_staff(**payload)
 
-        status: bool = bool(result.get("success"))
-        message: str = str(result.get("message") or "An unknown error occurred")
-
-        if status:
-            await interaction.response.send_message(embed=simple_embed(message))
-
-            """ Notify the staff that his strike has been removed """
-            staff_id: int = cast(int, result.get("issued_to"))
-            issued_by: int = cast(int, result.get("issued_by"))
-            reason: str = cast(str, result.get("reason"))
-
-            staff_member = interaction.guild.get_member(staff_id)
-            if staff_member is None:
-                try:
-                    staff_member = await interaction.guild.fetch_member(staff_id)
-                except Exception:
-                    return
-            assert isinstance(interaction.user, discord.Member)
-            await staff_member.send(embed=staff_strike_remove_embed(interaction.user, issued_by, reason, interaction.guild.name))
-
-        else:
-            await interaction.response.send_message(embed=simple_embed(message, "cross"))
-
-    async def list_strikes(self, interaction: discord.Interaction, staff: discord.Member):
-        if interaction.guild is None:
-            embed = discord.Embed(
-                title=f"{emoji['cross']} Error",
-                description="Cannot execute this command without a guild object",
-                colour=0xf50000
+        if result.get("success"):
+            await interaction.response.send_message(
+                embed=simple_embed(
+                    result["message"]
+                )
             )
-            await interaction.response.send_message(embed=embed)
-            return
+        else:
+            await interaction.response.send_message(
+                embed=simple_embed(
+                    result["message"],'cross'
+                )
+            )
+    except Exception as e:
+        print(f"Staff Edit Exception {e}")
 
-        result = await self.bot_db.fetch_staff_strikes(
-            staff_id=staff.id,
-            guild_id=interaction.guild.id
+async def strike_staff(interaction: discord.Interaction, staff: discord.Member):
+    bot_db = cast("Lily", interaction.client).db
+    assert bot_db is not None
+    await interaction.response.send_modal(InfractionModal(bot_db, staff))
+
+async def remove_strike_staff(interaction: discord.Interaction, strike_id: int):
+    if interaction.guild is None:
+        embed = discord.Embed(
+            title=f"{emoji['cross']} Error",
+            description="Cannot execute this command without an guild object",
+            colour=0xf50000
         )
 
-        if not result["success"] and not result["data"]:
-            embed = build_no_strikes_embed(staff)
-            await interaction.response.send_message(embed=embed)
-            return
-        
-        strikes = result.get("data")
-        if not isinstance(strikes, list):
-            strikes = []
-
-        embed = build_strikes_list_embed(staff, strikes)
         await interaction.response.send_message(embed=embed)
+        return
+    payload = {
+        "strike_id": strike_id,
+        "guild_id": interaction.guild.id
+    }
 
-    async def edit_strike(self, interaction: discord.Interaction, strike_id: int ,new_reason: str):
-        if interaction.guild is None:
-            embed = discord.Embed(
-                title=f"{emoji['cross']} Error",
-                description="Cannot execute this command without a guild object",
-                colour=0xf50000
-            )
-            await interaction.response.send_message(embed=embed)
-            return
-        response = await self.bot_db.edit_strike(**{
-            "guild_id" : interaction.guild.id, 
-            "strike_id": strike_id,
-            "staff_id": interaction.user.id,
-            "new_reason":  new_reason
+    bot_db = cast("Lily", interaction.client).db
+    assert bot_db is not None    
+    result = await bot_db.remove_strike(**payload)
+
+    status: bool = bool(result.get("success"))
+    message: str = str(result.get("message") or "An unknown error occurred")
+
+    if status:
+        await interaction.response.send_message(embed=simple_embed(message))
+
+        """ Notify the staff that his strike has been removed """
+        staff_id: int = cast(int, result.get("issued_to"))
+        issued_by: int = cast(int, result.get("issued_by"))
+        reason: str = cast(str, result.get("reason"))
+
+        staff_member = interaction.guild.get_member(staff_id)
+        if staff_member is None:
+            try:
+                staff_member = await interaction.guild.fetch_member(staff_id)
+            except Exception:
+                return
+        assert isinstance(interaction.user, discord.Member)
+        await staff_member.send(embed=staff_strike_remove_embed(interaction.user, issued_by, reason, interaction.guild.name))
+
+    else:
+        await interaction.response.send_message(embed=simple_embed(message, "cross"))
+
+async def list_strikes(interaction: discord.Interaction, staff: discord.Member):
+    if interaction.guild is None:
+        embed = discord.Embed(
+            title=f"{emoji['cross']} Error",
+            description="Cannot execute this command without a guild object",
+            colour=0xf50000
+        )
+        await interaction.response.send_message(embed=embed)
+        return
+
+    bot_db = cast("Lily", interaction.client).db
+    assert bot_db is not None    
+    result = await bot_db.fetch_staff_strikes(
+        staff_id=staff.id,
+        guild_id=interaction.guild.id
+    )
+
+    if not result["success"] and not result["data"]:
+        embed = build_no_strikes_embed(staff)
+        await interaction.response.send_message(embed=embed)
+        return
+    
+    strikes = result.get("data")
+    if not isinstance(strikes, list):
+        strikes = []
+
+    embed = build_strikes_list_embed(staff, strikes)
+    await interaction.response.send_message(embed=embed)
+
+async def edit_strike(interaction: discord.Interaction, strike_id: int ,new_reason: str):
+    if interaction.guild is None:
+        embed = discord.Embed(
+            title=f"{emoji['cross']} Error",
+            description="Cannot execute this command without a guild object",
+            colour=0xf50000
+        )
+        await interaction.response.send_message(embed=embed)
+        return
+    
+    bot_db = cast("Lily", interaction.client).db
+    assert bot_db is not None    
+    response = await bot_db.edit_strike(**{
+        "guild_id" : interaction.guild.id, 
+        "strike_id": strike_id,
+        "staff_id": interaction.user.id,
+        "new_reason":  new_reason
+    })
+
+    if not response.get("success"):
+        await interaction.response.send_message(embed=simple_embed(str(response.get("message")), 'cross'))
+        return
+    
+    await interaction.response.send_message(embed=simple_embed(str(response.get("message"))))
+
+async def add_loa(interaction: discord.Interaction, staff: discord.Member, reason: str):
+    if interaction.guild is None:
+        embed = discord.Embed(
+            title=f"{emoji['cross']} Error",
+            description="Cannot execute this command without a guild object",
+            colour=0xf50000
+        )
+        await interaction.response.send_message(embed=embed)
+        return
+    try:
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None    
+        response = await bot_db.add_loa(**{
+            "staff_id": staff.id,
+            "reason": reason,
+            "loa_issued_by": interaction.user.id,
+            "guild_id": interaction.guild.id
         })
 
         if not response.get("success"):
             await interaction.response.send_message(embed=simple_embed(str(response.get("message")), 'cross'))
-            return
-        
-        await interaction.response.send_message(embed=simple_embed(str(response.get("message"))))
-
-    async def add_loa(self, interaction: discord.Interaction, staff: discord.Member, reason: str):
-        if interaction.guild is None:
-            embed = discord.Embed(
-                title=f"{emoji['cross']} Error",
-                description="Cannot execute this command without a guild object",
-                colour=0xf50000
-            )
-            await interaction.response.send_message(embed=embed)
-            return
-        try:
-            response = await self.bot_db.add_loa(**{
-                "staff_id": staff.id,
-                "reason": reason,
-                "loa_issued_by": interaction.user.id,
-                "guild_id": interaction.guild.id
-            })
-
-            if not response.get("success"):
-                await interaction.response.send_message(embed=simple_embed(str(response.get("message")), 'cross'))
-                return
-
-            roles_to_remove = set(response.get("roles_to_remove", ()))
-            roles_to_add = set(response.get("roles_to_add", ()))
-
-            current_roles = set(staff.roles)
-
-            remove_roles = {
-                interaction.guild.get_role(rid)
-                for rid in roles_to_remove
-            }
-            remove_roles = {r for r in remove_roles if r}
-
-            add_roles = {
-                interaction.guild.get_role(rid)
-                for rid in roles_to_add
-            }
-            add_roles = {r for r in add_roles if r}
-
-            new_roles = (current_roles - remove_roles) | add_roles
-
-            await staff.edit(
-                roles=list(new_roles),
-                reason="LOA assigned"
-            )
-
-            await interaction.response.send_message(embed=simple_embed(str(response.get("message"))))
-        except Exception as e:
-            print(f"Exception [AddLOA] {e}")
-
-    async def remove_loa(self, interaction: discord.Interaction, staff: discord.Member):
-        if interaction.guild is None:
-            embed = discord.Embed(
-                title=f"{emoji['cross']} Error",
-                description="Cannot execute this command without a guild object",
-                colour=0xf50000
-            )
-            await interaction.response.send_message(embed=embed)
-            return
-        response = await self.bot_db.remove_loa(**{"staff_id": staff.id, "guild_id" : interaction.guild.id})
-
-        if not response.get("success"):
-            await interaction.response.send_message(embed=simple_embed(str(response.get("message"))))
             return
 
         roles_to_remove = set(response.get("roles_to_remove", ()))
@@ -488,659 +468,725 @@ class LilyManagementController:
 
         await staff.edit(
             roles=list(new_roles),
-            reason="LOA removed"
+            reason="LOA assigned"
         )
 
         await interaction.response.send_message(embed=simple_embed(str(response.get("message"))))
+    except Exception as e:
+        print(f"Exception [AddLOA] {e}")
 
-    async def list_loa(self, interaction: discord.Interaction, staff: discord.Member):
-        if interaction.guild is None:
-            return await interaction.response.send_message(embed=simple_embed("Run this command only inside a guild", 'cross'))
-        
-        results = await self.bot_db.loa_list(staff.id, interaction.guild.id)
-        
-
-        if len(results) <= 0:
-            return await interaction.response.send_message(embed=simple_embed("No LOA found for this user", 'cross'))
-
+async def remove_loa(interaction: discord.Interaction, staff: discord.Member):
+    if interaction.guild is None:
         embed = discord.Embed(
-            color=16777215,
-            description=f"### Listing LOA for {staff.mention}\n",
+            title=f"{emoji['cross']} Error",
+            description="Cannot execute this command without a guild object",
+            colour=0xf50000
+        )
+        await interaction.response.send_message(embed=embed)
+        return
+    bot_db = cast("Lily", interaction.client).db
+    assert bot_db is not None    
+    response = await bot_db.remove_loa(**{"staff_id": staff.id, "guild_id" : interaction.guild.id})
+
+    if not response.get("success"):
+        await interaction.response.send_message(embed=simple_embed(str(response.get("message"))))
+        return
+
+    roles_to_remove = set(response.get("roles_to_remove", ()))
+    roles_to_add = set(response.get("roles_to_add", ()))
+
+    current_roles = set(staff.roles)
+
+    remove_roles = {
+        interaction.guild.get_role(rid)
+        for rid in roles_to_remove
+    }
+    remove_roles = {r for r in remove_roles if r}
+
+    add_roles = {
+        interaction.guild.get_role(rid)
+        for rid in roles_to_add
+    }
+    add_roles = {r for r in add_roles if r}
+
+    new_roles = (current_roles - remove_roles) | add_roles
+
+    await staff.edit(
+        roles=list(new_roles),
+        reason="LOA removed"
+    )
+
+    await interaction.response.send_message(embed=simple_embed(str(response.get("message"))))
+
+async def list_loa(interaction: discord.Interaction, staff: discord.Member):
+    if interaction.guild is None:
+        return await interaction.response.send_message(embed=simple_embed("Run this command only inside a guild", 'cross'))
+
+    bot_db = cast("Lily", interaction.client).db
+    assert bot_db is not None    
+    results = await bot_db.loa_list(staff.id, interaction.guild.id)
+    
+
+    if len(results) <= 0:
+        return await interaction.response.send_message(embed=simple_embed("No LOA found for this user", 'cross'))
+
+    embed = discord.Embed(
+        color=16777215,
+        description=f"### Listing LOA for {staff.mention}\n",
+    )
+
+
+    embed.set_thumbnail(url=staff.display_avatar.url)
+    embed.set_image(url=img['border'])
+
+
+    for result in results:
+        embed.add_field(
+            name=f"📌 LOA #{result["leave_id"]}",
+            value=f"- **Reason**: {result["reason"]}\n- **Assigned by**: <@{result["issued_by"]}>",
+            inline=False
         )
 
+    await interaction.response.send_message(embed=embed)
 
-        embed.set_thumbnail(url=staff.display_avatar.url)
-        embed.set_image(url=img['border'])
+async def request_loa(interaction: discord.Interaction):
+    bot_db = cast("Lily", interaction.client).db
+    assert bot_db is not None    
+    await interaction.response.send_modal(LOARequestModal(bot_db))
 
+async def loa_delete(interaction: discord.Interaction, leave_id: int):
+    bot_db = cast("Lily", interaction.client).db
+    assert bot_db is not None    
+    await bot_db.delete_loa(leave_id=leave_id)
+    await interaction.response.send_message(embed=simple_embed("Successfully deleted LOA"))
 
-        for result in results:
-            embed.add_field(
-                name=f"📌 LOA #{result["leave_id"]}",
-                value=f"- **Reason**: {result["reason"]}\n- **Assigned by**: <@{result["issued_by"]}>",
-                inline=False
-            )
+async def get_all_staff_roles(interaction: discord.Interaction):
+    if interaction.guild is None:
+        embed = discord.Embed(
+            title=f"{emoji['cross']} Error",
+            description="Cannot execute this command without a guild object",
+            colour=0xf50000
+        )
+        await interaction.response.send_message(embed=embed)
+        return
+
+    try:
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None    
+        rows = await bot_db.fetch_all(
+            """
+            SELECT role_id, priority
+            FROM staff_ranks
+            WHERE guild_id = ?
+            ORDER BY priority ASC
+            """,
+            (interaction.guild.id,)
+        )
+
+        if not rows:
+            await interaction.response.send_message(embed=simple_embed("No staff roles found in this guild.", 'cross'))
+            return
+
+        role_names = []
+        role_mentions = []
+        priorities = []
+
+        for role_id, priority in rows:
+            role = interaction.guild.get_role(role_id)
+
+            priorities.append(str(priority))
+
+            if role:
+                role_names.append(role.name)
+                role_mentions.append(role.mention)
+            else:
+                role_names.append(f"Unknown Role ({role_id})")
+                role_mentions.append(f"<@&{role_id}>")
+
+        embed = discord.Embed(
+            title="Permission Assigned Roles",
+            colour=0xffffff
+        )
+
+        embed.add_field(
+            name="Role Names",
+            value="\n".join(role_names),
+            inline=True
+        )
+
+        embed.add_field(
+            name="Role Reference",
+            value="\n".join(role_mentions),
+            inline=True
+        )
+
+        embed.add_field(
+            name="Priority",
+            value="\n".join(priorities),
+            inline=True
+        )
 
         await interaction.response.send_message(embed=embed)
 
-    async def request_loa(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(LOARequestModal(self.bot_db))
+    except Exception as e:
+        print(f"Exception [GetAllStaffRoles] {e}")
+        await interaction.response.send_message(embed=simple_embed("Error fetching staff roles", 'cross'))
 
-    async def loa_delete(self, interaction: discord.Interaction, leave_id: int):
-        await self.bot_db.delete_loa(leave_id=leave_id)
-        await interaction.response.send_message(embed=simple_embed("Successfully deleted LOA"))
+async def update_staff(interaction: discord.Interaction, staff: discord.Member, reason: str, update_type: str):
+    if interaction.guild is None:
+        embed = discord.Embed(
+            title=f"{emoji['cross']} Error",
+            description="Cannot execute this command without a guild object",
+            colour=0xf50000
+        )
+        await interaction.response.send_message(embed=embed)
+        return
 
-    async def get_all_staff_roles(self, interaction: discord.Interaction):
-        if interaction.guild is None:
-            embed = discord.Embed(
-                title=f"{emoji['cross']} Error",
-                description="Cannot execute this command without a guild object",
-                colour=0xf50000
-            )
-            await interaction.response.send_message(embed=embed)
-            return
+    if interaction.user.id == staff.id:
+        await interaction.response.send_message(embed=simple_embed(
+            "You cannot update your",
+            "cross"
+        ))
+        return
+    bot_db = cast("Lily", interaction.client).db
+    assert bot_db is not None    
+    result = await bot_db.update_staff(
+        guild_id=interaction.guild.id,
+        staff_id=staff.id,
+        update_type=update_type,
+        reason=reason,
+        updated_by=interaction.user.id
+    )
 
-        try:
-            rows = await self.bot_db.fetch_all(
-                """
-                SELECT role_id, priority
-                FROM staff_ranks
-                WHERE guild_id = ?
-                ORDER BY priority ASC
-                """,
-                (interaction.guild.id,)
-            )
+    if not result.get("success"):
+        await interaction.response.send_message(embed=simple_embed(
+            str(result.get("message")),
+            "cross"
+        ))
+        return
 
-            if not rows:
-                await interaction.response.send_message(embed=simple_embed("No staff roles found in this guild.", 'cross'))
-                return
+    channel_id = bot_db.get_channel(
+        interaction.guild.id,
+        "staff_updates"
+    )
 
-            role_names = []
-            role_mentions = []
-            priorities = []
+    staff_updates_channel: discord.TextChannel | None = None
 
-            for role_id, priority in rows:
-                role = interaction.guild.get_role(role_id)
+    if channel_id is not None:
+        channel = interaction.guild.get_channel(channel_id)
 
-                priorities.append(str(priority))
+        if channel is None:
+            try:
+                channel = await interaction.guild.fetch_channel(channel_id)
+            except Exception:
+                channel = None
 
-                if role:
-                    role_names.append(role.name)
-                    role_mentions.append(role.mention)
-                else:
-                    role_names.append(f"Unknown Role ({role_id})")
-                    role_mentions.append(f"<@&{role_id}>")
+        if isinstance(channel, discord.TextChannel):
+            staff_updates_channel = channel
 
-            embed = discord.Embed(
-                title="Permission Assigned Roles",
-                colour=0xffffff
-            )
+    old_role_id = result.get("old_role_id")
+    new_role_id = result.get("new_role_id")
 
-            embed.add_field(
-                name="Role Names",
-                value="\n".join(role_names),
-                inline=True
-            )
+    old_role = interaction.guild.get_role(old_role_id) if old_role_id else None
+    new_role = interaction.guild.get_role(new_role_id) if new_role_id else None
 
-            embed.add_field(
-                name="Role Reference",
-                value="\n".join(role_mentions),
-                inline=True
-            )
+    try:
+        current_roles = set(staff.roles)
 
-            embed.add_field(
-                name="Priority",
-                value="\n".join(priorities),
-                inline=True
-            )
+        if old_role:
+            current_roles.discard(old_role)
 
-            await interaction.response.send_message(embed=embed)
+        if new_role:
+            current_roles.add(new_role)
 
-        except Exception as e:
-            print(f"Exception [GetAllStaffRoles] {e}")
-            await interaction.response.send_message(embed=simple_embed("Error fetching staff roles", 'cross'))
-
-    async def update_staff(self, interaction: discord.Interaction, staff: discord.Member, reason: str, update_type: str):
-        if interaction.guild is None:
-            embed = discord.Embed(
-                title=f"{emoji['cross']} Error",
-                description="Cannot execute this command without a guild object",
-                colour=0xf50000
-            )
-            await interaction.response.send_message(embed=embed)
-            return
-
-        if interaction.user.id == staff.id:
-            await interaction.response.send_message(embed=simple_embed(
-                "You cannot update yourself",
-                "cross"
-            ))
-            return
-
-        result = await self.bot_db.update_staff(
-            guild_id=interaction.guild.id,
-            staff_id=staff.id,
-            update_type=update_type,
-            reason=reason,
-            updated_by=interaction.user.id
+        await staff.edit(
+            roles=list(current_roles),
+            reason=f"Staff {update_type.title()} | {reason}"
         )
 
-        if not result.get("success"):
-            await interaction.response.send_message(embed=simple_embed(
-                str(result.get("message")),
-                "cross"
-            ))
-            return
+    except Exception as e:
+        await interaction.response.send_message(embed=simple_embed(
+            f"Database updated, but Discord role update failed: {e}",
+            "cross"
+        ))
+        return
 
-        channel_id = self.bot_db.get_channel(
-            interaction.guild.id,
-            "staff_updates"
+    embed = build_staff_update_result_embed(
+        staff=staff,
+        interaction=interaction,
+        old_role_id=old_role_id,
+        new_role_id=new_role_id,
+        reason=reason,
+        update_type=update_type
+    )
+
+
+    if staff_updates_channel:
+        await staff_updates_channel.send(
+            content=staff.mention,
+            embed=embed
         )
 
-        staff_updates_channel: discord.TextChannel | None = None
+    act = "promoted" if update_type == "promotion" else "demoted"
 
-        if channel_id is not None:
-            channel = interaction.guild.get_channel(channel_id)
+    await interaction.response.send_message(
+        embed=simple_embed(f"{staff.mention} has been {act}.")
+    )
 
-            if channel is None:
-                try:
-                    channel = await interaction.guild.fetch_channel(channel_id)
-                except Exception:
-                    channel = None
+# FIX THIS IN FUTURE
+async def on_message(message: discord.Message, bot_db: BotGlobalsDatabaseAccess):
+    if not message.guild:
+        return
+    
+    if isinstance(message.author, discord.User):
+        return
+    
+    try:
+        allowed_channels = bot_db.get_channels(message.guild.id, "valid_channel")
 
-            if isinstance(channel, discord.TextChannel):
-                staff_updates_channel = channel
+        if message.channel.id in allowed_channels:
+            await bot_db.update_message(**{
+                "guild_id": message.guild.id,
+                "staff_id": message.author.id,
+                "avatar_url": message.author.display_avatar.url,
+                "name": message.author.name
+            })
 
-        old_role_id = result.get("old_role_id")
-        new_role_id = result.get("new_role_id")
+    except Exception as e:
+        pass
 
-        old_role = interaction.guild.get_role(old_role_id) if old_role_id else None
-        new_role = interaction.guild.get_role(new_role_id) if new_role_id else None
+async def add_staff_quota(interaction: discord.Interaction,quota_role: discord.Role,minimum_ms: int,minimum_msg: int, check_by: QuotaCheckBy):
+    if interaction.guild is None:
+        embed = discord.Embed(
+            title=f"{emoji['cross']} Error",
+            description="Cannot execute this command without a guild object",
+            colour=0xf50000
+        )
+        await interaction.response.send_message(embed=embed)
+        return
 
-        try:
-            current_roles = set(staff.roles)
+    payload = {
+        "guild_id": interaction.guild.id,
+        "role_id": quota_role.id,
+        "min_msg": minimum_msg,
+        "min_ms": minimum_ms,
+        "check_by": check_by
+    }
+    bot_db = cast("Lily", interaction.client).db
+    assert bot_db is not None  
+    result = await bot_db.add_staff_quota(**payload)
 
-            if old_role:
-                current_roles.discard(old_role)
+    if not result.get("success"):
+        await interaction.response.send_message(embed=simple_embed(str(result.get("message")), 'cross'))
+        return
 
-            if new_role:
-                current_roles.add(new_role)
+    await interaction.response.send_message(embed=simple_embed(str(result.get("message"))))
 
-            await staff.edit(
-                roles=list(current_roles),
-                reason=f"Staff {update_type.title()} | {reason}"
-            )
+async def remove_staff_quota(interaction: discord.Interaction, quota_id: str):
+    if interaction.guild is None:
+        embed = discord.Embed(
+            title=f"{emoji['cross']} Error",
+            description="Cannot execute this command without a guild object",
+            colour=0xf50000
+        )
+        await interaction.response.send_message(embed=embed)
+        return
+    payload = {
+        "guild_id": interaction.guild.id,
+        "quota_id": int(quota_id)
+    }
+    bot_db = cast("Lily", interaction.client).db
+    assert bot_db is not None  
+    result = await bot_db.remove_staff_quota(**payload)
 
-        except Exception as e:
-            await interaction.response.send_message(embed=simple_embed(
-                f"Database updated, but Discord role update failed: {e}",
-                "cross"
-            ))
-            return
+    if not result.get("success"):
+        await interaction.response.send_message(embed=simple_embed(str(result.get("message")), 'cross'))
+        return
 
-        embed = build_staff_update_result_embed(
-            staff=staff,
-            interaction=interaction,
-            old_role_id=old_role_id,
-            new_role_id=new_role_id,
-            reason=reason,
-            update_type=update_type
+
+    await interaction.response.send_message(embed=simple_embed(str(result.get("message"))))
+
+async def fetch_staff_quota(interaction: discord.Interaction):
+    if interaction.guild is None:
+        embed = discord.Embed(
+            title=f"{emoji['cross']} Error",
+            description="Cannot execute this command without a guild object",
+            colour=0xf50000
+        )
+        await interaction.response.send_message(embed=embed)
+        return
+    bot_db = cast("Lily", interaction.client).db
+    assert bot_db is not None  
+    quotas = await bot_db.fetch_staff_quota(interaction.guild.id)
+
+    if not quotas:
+        return await interaction.response.send_message(embed=simple_embed("No staff quotas configured.", 'cross'))
+
+    embed = discord.Embed(
+        title="Staff Quota",
+        description="- Showing all defined Staff Quota for this Server",
+        color=16777215
+    )
+
+    if interaction.guild.icon:
+        embed.set_thumbnail(url=interaction.guild.icon.url)
+    embed.set_image(url=img['border'])
+
+    for quota in quotas:
+        role = interaction.guild.get_role(quota["role_id"])
+        role_mention = role.mention if role else f"`{quota['role_id']}`"
+
+        embed.add_field(
+            name=f"Quota #{quota['quota_id']}",
+            value=(
+                f"- Role : {role_mention}\n"
+                f"- Minimum Messages : {quota['min_msg']}\n"
+                f"- Minimum Moderation Stats : {quota['min_ms']}\n"
+                f"- Quota Check By : {quota['check_by'] or 'None'}"
+            ),
+            inline=False
         )
 
+    await interaction.response.send_message(embed=embed)
 
-        if staff_updates_channel:
-            await staff_updates_channel.send(
-                content=staff.mention,
-                embed=embed
-            )
-
-        act = "promoted" if update_type == "promotion" else "demoted"
-
-        await interaction.response.send_message(
-            embed=simple_embed(f"{staff.mention} has been {act}.")
+async def check_staff_quota(interaction: discord.Interaction, staff: discord.Member | discord.User):
+    if interaction.guild is None:
+        embed = discord.Embed(
+            title=f"{emoji['cross']} Error",
+            description="Cannot execute this command without a guild object",
+            colour=0xf50000
         )
-
-    # FIX THIS IN FUTURE
-    async def on_message(self, message: discord.Message):
-        if not message.guild:
-            return
-        
-        if isinstance(message.author, discord.User):
-            return
-        
-        try:
-            allowed_channels = self.bot_db.get_channels(message.guild.id, "valid_channel")
-
-            if message.channel.id in allowed_channels:
-                await self.bot_db.update_message(**{
-                    "guild_id": message.guild.id,
-                    "staff_id": message.author.id,
-                    "avatar_url": message.author.display_avatar.url,
-                    "name": message.author.name
-                })
-
-        except Exception as e:
-            pass
-
-    async def add_staff_quota(self, interaction: discord.Interaction,quota_role: discord.Role,minimum_ms: int,minimum_msg: int, check_by: QuotaCheckBy):
-        if interaction.guild is None:
-            embed = discord.Embed(
-                title=f"{emoji['cross']} Error",
-                description="Cannot execute this command without a guild object",
-                colour=0xf50000
-            )
-            await interaction.response.send_message(embed=embed)
-            return
-
-        payload = {
+        await interaction.response.send_message(embed=embed)
+        return
+    bot_db = cast("Lily", interaction.client).db
+    assert bot_db is not None  
+    try:
+        response = await bot_db.get_staff_current_quota(**{
             "guild_id": interaction.guild.id,
-            "role_id": quota_role.id,
-            "min_msg": minimum_msg,
-            "min_ms": minimum_ms,
-            "check_by": check_by
-        }
+            "staff_id": staff.id
+        })
 
-        result = await self.bot_db.add_staff_quota(**payload)
+        if not response.get("success"):
+            return await interaction.response.send_message(embed=simple_embed(f"{response.get("message")}", 'cross'))
 
-        if not result.get("success"):
-            await interaction.response.send_message(embed=simple_embed(str(result.get("message")), 'cross'))
-            return
+        msgs = response["messages"]
+        quota = response["quota"]
+        result = response["result"]
+        mod_stats = response.get("mod_stats_weekly", {})
 
-        await interaction.response.send_message(embed=simple_embed(str(result.get("message"))))
+        min_msg = quota.get("min_msg", 0) or 0
+        min_ms = quota.get("min_ms", 0) or 0
+        weekly = msgs.get("weekly", 0) or 0
+        weekly_ms = mod_stats.get("weekly_ms", 0)
+        weekly_ms = weekly_ms or 0
 
-    async def remove_staff_quota(self, interaction: discord.Interaction, quota_id: str):
-        if interaction.guild is None:
-            embed = discord.Embed(
-                title=f"{emoji['cross']} Error",
-                description="Cannot execute this command without a guild object",
-                colour=0xf50000
-            )
-            await interaction.response.send_message(embed=embed)
-            return
-        payload = {
-            "guild_id": interaction.guild.id,
-            "quota_id": int(quota_id)
-        }
+        remaining_msg = max(min_msg - weekly, 0)
+        remaining_ms = max(min_ms - weekly_ms, 0)
 
-        result = await self.bot_db.remove_staff_quota(**payload)
+        overall_status = (
+            f"## {emoji["checked"]} Passed" 
+            if result.get("message_quota_passed") and result.get("ms_quota_passed")
+            else f"## {emoji["cross"]} Failed"
+        )
 
-        if not result.get("success"):
-            await interaction.response.send_message(embed=simple_embed(str(result.get("message")), 'cross'))
-            return
-
-
-        await interaction.response.send_message(embed=simple_embed(str(result.get("message"))))
-
-    async def fetch_staff_quota(self, interaction: discord.Interaction):
-        if interaction.guild is None:
-            embed = discord.Embed(
-                title=f"{emoji['cross']} Error",
-                description="Cannot execute this command without a guild object",
-                colour=0xf50000
-            )
-            await interaction.response.send_message(embed=embed)
-            return
-
-        quotas = await self.bot_db.fetch_staff_quota(interaction.guild.id)
-
-        if not quotas:
-            return await interaction.response.send_message(embed=simple_embed("No staff quotas configured.", 'cross'))
+        msg_status = (
+            f"{emoji['checked']} Passed ({weekly}/{min_msg})"
+            if result.get("message_quota_passed")
+            else f"{emoji['cross']} Failed ({weekly}/{min_msg}, need {remaining_msg} more)"
+        )
+        
+        ms_status = (
+            f"{emoji['checked']} Passed ({weekly_ms}/{min_ms})"
+            if result.get("ms_quota_passed")
+            else f"{emoji['cross']} Failed ({weekly_ms}/{min_ms}, need {remaining_ms} more)"
+        )
 
         embed = discord.Embed(
-            title="Staff Quota",
-            description="- Showing all defined Staff Quota for this Server",
+            title=f"Displaying Quota Status for {staff}",
+            description=overall_status,
             color=16777215
         )
 
-        if interaction.guild.icon:
-            embed.set_thumbnail(url=interaction.guild.icon.url)
-        embed.set_image(url=img['border'])
+        embed.set_thumbnail(url=staff.display_avatar.url)
 
-        for quota in quotas:
-            role = interaction.guild.get_role(quota["role_id"])
-            role_mention = role.mention if role else f"`{quota['role_id']}`"
+        """
+        embed.add_field(
+            name="Message Stats",
+            value=(
+                f"- **Daily:** {msgs['daily']}\n"
+                f"- **Weekly:** {msgs['weekly']}\n"
+                f"- **Monthly:** {msgs['monthly']}\n"
+                f"- **Total:** {msgs['total']}"
+            ),
+            inline=False
+        )
 
-            embed.add_field(
-                name=f"Quota #{quota['quota_id']}",
-                value=(
-                    f"- Role : {role_mention}\n"
-                    f"- Minimum Messages : {quota['min_msg']}\n"
-                    f"- Minimum Moderation Stats : {quota['min_ms']}\n"
-                    f"- Quota Check By : {quota['check_by'] or 'None'}"
-                ),
-                inline=False
-            )
+        embed.add_field(
+            name="Moderation Stats (7 Days)",
+            value=f"- **Total Actions:** {weekly_ms}",
+            inline=False
+        )
+
+        embed.add_field(
+            name="Quota Requirements",
+            value=(
+                f"- **Min Messages:** {quota['min_msg']}\n"
+                f"- **Min Mod Actions:** {quota['min_ms']}"
+            ),
+            inline=False
+        )
+        """
+
+        embed.add_field(
+            name="Results",
+            value=(
+                f"- **Messages:** {msg_status}\n"
+                f"- **Moderation:** {ms_status}"
+            ),
+            inline=False
+        )
+
+        embed.set_footer(text=f"Staff ID: {response['staff_id']}")
 
         await interaction.response.send_message(embed=embed)
+    except Exception as e:
+        print("CheckStaffQuota", e)
 
-    async def check_staff_quota(self, interaction: discord.Interaction, staff: discord.Member | discord.User):
-        if interaction.guild is None:
-            embed = discord.Embed(
-                title=f"{emoji['cross']} Error",
-                description="Cannot execute this command without a guild object",
-                colour=0xf50000
+async def remove_role(interaction: discord.Interaction, role: int):
+    if interaction.guild is None:
+        embed = discord.Embed(
+            title=f"{emoji['cross']} Error",
+            description="Cannot execute this command without a guild object",
+            colour=0xf50000
+        )
+        await interaction.response.send_message(embed=embed)
+        return
+    bot_db = cast("Lily", interaction.client).db
+    assert bot_db is not None  
+    response = await bot_db.remove_role(interaction.guild.id, role)
+
+    if response.get("success"):
+        await interaction.response.send_message(embed=simple_embed(f"{response.get("message")}"),  allowed_mentions=discord.AllowedMentions.none())
+    else:
+        await interaction.response.send_message(embed=simple_embed(f"{response.get("message")}", 'cross'))
+
+async def evaluate_staff_quota(interaction: discord.Interaction, role: discord.Role):
+    if interaction.guild is None:
+        embed = discord.Embed(
+            title=f"{emoji['cross']} Error",
+            description="Cannot execute this command without a guild object",
+            colour=0xf50000
+        )
+        await interaction.response.send_message(embed=embed)
+        return
+    bot_db = cast("Lily", interaction.client).db
+    assert bot_db is not None  
+    quota_id = await bot_db.get_quota_id_from_role(interaction.guild.id, role.id)
+    if quota_id is None:
+        return await interaction.response.send_message(
+            embed=simple_embed("No quota has been defined for this role", 'cross')
+        )
+
+    response = await bot_db.get_quota_status(
+        interaction.guild.id,
+        quota_id,
+    )
+
+    if not response.get("success"):
+        return await interaction.response.send_message(
+            embed=simple_embed(
+                response.get("message", "Error occurred"),
+                'cross'
             )
-            await interaction.response.send_message(embed=embed)
-            return
+            
+        )
+
+    quota = response["quota"]
+    summary = response["summary"]
+
+    passed_staff = response["passed_staff"]
+    failed_staff = response["failed_staff"]
+
+    passed_staff_str = "\n".join(
+        f"<@{s['staff_id']}>"
+        for s in passed_staff
+    ) or "None"
+
+    failed_staff_str = "\n".join(
+        (
+            f"<@{s['staff_id']}>"
+        )
+        for s in failed_staff
+    ) or "None"
+
+    embed = discord.Embed(
+        color=0xFFFFFF,
+        description=f"### Quota Evaluation for <@&{quota['role_id']}>"
+    )
+
+    embed.add_field(
+        name="Quota Summary",
+        value=(
+            f"Total Staff: **{summary['total_staff']}**\n"
+            f"Passed: **{summary['passed']}**\n"
+            f"Failed: **{summary['failed']}**"
+        ),
+        inline=False,
+    )
+
+    embed.add_field(
+        name="Passed Staff",
+        value=passed_staff_str,
+        inline=False,
+    )
+
+    embed.add_field(
+        name="Failed Staff",
+        value=failed_staff_str,
+        inline=False,
+    )
+
+    if interaction.guild.icon:
+        embed.set_thumbnail(url=interaction.guild.icon.url)
+
+    embed.set_image(url=img['border'])
+
+    await interaction.response.send_message(embed=embed)
+
+async def get_staffs_timezone_coverage(interaction: discord.Interaction):
+    if interaction.guild is None:
+        await interaction.response.send_message(embed=simple_embed("This command can only be executed inside an guild", 'cross'))
+        return
+    
+    await interaction.response.defer()
+
+    bot_db = cast("Lily", interaction.client).db
+    assert bot_db is not None  
+    result = await bot_db.get_staffs_timezone_coverage(interaction.guild.id)
+    data = sorted(result.items(), key=lambda x: x[1])
+
+    zones = [x[0] for x in data]
+    counts = [x[1] for x in data]
+
+    plt.figure(figsize=(10, 5))
+    bars = plt.barh(zones, counts)
+
+    plt.xlabel("Number of Staff")
+    plt.ylabel("Timezone")
+    plt.title("Staff Timezone Coverage", fontsize=20, fontweight="bold")
+
+    plt.grid(axis="x", alpha=0.3)
+
+    plt.tight_layout()
+
+    for bar in bars:
+        width = bar.get_width()
+        plt.text(
+            width + 0.1,
+            bar.get_y() + bar.get_height() / 2,
+            str(int(width)),
+            va="center"
+        )
+
+    buffer = BytesIO()
+    plt.savefig(buffer, format="png", dpi=300, bbox_inches="tight")
+    plt.close()
+    buffer.seek(0)
+
+    file = discord.File(
+        buffer,
+        filename="staff_timezone_coverage.png"
+    )
+
+    await interaction.followup.send(file=file)
+
+async def automatic_quota_evaluator(check_by: str, bot):
+    bot_db = cast("Lily", bot).db
+    assert bot_db is not None
+    data = await bot_db.get_webhooks_of_type("quota_updates")
+
+    for guild_id, webhook_url in data.items():
+        if webhook_url is None:
+            continue
+
+        
         try:
-            response = await self.bot_db.get_staff_current_quota(**{
-                "guild_id": interaction.guild.id,
-                "staff_id": staff.id
-            })
+            webhook = discord.Webhook.from_url(webhook_url, client=bot)
+        except ValueError: # Failed to fetch the webhook
+            continue
+
+        """ Else start evaluating """
+        quota_ids = await bot_db.get_quota_ids_from_checkby(guild_id, check_by)
+        if len(quota_ids) <= 0:
+            continue
+
+        for quota_id in quota_ids:
+            """ If we have an valid quota id then let's evaluate and post the result """
+            response = await bot_db.get_quota_status(
+                guild_id,
+                quota_id,
+            )
+
+            """ If any error occures let's silently skip the iterration """
 
             if not response.get("success"):
-                return await interaction.response.send_message(embed=simple_embed(f"{response.get("message")}", 'cross'))
+                print(f"Failure {response.get("message")} {guild_id}")
+                continue
 
-            msgs = response["messages"]
+
             quota = response["quota"]
-            result = response["result"]
-            mod_stats = response.get("mod_stats_weekly", {})
+            summary = response["summary"]
 
-            min_msg = quota.get("min_msg", 0) or 0
-            min_ms = quota.get("min_ms", 0) or 0
-            weekly = msgs.get("weekly", 0) or 0
-            weekly_ms = mod_stats.get("weekly_ms", 0)
-            weekly_ms = weekly_ms or 0
+            passed_staff = response["passed_staff"]
+            failed_staff = response["failed_staff"]
 
-            remaining_msg = max(min_msg - weekly, 0)
-            remaining_ms = max(min_ms - weekly_ms, 0)
-
-            overall_status = (
-                f"## {emoji["checked"]} Passed" 
-                if result.get("message_quota_passed") and result.get("ms_quota_passed")
-                else f"## {emoji["cross"]} Failed"
-            )
-
-            msg_status = (
-                f"{emoji['checked']} Passed ({weekly}/{min_msg})"
-                if result.get("message_quota_passed")
-                else f"{emoji['cross']} Failed ({weekly}/{min_msg}, need {remaining_msg} more)"
-            )
-            
-            ms_status = (
-                f"{emoji['checked']} Passed ({weekly_ms}/{min_ms})"
-                if result.get("ms_quota_passed")
-                else f"{emoji['cross']} Failed ({weekly_ms}/{min_ms}, need {remaining_ms} more)"
-            )
-
-            embed = discord.Embed(
-                title=f"Displaying Quota Status for {staff}",
-                description=overall_status,
-                color=16777215
-            )
-
-            embed.set_thumbnail(url=staff.display_avatar.url)
-
-            """
-            embed.add_field(
-                name="Message Stats",
-                value=(
-                    f"- **Daily:** {msgs['daily']}\n"
-                    f"- **Weekly:** {msgs['weekly']}\n"
-                    f"- **Monthly:** {msgs['monthly']}\n"
-                    f"- **Total:** {msgs['total']}"
-                ),
-                inline=False
-            )
-
-            embed.add_field(
-                name="Moderation Stats (7 Days)",
-                value=f"- **Total Actions:** {weekly_ms}",
-                inline=False
-            )
-
-            embed.add_field(
-                name="Quota Requirements",
-                value=(
-                    f"- **Min Messages:** {quota['min_msg']}\n"
-                    f"- **Min Mod Actions:** {quota['min_ms']}"
-                ),
-                inline=False
-            )
-            """
-
-            embed.add_field(
-                name="Results",
-                value=(
-                    f"- **Messages:** {msg_status}\n"
-                    f"- **Moderation:** {ms_status}"
-                ),
-                inline=False
-            )
-
-            embed.set_footer(text=f"Staff ID: {response['staff_id']}")
-
-            await interaction.response.send_message(embed=embed)
-        except Exception as e:
-            print("CheckStaffQuota", e)
-
-    async def remove_role(self, interaction: discord.Interaction, role: int):
-        if interaction.guild is None:
-            embed = discord.Embed(
-                title=f"{emoji['cross']} Error",
-                description="Cannot execute this command without a guild object",
-                colour=0xf50000
-            )
-            await interaction.response.send_message(embed=embed)
-            return
-        response = await self.bot_db.remove_role(interaction.guild.id, role)
-
-        if response.get("success"):
-            await interaction.response.send_message(embed=simple_embed(f"{response.get("message")}"),  allowed_mentions=discord.AllowedMentions.none())
-        else:
-            await interaction.response.send_message(embed=simple_embed(f"{response.get("message")}", 'cross'))
-
-    async def evaluate_staff_quota(self, interaction: discord.Interaction, role: discord.Role):
-        if interaction.guild is None:
-            embed = discord.Embed(
-                title=f"{emoji['cross']} Error",
-                description="Cannot execute this command without a guild object",
-                colour=0xf50000
-            )
-            await interaction.response.send_message(embed=embed)
-            return
-
-        quota_id = await self.bot_db.get_quota_id_from_role(interaction.guild.id, role.id)
-        if quota_id is None:
-            return await interaction.response.send_message(
-                embed=simple_embed("No quota has been defined for this role", 'cross')
-            )
-
-        response = await self.bot_db.get_quota_status(
-            interaction.guild.id,
-            quota_id,
-        )
-
-        if not response.get("success"):
-            return await interaction.response.send_message(
-                embed=simple_embed(
-                    response.get("message", "Error occurred"),
-                    'cross'
-                )
-                
-            )
-
-        quota = response["quota"]
-        summary = response["summary"]
-
-        passed_staff = response["passed_staff"]
-        failed_staff = response["failed_staff"]
-
-        passed_staff_str = "\n".join(
-            f"<@{s['staff_id']}>"
-            for s in passed_staff
-        ) or "None"
-
-        failed_staff_str = "\n".join(
-            (
+            passed_staff_str = "\n".join(
                 f"<@{s['staff_id']}>"
-            )
-            for s in failed_staff
-        ) or "None"
+                for s in passed_staff
+            ) or "None"
 
-        embed = discord.Embed(
-            color=0xFFFFFF,
-            description=f"### Quota Evaluation for <@&{quota['role_id']}>"
-        )
-
-        embed.add_field(
-            name="Quota Summary",
-            value=(
-                f"Total Staff: **{summary['total_staff']}**\n"
-                f"Passed: **{summary['passed']}**\n"
-                f"Failed: **{summary['failed']}**"
-            ),
-            inline=False,
-        )
-
-        embed.add_field(
-            name="Passed Staff",
-            value=passed_staff_str,
-            inline=False,
-        )
-
-        embed.add_field(
-            name="Failed Staff",
-            value=failed_staff_str,
-            inline=False,
-        )
-
-        if interaction.guild.icon:
-            embed.set_thumbnail(url=interaction.guild.icon.url)
-
-        embed.set_image(url=img['border'])
-
-        await interaction.response.send_message(embed=embed)
-
-    async def get_staffs_timezone_coverage(self, interaction: discord.Interaction):
-        if interaction.guild is None:
-            await interaction.response.send_message(embed=simple_embed("This command can only be executed inside an guild", 'cross'))
-            return
-        
-        await interaction.response.defer()
-
-        result = await self.bot_db.get_staffs_timezone_coverage(interaction.guild.id)
-        data = sorted(result.items(), key=lambda x: x[1])
-
-        zones = [x[0] for x in data]
-        counts = [x[1] for x in data]
-
-        plt.figure(figsize=(10, 5))
-        bars = plt.barh(zones, counts)
-
-        plt.xlabel("Number of Staff")
-        plt.ylabel("Timezone")
-        plt.title("Staff Timezone Coverage", fontsize=20, fontweight="bold")
-
-        plt.grid(axis="x", alpha=0.3)
-
-        plt.tight_layout()
-
-        for bar in bars:
-            width = bar.get_width()
-            plt.text(
-                width + 0.1,
-                bar.get_y() + bar.get_height() / 2,
-                str(int(width)),
-                va="center"
-            )
-
-        buffer = BytesIO()
-        plt.savefig(buffer, format="png", dpi=300, bbox_inches="tight")
-        plt.close()
-        buffer.seek(0)
-
-        file = discord.File(
-            buffer,
-            filename="staff_timezone_coverage.png"
-        )
-
-        await interaction.followup.send(file=file)
-
-    async def automatic_quota_evaluator(self, check_by: str, bot):
-        data = await self.bot_db.get_webhooks_of_type("quota_updates")
-
-        for guild_id, webhook_url in data.items():
-            if webhook_url is None:
-                continue
-
-            
-            try:
-                webhook = discord.Webhook.from_url(webhook_url, client=bot)
-            except ValueError: # Failed to fetch the webhook
-                continue
-
-            """ Else start evaluating """
-            quota_ids = await self.bot_db.get_quota_ids_from_checkby(guild_id, check_by)
-            if len(quota_ids) <= 0:
-                continue
-
-            for quota_id in quota_ids:
-                """ If we have an valid quota id then let's evaluate and post the result """
-                response = await self.bot_db.get_quota_status(
-                    guild_id,
-                    quota_id,
-                )
-
-                """ If any error occures let's silently skip the iterration """
-
-                if not response.get("success"):
-                    print(f"Failure {response.get("message")} {guild_id}")
-                    continue
-
-
-                quota = response["quota"]
-                summary = response["summary"]
-
-                passed_staff = response["passed_staff"]
-                failed_staff = response["failed_staff"]
-
-                passed_staff_str = "\n".join(
+            failed_staff_str = "\n".join(
+                (
                     f"<@{s['staff_id']}>"
-                    for s in passed_staff
-                ) or "None"
-
-                failed_staff_str = "\n".join(
-                    (
-                        f"<@{s['staff_id']}>"
-                    )
-                    for s in failed_staff
-                ) or "None"
-
-                embed = discord.Embed(
-                    color=0xFFFFFF,
-                    description=f"### Quota Evaluation for <@&{quota['role_id']}>"
                 )
+                for s in failed_staff
+            ) or "None"
 
-                embed.add_field(
-                    name="Quota Summary",
-                    value=(
-                        f"Total Staff: **{summary['total_staff']}**\n"
-                        f"Passed: **{summary['passed']}**\n"
-                        f"Failed: **{summary['failed']}**"
-                    ),
-                    inline=False,
+            embed = discord.Embed(
+                color=0xFFFFFF,
+                description=f"### Quota Evaluation for <@&{quota['role_id']}>"
+            )
+
+            embed.add_field(
+                name="Quota Summary",
+                value=(
+                    f"Total Staff: **{summary['total_staff']}**\n"
+                    f"Passed: **{summary['passed']}**\n"
+                    f"Failed: **{summary['failed']}**"
+                ),
+                inline=False,
+            )
+
+            embed.add_field(
+                name="Passed Staff",
+                value=passed_staff_str,
+                inline=False,
+            )
+
+            embed.add_field(
+                name="Failed Staff",
+                value=failed_staff_str,
+                inline=False,
+            )
+
+            embed.set_image(url=img['border'])
+
+            try:
+                await webhook.send(
+                    username=f"Lily {quota_conclusion_mapping.get(check_by, "Unknown")} Quota Updates",
+                    avatar_url="https://media.discordapp.net/attachments/1510416807847133274/1510416862112907365/Kaede.png?ex=6a1cbcd2&is=6a1b6b52&hm=3e2ddf9283e9d6eaf15f031ae0c730f60accb4437e6e1bc6b0dedaff2ad690fe&=&format=webp&quality=lossless&width=954&height=954",
+                    embed=embed
                 )
-
-                embed.add_field(
-                    name="Passed Staff",
-                    value=passed_staff_str,
-                    inline=False,
-                )
-
-                embed.add_field(
-                    name="Failed Staff",
-                    value=failed_staff_str,
-                    inline=False,
-                )
-
-                embed.set_image(url=img['border'])
-
-                try:
-                    await webhook.send(
-                        username=f"Lily {quota_conclusion_mapping.get(check_by, "Unknown")} Quota Updates",
-                        avatar_url="https://media.discordapp.net/attachments/1510416807847133274/1510416862112907365/Kaede.png?ex=6a1cbcd2&is=6a1b6b52&hm=3e2ddf9283e9d6eaf15f031ae0c730f60accb4437e6e1bc6b0dedaff2ad690fe&=&format=webp&quality=lossless&width=954&height=954",
-                        embed=embed
-                    )
-                except Exception as e:
-                    print(f"Automatic Quota Evaluator Exception : {e}")
-                    continue
+            except Exception as e:
+                print(f"Automatic Quota Evaluator Exception : {e}")
+                continue
