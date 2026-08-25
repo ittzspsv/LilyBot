@@ -1,12 +1,18 @@
+from __future__ import annotations
+
 import discord
+from discord.utils import MISSING
 import src.core.configs.sBotDetails as config
 from ..embeds.blox_fruits_embed import build_win_loss_embed
 from ..utils.trade_calculator import win_or_lose
 from ..utils.trade_suggestor import trade_suggestor
 from ....database.integrations.blox_fruits import BloxFruitsDatabase
 from src.core.utils.lily_utility import format_currency
-from typing import List
+from typing import List, TYPE_CHECKING, cast
 from ..utils.trade_calculator import calculate_fruit_values
+
+if TYPE_CHECKING:
+    from src.lily import Lily
 
 
 class TradeSuggestorComponent(discord.ui.LayoutView):
@@ -357,3 +363,45 @@ class InviteView(discord.ui.View):
                 style=discord.ButtonStyle.link
             )
         )
+
+class BloxFruitsDashboard(discord.ui.Modal):
+    item_values = discord.ui.Label(
+        text='Item Values Channel',
+        description='Select the channel where item values will be used.',
+        component=discord.ui.ChannelSelect(
+            channel_types=[discord.ChannelType.text],
+            min_values=1,
+            max_values=1,
+            required=True,
+            custom_id="bf_fruit_values"
+        )
+    )
+
+    win_loss = discord.ui.Label(
+        text='Win-Loss Channel',
+        description='Select the channel where win-loss records will be used.',
+        component=discord.ui.ChannelSelect(
+            channel_types=[discord.ChannelType.text],
+            min_values=1,
+            max_values=1,
+            required=True,
+            custom_id="bf_win_loss"
+        )
+    )
+
+    def __init__(self) -> None:
+        super().__init__(title="Blox Fruits Configure")
+
+    async def on_submit(self, interaction: discord.Interaction):
+        bot = cast(Lily, interaction.client)
+        db = bot.db
+
+        assert db is not None
+        assert interaction.guild is not None
+        assert isinstance(self.item_values.component, discord.ui.ChannelSelect)
+        assert isinstance(self.win_loss.component, discord.ui.ChannelSelect)
+
+        await db.set_channel(interaction.guild.id, self.win_loss.component.values[0].id, "bf_win_loss")
+        await db.set_channel(interaction.guild.id, self.item_values.component.values[0].id, "bf_fruit_values")
+
+        await interaction.response.send_message("Successfully Configured the Blox Fruits Dashboard!", ephemeral=True)

@@ -6,9 +6,10 @@ import re
 
 from typing import Optional
 
-from src.core.features.permissions.lily_permissions import permission
 from src.core.utils.embeds.sLilyEmbed import simple_embed
+from src.core.features.permissions.lily_permissions import app_permission
 from src.core.features.blox_fruits.routes.blox_fruits_router import BloxFruitsController
+from src.core.features.blox_fruits.components.blox_fruits_components import BloxFruitsDashboard
 from src.core.database.integrations.blox_fruits import BloxFruitsDatabase
 from src.core.configs.path import VALUE_DB
 
@@ -177,6 +178,11 @@ class LilyBloxFruits(commands.Cog):
 
         except Exception as e:
             await interaction.response.send_message(embed=simple_embed("An error occurred while updating the item."))
+
+    @bloxfruits.command(name = "dashboard", description="Spawn the customizable dashboard")
+    @app_permission(command_name="staff_coverage")
+    async def dashboard(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(BloxFruitsDashboard())
 
 async def setup(bot):
     cog = LilyBloxFruits(bot)
