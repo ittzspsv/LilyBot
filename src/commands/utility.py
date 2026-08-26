@@ -4,6 +4,7 @@ import discord
 import aiohttp
 import asyncio
 import time
+import logging
 
 
 from io import BytesIO
@@ -15,10 +16,14 @@ from src.core.utils.embeds.sLilyEmbed import ParseAdvancedEmbed
 from src.core.utils.types.types import ChannelEnum, NotifiersEnum
 from src.core.logging.lily_logging import LilyLoggingController
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
-from src.core.utils.components.sLIlyGlobalComponents import RoleCustomizationModal, Avatar, AutomodUpdate
+from src.core.utils.components.sLIlyGlobalComponents import RoleCustomizationModal, Avatar
+from src.core.visuals.cards.level import create_level_card
 from src.core.visuals.cards.quote import make_quote_card
+from src.core.features.ticketing.transcript import transcript
 from discord.ext import commands
 from discord import app_commands
+
+logger = logging.getLogger("lily")
 
 
 class LilyUtility(commands.Cog):
@@ -738,21 +743,55 @@ class LilyUtility(commands.Cog):
         )
 
 
-    @set.command(name="automod", description="Updates an automod (add / remove new entries)")
-    @app_permission(command_name="set_automod")
-    @app_commands.guild_only()
-    async def set_automod(
-        self,
-        interaction: discord.Interaction,
-    ) -> None:
+    @app_commands.command(name="transcript_generate", description="Test")
+    async def generate_transcript(self, interaction: discord.Interaction):
+        try:
+            await interaction.response.defer()
 
+            html_bytes = await transcript(interaction)
+
+            if html_bytes is None:
+                await interaction.followup.send(
+                    "Couldn't generate a transcript for this channel."
+                )
+                return
+
+            file = discord.File(
+                BytesIO(html_bytes),
+                filename="transcript.html",
+            )
+            await interaction.followup.send(
+                content="Here's the transcript.",
+                file=file,
+            )
+        except Exception as e:
+            print(e)
+            await interaction.followup.send("Failed!")
+
+    @app_commands.command(name="level", description="Test")
+    async def create_level_card(self, interaction: discord.Interaction, target: discord.Member):
         assert interaction.guild is not None
-        
-        rules = await interaction.guild.fetch_automod_rules()
-        
-        
-        view = AutomodUpdate(rules)
-        await interaction.response.send_message(view=view, ephemeral=True)
+        member = await interaction.guild.fetch_member(target.id)
+
+        nameplate = discord.utils.find(
+            lambda c: c.type is discord.CollectibleType.nameplate,
+            member.collectibles
+        )
+
+        await interaction.response.defer()
+
+        bytes = await create_level_card(
+            member.name,
+            member.display_avatar.url,
+            member.avatar_decoration.url if member.avatar_decoration else None,
+            nameplate.static.url if nameplate else None
+        )
+
+        assert bytes is not None
+
+        await interaction.followup.send(
+            file=discord.File(fp=BytesIO(bytes), filename="level_card.png")
+        )
 
 async def setup(bot):
     await bot.add_cog(LilyUtility(bot))
