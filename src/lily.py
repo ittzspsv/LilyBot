@@ -1,7 +1,6 @@
-from typing import Optional
+from typing import Optional, Set
 from discord import app_commands
 import discord
-import src.core.configs.sBotDetails as Config
 from discord.ext import commands, tasks
 
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
@@ -10,7 +9,6 @@ from src.core.logging.lily_logging import LilyLoggingController
 from src.core.utils.embeds.sLilyEmbed import simple_embed
 from src.core.features.moderation.components.sLilyModerationComponents import AppealButton
 from src.core.configs.path import CONFIG_DB
-import uvicorn
 import re
 
 
@@ -43,6 +41,7 @@ class Lily(commands.Bot):
             "src.commands.management",
             "src.commands.ticket_tool",
             "src.commands.applications",
+            "src.commands.leveling",
             "jishaku"
         ]
 
