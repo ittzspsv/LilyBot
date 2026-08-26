@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
 async def initialize_ticket_view(bot):
     try:
-        _bot: Lily = cast(Lily, bot)
+        _bot = cast("Lily", bot)
         bot_db = _bot.db
         logging_controller = _bot.logging_controller
 
