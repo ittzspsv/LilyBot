@@ -5,7 +5,7 @@ import json
 
 from src.core.features.permissions.lily_permissions import app_permission
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
-from src.core.features.application.controller.lily_application_controller import LilyApplicationController
+from src.core.features.application.controller import lily_application_controller as controller
 from src.core.features.application.types.lily_application_types import QuestionType
 from src.core.features.application.components.lily_application_components import ApplicationView, ApplicationQuestionView
 
@@ -42,7 +42,6 @@ class LilyApplications(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.db: Optional[BotGlobalsDatabaseAccess] = None
-        self.controller: Optional[LilyApplicationController] = None
 
     async def applications_autocomplete(
         self,
@@ -107,7 +106,6 @@ class LilyApplications(commands.Cog):
 
     async def on_load(self) -> None:
         self.db = self.bot.db
-        self.controller = LilyApplicationController(self.bot.db, self.bot)
 
         """ Setup all views """
         if self.db is None:
@@ -172,15 +170,13 @@ class LilyApplications(commands.Cog):
         )
 
         if next_question is None:
-            if self.controller is None:
-                return
-            
             assert isinstance(message.author, User)
             await message.channel.send(
                 "Your application has been submitted successfully. Thank you!"
             )
-            await self.controller.push_submission(
-                message.author
+            await controller.push_submission(
+                message.author,
+                self.bot
             )
             await self.db.app_management_db.update_submission_status(
                 submission["id"],
@@ -224,8 +220,7 @@ class LilyApplications(commands.Cog):
     async def create_application(
         self, interaction: Interaction
     ):
-        if self.controller is not None:
-            await self.controller.create_application(interaction)
+        await controller.create_application(interaction)
 
     @app_permission(command_name="application_management")
     @app.command(name="update", description="Update an application")
@@ -234,8 +229,7 @@ class LilyApplications(commands.Cog):
         self, interaction: Interaction,
         application: int
     ) -> None:
-        if self.controller is not None:
-            await self.controller.update_application(interaction, application)
+        await controller.update_application(interaction, application)
 
     @app_permission(command_name="application_management")
     @app.command(name="send", description="Send an application view")
@@ -245,8 +239,7 @@ class LilyApplications(commands.Cog):
         application: int,
         channel: TextChannel
     ):
-        if self.controller is not None:
-            await self.controller.send_application_view(interaction, application, channel)
+        await controller.send_application_view(interaction, application, channel)
  
 
     @app_permission(command_name="application_management")
@@ -256,8 +249,7 @@ class LilyApplications(commands.Cog):
             self, interaction: Interaction,
             application: int
     ) -> None:
-        if self.controller is not None:
-            await self.controller.delete_application(interaction, application)
+        await controller.delete_application(interaction, application)
 
     @app_permission(command_name="application_management")
     @app.command(name="activate", description="Activate an application or deactivate an application")
@@ -267,8 +259,7 @@ class LilyApplications(commands.Cog):
             application: int,
             active: bool
     ) -> None:
-        if self.controller is not None:
-            await self.controller.set_active(interaction, application, active)
+        await controller.set_active(interaction, application, active)
 
     @app_permission(command_name="application_management")
     @question.command(name="new", description="Create a new application question")
@@ -282,16 +273,15 @@ class LilyApplications(commands.Cog):
         max_length: int  = 2046,
         options: str | None = None
     ):
-        if self.controller is not None:
-            await self.controller.create_question(
-                interaction,
-                label,
-                type.value,
-                description,
-                placeholder,
-                min_length,
-                max_length,
-                json.dumps({"options": options.split(",") if options is not None else []}))
+        await controller.create_question(
+            interaction,
+            label,
+            type.value,
+            description,
+            placeholder,
+            min_length,
+            max_length,
+            json.dumps({"options": options.split(",") if options is not None else []}))
 
     @app_permission(command_name="application_management")
     @question.command(name="update", description="Update an existing application question")
@@ -307,18 +297,17 @@ class LilyApplications(commands.Cog):
         max_length: int | None = None,
         options: str | None = None
     ):
-        if self.controller is not None:
-            await self.controller.update_question(
-                interaction,
-                question,
-                label,
-                description,
-                placeholder,
-                min_length,
-                max_length,
-                type.value if type is not None else None,
-                json.dumps({"options": options.split(",")}) if options is not None else None
-            )
+        await controller.update_question(
+            interaction,
+            question,
+            label,
+            description,
+            placeholder,
+            min_length,
+            max_length,
+            type.value if type is not None else None,
+            json.dumps({"options": options.split(",")}) if options is not None else None
+        )
      
     @app_permission(command_name="application_management")
     @group.command(name="new", description="Create a new question group")
@@ -340,13 +329,12 @@ class LilyApplications(commands.Cog):
         question_4: int | None = None,
         question_5: int | None = None,
     ):
-        if self.controller is not None:
-            await self.controller.create_group(
-                interaction,
-                name,
-                description,
-                [question_1, question_2, question_3, question_4, question_5]
-            )
+        await controller.create_group(
+            interaction,
+            name,
+            description,
+            [question_1, question_2, question_3, question_4, question_5]
+        )
 
     @app_permission(command_name="application_management")
     @group.command(name="update", description="Update a existing question group")
@@ -361,13 +349,12 @@ class LilyApplications(commands.Cog):
         name: str,
         description: str,
     ):
-        if self.controller is not None:
-            await self.controller.update_group(
-                interaction,
-                group,
-                name,
-                description
-            )
+        await controller.update_group(
+            interaction,
+            group,
+            name,
+            description
+        )
 
     @app_permission(command_name="application_management")
     @group.command(name="delete", description="Delete a existing question group")
@@ -379,11 +366,10 @@ class LilyApplications(commands.Cog):
         interaction: Interaction,
         group: int
     ):
-        if self.controller is not None:
-            await self.controller.delete_group(
-                interaction,
-                group
-            )
+        await controller.delete_group(
+            interaction,
+            group
+        )
 
     @app_permission(command_name="applicant_block_unblock")
     @applicant.command(name="block", description="Block an applicant (globally)")
@@ -393,13 +379,12 @@ class LilyApplications(commands.Cog):
         member: Member | User,
         reason: str
     ):
-       if self.controller is not None:
-           await self.controller.update_applicant(
-               interaction,
-               member.id,
-               "block",
-               reason
-           ) 
+       await controller.update_applicant(
+           interaction,
+           member.id,
+           "block",
+           reason
+       ) 
 
     @app_permission(command_name="applicant_block_unblock")
     @applicant.command(name="unblock", description="Unblock an applicant (globally)")
@@ -409,13 +394,12 @@ class LilyApplications(commands.Cog):
         member: Member | User,
         reason: str
     ):
-        if self.controller is not None:
-           await self.controller.update_applicant(
-               interaction,
-               member.id,
-               "unblock",
-               reason
-           )
+        await controller.update_applicant(
+           interaction,
+           member.id,
+           "unblock",
+           reason
+       )
 
     @app_permission(command_name="application_management")
     @app_commands.autocomplete(application=applications_autocomplete)
@@ -426,12 +410,11 @@ class LilyApplications(commands.Cog):
         member: Member | User,
         application: int
     ):
-        if self.controller is not None:
-            await self.controller.applicant_entry_delete(
-                interaction,
-                member,
-                application
-            )
+        await controller.applicant_entry_delete(
+            interaction,
+            member,
+            application
+        )
 
     @app_permission(command_name="application_staff")
     @applicant.command(name="status", description="Show an applicant status")
@@ -440,11 +423,10 @@ class LilyApplications(commands.Cog):
         interaction: Interaction,
         member: Member | User
     ):
-        if self.controller is not None:
-            await self.controller.get_applicant_status(
-                interaction,
-                member
-            )
+        await controller.get_applicant_status(
+            interaction,
+            member
+        )
 
     @app_permission(command_name="application_management")
     @app.command(name="invalidate", description="Removes all the pending submissions")
@@ -454,11 +436,10 @@ class LilyApplications(commands.Cog):
         interaction: Interaction,
         application: int,
     ):
-        if self.controller is not None:
-            await self.controller.application_invalidate(
-                interaction,
-                application
-            )
+        await controller.application_invalidate(
+            interaction,
+            application
+        )
 
 async def setup(bot):
     cog = LilyApplications(bot)
