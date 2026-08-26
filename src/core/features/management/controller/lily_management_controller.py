@@ -1053,7 +1053,7 @@ async def evaluate_staff_quota(interaction: discord.Interaction, role: discord.R
 
     await interaction.response.send_message(embed=embed)
 
-async def get_staffs_timezone_coverage(interaction: discord.Interaction):
+async def get_staffs_timezone_coverage(interaction: discord.Interaction) -> None:
     if interaction.guild is None:
         await interaction.response.send_message(embed=simple_embed("This command can only be executed inside an guild", 'cross'))
         return
