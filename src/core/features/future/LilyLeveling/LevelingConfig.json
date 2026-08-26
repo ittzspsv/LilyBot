@@ -1,9 +1,0 @@
-{
-    "AllowedChannels" : [1366840025010012321],
-    "Exp_Multiplier" : 1.2,
-    "coins_minimum" : 10000,
-    "Max_Level": 1000,
-
-    "Guilds" : {
-    }
-}
