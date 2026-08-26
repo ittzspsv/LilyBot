@@ -768,30 +768,5 @@ class LilyUtility(commands.Cog):
             print(e)
             await interaction.followup.send("Failed!")
 
-    @app_commands.command(name="level", description="Test")
-    async def create_level_card(self, interaction: discord.Interaction, target: discord.Member):
-        assert interaction.guild is not None
-        member = await interaction.guild.fetch_member(target.id)
-
-        nameplate = discord.utils.find(
-            lambda c: c.type is discord.CollectibleType.nameplate,
-            member.collectibles
-        )
-
-        await interaction.response.defer()
-
-        bytes = await create_level_card(
-            member.name,
-            member.display_avatar.url,
-            member.avatar_decoration.url if member.avatar_decoration else None,
-            nameplate.static.url if nameplate else None
-        )
-
-        assert bytes is not None
-
-        await interaction.followup.send(
-            file=discord.File(fp=BytesIO(bytes), filename="level_card.png")
-        )
-
 async def setup(bot):
     await bot.add_cog(LilyUtility(bot))
