@@ -1,9 +1,6 @@
 from ..sLilyDatabaseAccess import LilyDatabaseAccess
 
-from typing import Dict
-
 from typing import Dict, List, Optional, Any
-
 
 class ApplicationManagement:
     def __init__(self, db: LilyDatabaseAccess):

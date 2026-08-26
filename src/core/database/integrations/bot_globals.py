@@ -1,7 +1,8 @@
 from ..sLilyDatabaseAccess import LilyDatabaseAccess
 from .applications import ApplicationManagement
+from .leveling import LevelingManagement
 
-from typing import List, Optional, Final, Set, Dict, Any, Tuple, override
+from typing import List, Optional, Final, Set, Dict, Any, Tuple
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone, UTC
 from collections import defaultdict
@@ -34,6 +35,7 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
 
 
         self.app_management_db = ApplicationManagement(self)
+        self.leveling_db = LevelingManagement(self)
 
     async def load_cache(self) -> None:
         """
