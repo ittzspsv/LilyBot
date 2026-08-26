@@ -3,7 +3,7 @@ from __future__ import annotations
 import discord
 from src.core.utils.embeds.sLilyEmbed import simple_embed
 from typing import Optional, cast, Any, TYPE_CHECKING, List, Dict, Tuple, Union
-from datetime import datetime, timezone
+from datetime import datetime
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
 from src.core.logging.components.logging_components import ProofsComponentCommandModal
 
@@ -128,7 +128,6 @@ class ModerationInsights(discord.ui.LayoutView):
                 await self.message.edit(view=self)
             except discord.HTTPException:
                 pass
-
 
 def action_log(
     action: str,
@@ -831,7 +830,6 @@ class CaseProofsView(discord.ui.View):
         assert isinstance(self.message, discord.Message)
         await interaction.response.send_modal(ProofsComponentCommandModal(controller=self.controller, case_id=self.case_id, cmd_view=self, msg=self.message))
 
-
 class AppealMessageView(discord.ui.LayoutView):
     def __init__(self, message: str, server: str, attachments: List[discord.Attachment]) -> None:
         super().__init__(timeout=None)
@@ -859,3 +857,136 @@ class AppealMessageView(discord.ui.LayoutView):
 
         self.container1 = discord.ui.Container(*components)
         self.add_item(self.container1)
+
+
+commands_list: Dict[str, Dict[str, str]] = {
+    "ban": {"app_permission": "ban"},
+    "quarantine": {"app_permission": "quarantine"},
+    "unban": {"app_permission": "unban"},
+    "release": {"app_permission": "unban"},
+    "mute": {"app_permission": "mute"},
+    "warn": {"app_permission": "warn"},
+    "unmute": {"app_permission": "unmute"},
+    "mod_stats": {"app_permission": "ms"},
+    "case_list": {"app_permission": "modlogs"},
+    "mod_insights": {"app_permission": "moderation_insights"},
+    "case_edit": {"app_permission": "case_edit"},
+    "case_edit_absolute": {"app_permission": "case_edit_absolute"},
+    "case_delete": {"app_permission": "case_delete"},
+    "mod_acronym_add": {"app_permission": "mod_acronym_add"},
+    "mod_acronym_remove": {"app_permission": "mod_acronym_remove"},
+    "mod_acronym_update": {"app_permission": "mod_acronym_update"},
+    "mod_acronyms": {"app_permission": "mod_acronyms"},
+    "mod_acronym_transfer": {"app_permission": "mod_acronym_transfer"},
+    "appeal_setup": {"app_permission": "mod_appeal_management"},
+    "appeal_forum": {"app_permission": "mod_appeal_management"},
+    "appeal_accept": {"app_permission": "mod_appeal_handlers"},
+    "appeal_reject": {"app_permission": "mod_appeal_handlers"},
+}
+
+
+class PermissionConfigureModal(discord.ui.Modal):
+    allowed_roles = discord.ui.Label(
+        text='Allowed Roles',
+        description='Select the roles that you want to allow',
+        component=discord.ui.RoleSelect(
+            min_values=1,
+            max_values=25,
+            required=True
+        )
+    )
+
+    def __init__(self, command_name: str, app_permission: str) -> None:
+        super().__init__(title="Permission Configure")
+
+        self.command_name = command_name
+        self.app_permission = app_permission
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        bot = cast(Lily, interaction.client)
+        db = bot.db
+
+        assert db is not None
+        assert interaction.guild is not None
+        assert isinstance(self.allowed_roles, discord.ui.RoleSelect)
+
+
+        for role in self.allowed_roles.values:
+            await db.set_permission(
+                interaction.guild.id,
+                role.id,
+                self.app_permission
+            )
+
+        await interaction.response.send_message(
+            content=f"Successfully Assigned {self.command_name.replace("_", " ").title()} Permission to {', '.join(role.mention for role in self.allowed_roles.values)}", 
+            ephemeral=True
+        )
+
+
+""" Moderation Dashboard """
+class ModerationDashboard(discord.ui.LayoutView):
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+        
+        self.commands_select = discord.ui.Select(
+            options=[
+                discord.SelectOption(
+                    label=name.replace("_", " ").title()[:45],
+                    value=name,
+                )
+                for name in commands_list
+            ],
+        )
+
+        self.commands_select.callback = self.commands_select_callback
+
+        self.appeal_handling_btn = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label="Click to Configure"
+        )
+
+        self.moderation_logging = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label="Click to Configure"
+        )
+
+        self.appeal_handling_btn.callback = self.appeal_handling_btn_callback
+        self.moderation_logging.callback = self.moderation_logging_callback
+
+        container = discord.ui.Container(
+            discord.ui.TextDisplay(content="## Lily Moderation Dashboard"),
+            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+
+            discord.ui.TextDisplay(content="### Command Permission Systems"),
+            discord.ui.ActionRow(
+                self.commands_select
+            ),
+
+            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+
+            discord.ui.TextDisplay(content="### Configure Appeals and Handling"),
+            discord.ui.ActionRow(
+                self.appeal_handling_btn
+            ),
+            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+            discord.ui.TextDisplay(content="### Configure Moderation Logging"),
+            discord.ui.ActionRow(
+                self.moderation_logging
+            ),
+
+        )
+
+        self.add_item(container)
+
+    async def commands_select_callback(self, interaction: discord.Interaction):
+        command_name = self.commands_select.values[0]
+        app_permission = commands_list[command_name]["app_permission"]
+        
+        await interaction.response.send_modal(PermissionConfigureModal(command_name, app_permission))
+
+    async def appeal_handling_btn_callback(self, interaction: discord.Interaction):
+        ...
+
+    async def moderation_logging_callback(self, interaction: discord.Interaction):
+        ...
