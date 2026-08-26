@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Tuple, cast
 
 import discord
+import logging
 from discord.ext import commands
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
@@ -16,11 +17,12 @@ from src.core.features.moderation.utils.moderation_utils import mute_parser
 from src.core.features.permissions.lily_permissions import has_app_permission
 from src.core.utils.embeds.sLilyEmbed import simple_embed
 from src.core.utils.lily_utility import utcnow
-
 from ....utils.components.sLIlyGlobalComponents import CommandInfo
 
 if TYPE_CHECKING:
     from src.lily import Lily
+
+logger = logging.getLogger("lily")
 
 """ Ban / Quarantine command helpers """
 async def _validate_moderation_target(
@@ -333,13 +335,8 @@ async def mute_user(
 
             view.message = msg
 
-    except ValueError as ve:
-        await bot.send(ctx, embed=simple_embed(str(ve)))
-    except discord.HTTPException as e:
-        print(f"[MuteUser] {e}")
-        await bot.send(ctx, embed=simple_embed("Failed to mute the user", 'cross'))
-    except Exception as e:
-        print(f"[MuteUser] {e}")
+    except Exception:
+        logger.exception("Failed to mute user")
         await bot.send(ctx, embed=simple_embed("Failed to mute the user", 'cross'))
 
 async def unmute(
@@ -383,13 +380,15 @@ async def unmute(
     except discord.HTTPException as e:
         await bot.send(ctx, embed=simple_embed(f"Failed to unmute user. {e}", 'cross'))
     except Exception as e:
-        await bot.send(ctx, embed=simple_embed(f"Exception: {e}", 'cross'))
+        logger.exception("Failed to unmute user")
+        await bot.send(ctx, embed=simple_embed(f"Failed to unmute user", 'cross'))
 
 async def unban(
     ctx: commands.Context | discord.Interaction,
     user: discord.User,
     reason: str = "No reason provided"
 ):
+    
     if isinstance(ctx, commands.Context):
         bot = cast("Lily", ctx.bot)
         author = ctx.author
@@ -734,7 +733,15 @@ async def setup_mod_appeal(
             manage_channels=True,
             manage_threads=True,
             send_messages=True,
+            attach_files=True,
+            add_reactions=True,
+            embed_links=True,
+            use_external_emojis=True,
+            use_external_stickers=True,
             read_message_history=True,
+            send_messages_in_threads=True,
+            create_public_threads=True,
+            create_private_threads=True
         ),
 
         interaction.user: discord.PermissionOverwrite(
