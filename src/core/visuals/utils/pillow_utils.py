@@ -5,6 +5,7 @@ from PIL import ImageDraw, ImageFont, ImageChops, ImageFilter, Image
 from PIL.ImageFont import FreeTypeFont, ImageFont as PILImageFont
 
 import os
+import io
 
 
 DEFAULT_STARTING_SIZE: Final[int] = 46
@@ -16,6 +17,15 @@ def load_font(path: str, size: int) -> FreeTypeFont | PILImageFont:
         return ImageFont.truetype(path, size)
     except (OSError, IOError):
         return ImageFont.load_default()
+
+def load_image(response) -> Image.Image | None:
+    if response is None:
+        return None
+
+    response.raise_for_status()
+    return Image.open(
+        io.BytesIO(response.content)
+    ).convert("RGBA")
     
 def get_icon_path(folder, fruit_name):
     for ext in [".png", ".webp", ".jpg", ".jpeg"]:
