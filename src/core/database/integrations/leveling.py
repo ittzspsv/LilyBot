@@ -10,18 +10,19 @@ class LevelingManagement:
     async def get_leveling_info(self, guild_id: int, member_id: int):
         result = await self.db.fetch_one(
             """
-            SELECT
-                COALESCE(total_messages, 0) AS total_messages,
-                COALESCE(
+            SELECT total_messages, rank
+            FROM (
+                SELECT
+                    member_id,
+                    total_messages,
                     RANK() OVER (
                         PARTITION BY guild_id
                         ORDER BY total_messages DESC
-                    ),
-                    0
-                ) AS rank
-            FROM messages
-            WHERE guild_id = ?
-            AND member_id = ?
+                    ) AS rank
+                FROM messages
+                WHERE guild_id = ?
+            ) AS ranked
+            WHERE member_id = ?
             """,
             (guild_id, member_id)
         )
