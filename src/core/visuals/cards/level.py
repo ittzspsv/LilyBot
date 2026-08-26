@@ -6,9 +6,12 @@ import httpx
 import math
 from PIL import Image, ImageDraw, ImageFont
 from src.core.configs.path import FONTS as FONT_DIR
+from src.core.utils.lily_utility import format_currency
 from ..utils.pillow_utils import load_image
 
 
+FONT_BOLD: Final = FONT_DIR / "Poppins-Bold.ttf"
+FONT_LIGHT: Final = FONT_DIR / "Poppins-Light.ttf"
 FONT_REG: Final = FONT_DIR / "Poppins-Regular.ttf"
 
 
@@ -16,7 +19,11 @@ async def create_level_card(
     display_name: str,
     avatar_url: str,
     avatar_deco_url: str | None,
-    nameplate_url: str | None
+    nameplate_url: str | None,
+    current_level: int = 0,
+    current_rank: int = 0,
+    current_xp: float = 0.6,
+    max_xp: float = 1
 ) -> Optional[bytes]:
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -74,7 +81,6 @@ async def create_level_card(
         (CARD_W, CARD_H),
         BASE_BG
     )
-
 
     if nameplate is not None:
         src_ratio = nameplate.width / nameplate.height
@@ -293,21 +299,27 @@ async def create_level_card(
         + 10 # this should be edited inorder to move the text in the x axis
     )
 
+    # ------------------------------------------------------------------
+    # Top line: LEVEL (now bold, large — swapped in from where the name used to be)
+    # ------------------------------------------------------------------
+
     name_font = ImageFont.truetype(
-        FONT_REG,
+        FONT_BOLD,
         34
     )
 
+    level_text = f"Level : {format_currency(current_level)} | Rank: {format_currency(current_rank)}"
+
     bbox = draw.textbbox(
         (0, 0),
-        display_name,
+        level_text,
         font=name_font
     )
 
     text_h = bbox[3] - bbox[1]
 
     text_y = (
-        CARD_Y - 25 # This should be edited to move the text to the y axis
+        CARD_Y - 34
         + CARD_H // 2
         - text_h // 2
         - bbox[1]
@@ -318,7 +330,7 @@ async def create_level_card(
             text_x + 2,
             text_y + 2
         ),
-        display_name,
+        level_text,
         font=name_font,
         fill=(0, 0, 0, 140)
     )
@@ -328,9 +340,114 @@ async def create_level_card(
             text_x,
             text_y
         ),
-        display_name,
+        level_text,
         font=name_font,
         fill=(255, 255, 255, 255)
+    )
+
+    level_font = ImageFont.truetype(
+        FONT_REG,
+        18
+    )
+
+    LEVEL_GAP = 12  # space between bottom of the level line and top of the name line
+
+    level_y = text_y + text_h + LEVEL_GAP
+
+    display_name = f'@{display_name}'
+
+    draw.text(
+        (
+            text_x + 2,
+            level_y + 2
+        ),
+        display_name,
+        font=level_font,
+        fill=(0, 0, 0, 140)
+    )
+
+    draw.text(
+        (
+            text_x,
+            level_y
+        ),
+        display_name,
+        font=level_font,
+        fill=(200, 205, 212, 255)
+    )
+
+    level_bbox = draw.textbbox(
+        (0, 0),
+        display_name,
+        font=level_font
+    )
+
+    level_h = level_bbox[3] - level_bbox[1]
+
+
+    BAR_GAP = 20           # space between name text and the bar
+    BAR_H = 16              # bar thickness
+    BAR_RIGHT_PAD = 24      
+    BAR_SHRINK = 0.45       
+    BAR_RADIUS = BAR_H // 2
+
+    full_bar_x0 = text_x
+    full_bar_x1 = (CARD_X + CARD_W) - BAR_RIGHT_PAD
+    full_bar_w = full_bar_x1 - full_bar_x0
+
+    bar_x0 = full_bar_x0
+    bar_w = int(full_bar_w * (1 - BAR_SHRINK))
+    bar_x1 = bar_x0 + bar_w
+
+    bar_y0 = level_y + level_h + BAR_GAP
+    bar_y1 = bar_y0 + BAR_H
+
+    # Clamp / sanitize the xp ratio so bad data (e.g. max_xp <= 0) can't crash rendering.
+    safe_max_xp = max_xp if max_xp and max_xp > 0 else 1.0
+    xp_ratio = max(0.0, min(1.0, current_xp / safe_max_xp))
+
+    # Track (background of the bar)
+    draw.rounded_rectangle(
+        (bar_x0, bar_y0, bar_x1, bar_y1),
+        radius=BAR_RADIUS,
+        fill=(20, 21, 24, 200),
+        outline=(255, 255, 255, 30),
+        width=1
+    )
+
+    # Filled portion
+    fill_w = int(bar_w * xp_ratio)
+
+    if fill_w > 0:
+        # Keep the filled portion at least as wide as it is tall so the
+        # rounded end-caps don't look clipped/broken at very low progress.
+        fill_w = max(fill_w, BAR_H)
+        fill_w = min(fill_w, bar_w)
+
+        draw.rounded_rectangle(
+            (bar_x0, bar_y0, bar_x0 + fill_w, bar_y1),
+            radius=BAR_RADIUS,
+            fill=(255, 255, 255, 255)
+        )
+
+    # XP label ("0/1 xp"), left-aligned directly beneath the bar's left edge
+    xp_font = ImageFont.truetype(
+        FONT_LIGHT,
+        12
+    )
+
+    xp_text = f"{format_currency(int(current_xp))}/{format_currency(int(safe_max_xp))} xp"
+
+    XP_LABEL_GAP = 7  # space between bottom of bar and top of the xp label
+
+    xp_text_x = bar_x0
+    xp_text_y = bar_y1 + XP_LABEL_GAP
+
+    draw.text(
+        (xp_text_x, xp_text_y),
+        xp_text,
+        font=xp_font,
+        fill=(170, 175, 182, 255)
     )
 
     buf = io.BytesIO()
