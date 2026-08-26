@@ -136,8 +136,8 @@ async def spawn_ticket(ctx: commands.Context, json_data: dict) -> None:
     if ctx.guild is None:
         return
 
-    bot_db = cast(Lily, ctx.bot).db
-    logging_controller = cast(Lily, ctx.bot).logging_controller
+    bot_db = cast("Lily", ctx.bot).db
+    logging_controller = cast("Lily", ctx.bot).logging_controller
     assert bot_db is not None
     assert logging_controller is not None
 
@@ -208,7 +208,7 @@ async def c_ticket_log_action_channel(interaction: discord.Interaction,opened_us
 async def rename_ticket(interaction: discord.Interaction, name: str):
     if not isinstance(interaction.channel, discord.TextChannel):
         return
-    bot_db = cast(Lily, interaction.client).db
+    bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
 
     owner = await bot_db.get_ticket_owner(interaction.channel.id)
@@ -226,7 +226,7 @@ async def ticket_add_user(
     if not isinstance(interaction.channel, discord.TextChannel):
         return
 
-    bot_db = cast(Lily, interaction.client).db
+    bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
 
     try:
@@ -293,7 +293,7 @@ async def ticket_remove_user(
         return
     
     try:
-        bot_db = cast(Lily, interaction.client).db
+        bot_db = cast("Lily", interaction.client).db
         assert bot_db is not None
         owner = await bot_db.get_ticket_owner(interaction.channel.id)
 
@@ -382,7 +382,7 @@ async def ticket_close(interaction: discord.Interaction, reason: str="No reason 
     ticket_id: int = channel.id
 
     try:
-        bot_db = cast(Lily, interaction.client).db
+        bot_db = cast("Lily", interaction.client).db
         assert bot_db is not None
         row = await bot_db.get_ticket_by_id(ticket_id)
         if not row:
@@ -532,7 +532,7 @@ async def ticket_stats(interaction: discord.Interaction, member: discord.Member)
     if interaction.guild is None:
         return await interaction.response.send_message(embed=simple_embed("Please run this command inside an guild"))
 
-    bot_db = cast(Lily, interaction.client).db
+    bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
     results = await bot_db.ticket_stats(interaction.guild.id, member.id)
     if not results:
@@ -555,7 +555,7 @@ async def ticket_retrieve(interaction: discord.Interaction, member_id: int):
         if interaction.guild is None:
             return
 
-        bot_db = cast(Lily, interaction.client).db
+        bot_db = cast("Lily", interaction.client).db
         assert bot_db is not None
         result: List[Dict[str, Any]] = await bot_db.get_member_ticket_logs(interaction.guild.id, member_id)
 
