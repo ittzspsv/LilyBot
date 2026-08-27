@@ -299,10 +299,6 @@ async def create_level_card(
         + 10 # this should be edited inorder to move the text in the x axis
     )
 
-    # ------------------------------------------------------------------
-    # Top line: LEVEL (now bold, large — swapped in from where the name used to be)
-    # ------------------------------------------------------------------
-
     name_font = ImageFont.truetype(
         FONT_BOLD,
         34
@@ -402,11 +398,9 @@ async def create_level_card(
     bar_y0 = level_y + level_h + BAR_GAP
     bar_y1 = bar_y0 + BAR_H
 
-    # Clamp / sanitize the xp ratio so bad data (e.g. max_xp <= 0) can't crash rendering.
     safe_max_xp = max_xp if max_xp and max_xp > 0 else 1.0
     xp_ratio = max(0.0, min(1.0, current_xp / safe_max_xp))
 
-    # Track (background of the bar)
     draw.rounded_rectangle(
         (bar_x0, bar_y0, bar_x1, bar_y1),
         radius=BAR_RADIUS,
@@ -419,8 +413,6 @@ async def create_level_card(
     fill_w = int(bar_w * xp_ratio)
 
     if fill_w > 0:
-        # Keep the filled portion at least as wide as it is tall so the
-        # rounded end-caps don't look clipped/broken at very low progress.
         fill_w = max(fill_w, BAR_H)
         fill_w = min(fill_w, bar_w)
 
@@ -430,7 +422,6 @@ async def create_level_card(
             fill=(255, 255, 255, 255)
         )
 
-    # XP label ("0/1 xp"), left-aligned directly beneath the bar's left edge
     xp_font = ImageFont.truetype(
         FONT_LIGHT,
         12
@@ -438,7 +429,7 @@ async def create_level_card(
 
     xp_text = f"{format_currency(int(current_xp))}/{format_currency(int(safe_max_xp))} xp"
 
-    XP_LABEL_GAP = 7  # space between bottom of bar and top of the xp label
+    XP_LABEL_GAP = 7  
 
     xp_text_x = bar_x0
     xp_text_y = bar_y1 + XP_LABEL_GAP
