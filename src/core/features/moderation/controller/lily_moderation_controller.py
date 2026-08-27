@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import io
+import numpy as np
+from scipy.interpolate import make_interp_spline
 from datetime import datetime, timedelta
 from typing import Optional, List, Tuple, cast
 
@@ -665,33 +667,58 @@ async def moderation_insights(
         for item in data
     ]
 
-    x_date = mdates.date2num(days)
+    x = np.arange(1, len(totals) + 1)
 
-    plt.figure(figsize=(12, 5))
+    k = min(3, len(x) - 1) if len(x) > 1 else 1
+    x_smooth = np.linspace(x.min(), x.max(), 500)
+    spline = make_interp_spline(x, totals, k=k)
+    y_smooth = spline(x_smooth)
+    y_smooth = np.clip(y_smooth, 0, None)  
 
-    plt.plot(
-        x_date,
-        totals,
-        marker="o",
-        linewidth=2
+    fig, ax = plt.subplots(figsize=(12, 5.2))
+
+    fig.patch.set_facecolor("#111214")
+    ax.set_facecolor("#111214")
+
+    ax.fill_between(
+        x_smooth,
+        y_smooth,
+        0,
+        color="#5a5a5a",
+        alpha=0.45
     )
 
-    plt.title("Moderation Actions - Last 30 Days")
-    plt.xlabel("Date")
-    plt.ylabel("Actions")
+    ax.plot(
+        x_smooth,
+        y_smooth,
+        color="#d0d0d0",
+        linewidth=7
+    )
 
-    plt.xticks(rotation=45)
+    max_total = max(totals) if totals else 0
+    y_top = max(20, int(max_total * 1.15))
+    ax.set_ylim(0, y_top)
+    ax.set_yticks(np.linspace(0, y_top, 7).astype(int))
 
-    plt.grid(True, alpha=0.3)
+    ax.tick_params(
+        axis="y",
+        colors="#bdbdbd",
+        labelsize=14,
+        length=0
+    )
 
-    for x, y in zip(x_date, totals):
-        plt.text(
-            x,
-            y,
-            str(y),
-            ha="center",
-            va="bottom"
-        )
+    ax.tick_params(
+        axis="x",
+        bottom=False,
+        labelbottom=False
+    )
+
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    ax.grid(False)
+
+    ax.margins(x=0)
 
     plt.tight_layout()
 
@@ -699,12 +726,13 @@ async def moderation_insights(
     plt.savefig(
         buffer,
         format="png",
-        dpi=300,
+        dpi=150,
+        facecolor="#111214",
         bbox_inches="tight"
     )
 
     buffer.seek(0)
-    plt.close()
+    plt.close(fig)
 
     """ Returns the total, monthly, weekly, daily modlogs in a server """
     view = ModerationInsights(interaction.guild.me, bot_db)
