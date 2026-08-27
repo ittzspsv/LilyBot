@@ -3356,3 +3356,38 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
             "count": len(leaderboard),
             "leaderboard": leaderboard
         }
+
+    async def get_timezone(
+        self,
+        member_id: int,
+        guild_id: int
+    ) -> str | None:
+        row = await self.fetch_one(
+            """
+            SELECT timezone
+            FROM members
+            WHERE member_id = ? AND guild_id = ?
+            """,
+            (member_id, guild_id)
+        )
+
+        return row["timezone"] if row else None
+
+
+    async def set_timezone(
+        self,
+        member_id: int,
+        guild_id: int,
+        timezone: str
+    ) -> bool:
+        await self.execute(
+            """
+            INSERT INTO members (member_id, guild_id, timezone)
+            VALUES (?, ?, ?)
+            ON CONFLICT (member_id, guild_id)
+            DO UPDATE SET timezone = excluded.timezone
+            """,
+            (member_id, guild_id, timezone)
+        )
+
+        return True

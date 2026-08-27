@@ -15,6 +15,7 @@ from src.core.utils.components.sLIlyGlobalComponents import CommandInfo as CI
 from src.core.utils.embeds.sLilyEmbed import ParseAdvancedEmbed
 from src.core.utils.types.types import ChannelEnum, NotifiersEnum
 from src.core.logging.lily_logging import LilyLoggingController
+from zoneinfo import available_timezones, ZoneInfo, ZoneInfoNotFoundError
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
 from src.core.utils.components.sLIlyGlobalComponents import RoleCustomizationModal, Avatar
 from src.core.visuals.cards.level import create_level_card
@@ -129,7 +130,11 @@ class LilyUtility(commands.Cog):
         name="remove",
         description="Utility removal commands"
     )
-        
+
+    timezone = app_commands.Group(
+        name = "timezone",
+        description="Timezone utility commands"
+    )
 
     # SERVER UTILITY
     @app_commands.command(name='list', description='lists the total number of users in the server')
@@ -767,6 +772,121 @@ class LilyUtility(commands.Cog):
         except Exception as e:
             print(e)
             await interaction.followup.send("Failed!")
+
+    @timezone.command(name="get", description="Get a timezone of a user")
+    async def get_timezone(
+        self,
+        interaction: discord.Interaction,
+        member: discord.Member | None = None
+    ):
+        db: BotGlobalsDatabaseAccess = self.bot.db
+        assert interaction.guild is not None
+
+        target_member = member or await interaction.guild.fetch_member(interaction.user.id)
+
+        timezone = await db.get_timezone(target_member.id, interaction.guild.id)
+
+        if not timezone:
+            await interaction.response.send_message(
+                embed=simple_embed(f"**{target_member.display_name}** hasn't set their timezone yet.", 'cross'),
+                ephemeral=True
+            )
+            return
+
+        try:
+            tz = ZoneInfo(timezone)
+        except ZoneInfoNotFoundError:
+            await interaction.response.send_message(
+                embed=simple_embed("Invalid timezone configured", 'cross'),
+                ephemeral=True
+            )
+            return
+
+        now = datetime.now(tz)
+
+        formatted_date = now.strftime("%A, %B %-d, %Y")
+        formatted_time = now.strftime("%-I:%M %p")
+
+        description = (
+            f"### {target_member.display_name}'s Timezone\n"
+            f"**Timezone:** `{timezone}`\n"
+            f"**Local time:** {formatted_time}\n"
+            f"**Date:** {formatted_date}"
+        )
+
+        requester_timezone = await db.get_timezone(interaction.user.id, interaction.guild.id)
+
+        if requester_timezone:
+            try:
+                requester_tz = ZoneInfo(requester_timezone)
+            except ZoneInfoNotFoundError:
+                requester_tz = None
+
+            if requester_tz is not None:
+                requester_now = datetime.now(requester_tz)
+                target_offset = now.utcoffset()
+                requester_offset = requester_now.utcoffset()
+
+                if target_offset is not None and requester_offset is not None:
+                    difference_hours = (target_offset - requester_offset).total_seconds() / 3600
+
+                    if difference_hours == 0:
+                        difference_text = "You are in the **same timezone**."
+                    elif difference_hours > 0:
+                        difference_text = f"They are **{difference_hours:g} hours ahead** of you."
+                    else:
+                        difference_text = f"They are **{abs(difference_hours):g} hours behind** you."
+
+                    description += f"\n\n**Compared to you:**\n{difference_text}"
+
+        embed = discord.Embed(description=description, color=16777215)
+        embed.set_thumbnail(url=target_member.display_avatar.url)
+
+        await interaction.response.send_message(embed=embed)
+
+    async def timezone_autocomplete(self, interaction: discord.Interaction, current):
+            matches = [
+                tz for tz in sorted(available_timezones())
+                if current.lower() in tz.lower()
+            ]
+            return [
+                app_commands.Choice(name=tz, value=tz)
+                for tz in matches[:25]
+            ]
+
+    @app_commands.autocomplete(timezone=timezone_autocomplete)
+    @timezone.command(name="set", description="Assign your own timezone")
+    async def set_timezone(
+        self,
+        interaction: discord.Interaction,
+        timezone: str
+    ):
+        db: BotGlobalsDatabaseAccess = self.bot.db
+        assert interaction.guild is not None
+
+        try:
+            ZoneInfo(timezone)
+        except ZoneInfoNotFoundError:
+            await interaction.response.send_message(
+                embed=simple_embed(f"`{timezone}` is not a valid timezone.", 'cross'),
+                ephemeral=True
+            )
+            return
+
+        await db.set_timezone(
+            interaction.user.id,
+            interaction.guild.id,
+            timezone
+        )
+
+        now = datetime.now(ZoneInfo(timezone))
+
+        await interaction.response.send_message(
+            embed=simple_embed(
+            f"Your timezone has been set to `{timezone}`.\n"
+            f"Your local time is **{now.strftime('%A, %-I:%M %p')}**.", bold=False),
+            ephemeral=True
+        )
 
 async def setup(bot):
     await bot.add_cog(LilyUtility(bot))
