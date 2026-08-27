@@ -1068,29 +1068,67 @@ async def get_staffs_timezone_coverage(interaction: discord.Interaction) -> None
     zones = [x[0] for x in data]
     counts = [x[1] for x in data]
 
-    plt.figure(figsize=(10, 5))
-    bars = plt.barh(zones, counts)
+    fig, ax = plt.subplots(figsize=(10, max(5, 0.5 * len(zones))))
 
-    plt.xlabel("Number of Staff")
-    plt.ylabel("Timezone")
-    plt.title("Staff Timezone Coverage", fontsize=20, fontweight="bold")
+    fig.patch.set_facecolor("#111214")
+    ax.set_facecolor("#111214")
 
-    plt.grid(axis="x", alpha=0.3)
+    bars = ax.barh(
+        zones,
+        counts,
+        color="#5a5a5a",
+        edgecolor="#d0d0d0",
+        linewidth=1.5,
+        height=0.6
+    )
 
-    plt.tight_layout()
+    max_count = max(counts) if counts else 0
+    ax.set_xlim(0, max(1, max_count * 1.15))
+
+    ax.tick_params(
+        axis="x",
+        bottom=False,
+        labelbottom=False
+    )
+
+    ax.tick_params(
+        axis="y",
+        colors="#d0d0d0",
+        labelsize=13,
+        length=0
+    )
+
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    ax.grid(False)
 
     for bar in bars:
         width = bar.get_width()
-        plt.text(
-            width + 0.1,
+        ax.text(
+            width + max_count * 0.02,
             bar.get_y() + bar.get_height() / 2,
             str(int(width)),
-            va="center"
+            va="center",
+            ha="left",
+            color="#d0d0d0",
+            fontsize=12,
+            fontweight="bold"
         )
 
+    ax.margins(y=0.02)
+
+    plt.tight_layout()
+
     buffer = BytesIO()
-    plt.savefig(buffer, format="png", dpi=300, bbox_inches="tight")
-    plt.close()
+    plt.savefig(
+        buffer,
+        format="png",
+        dpi=150,
+        facecolor="#111214",
+        bbox_inches="tight"
+    )
+    plt.close(fig)
     buffer.seek(0)
 
     file = discord.File(
