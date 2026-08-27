@@ -12,3 +12,6 @@ python-dotenv
 asqlite
 apscheduler
 boto3
+matplotlib
+scipy
+numpy
