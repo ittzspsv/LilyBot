@@ -411,13 +411,13 @@ class Confirm(discord.ui.View):
 
     @discord.ui.button(label='Confirm', style=discord.ButtonStyle.secondary)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(embed=simple_embed("I've sent you the application in DMs. Please continue it there."), ephemeral=True)
+        await interaction.response.defer()
         self.value = True
         self.stop()
 
     @discord.ui.button(label='Cancel', style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(embed=simple_embed('Process has been cancelled.', 'cross'), ephemeral=True)
+        await interaction.response.defer()
         self.value = False
         self.stop()
 
@@ -547,9 +547,17 @@ class ApplicationView(discord.ui.LayoutView):
         await view.wait()
 
         if view.value is None:
+            await interaction.edit_original_response(
+                embed=simple_embed("Confirmation timed out.", 'cross'),
+                view=None,
+            )
             return
 
         if not view.value:
+            await interaction.edit_original_response(
+                embed=simple_embed('Process has been cancelled.', 'cross'),
+                view=None,
+            )
             return
 
         if submission is None:
@@ -565,9 +573,9 @@ class ApplicationView(discord.ui.LayoutView):
         )
 
         if question is None:
-            await interaction.followup.send(
+            await interaction.edit_original_response(
                 embed=simple_embed("Your application is already complete."),
-                ephemeral=True,
+                view=None,
             )
             return
 
@@ -576,10 +584,13 @@ class ApplicationView(discord.ui.LayoutView):
                 view=ApplicationQuestionView(self.db, question)
             )
         except discord.Forbidden:
-            await interaction.followup.send(
+            await interaction.edit_original_response(
                 embed=simple_embed("I couldn't send you a DM. Please enable Direct Messages from server members and try again.", 'cross'),
-                ephemeral=True,
+                view=None,
             )
             return
 
-        
+        await interaction.edit_original_response(
+            embed=simple_embed("I've sent you the application in DMs. Please continue it there."),
+            view=None,
+        )
