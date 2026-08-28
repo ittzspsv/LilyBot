@@ -5,7 +5,7 @@ import io
 import numpy as np
 from scipy.interpolate import make_interp_spline
 from datetime import datetime, timedelta
-from typing import Optional, List, Tuple, cast
+from typing import Optional, List, Tuple, cast, TYPE_CHECKING
 
 import discord
 import logging
@@ -14,7 +14,12 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
 from src.core.database.integrations.bot_globals import BanLimitStatus
-from src.core.features.moderation.components.sLilyModerationComponents import *
+from src.core.features.moderation.components.sLilyModerationComponents import (
+    CaseListView,
+    CaseProofsView,
+    build_ms_embed,
+    ModerationInsights
+)
 from src.core.features.moderation.utils.moderation_utils import mute_parser
 from src.core.features.permissions.lily_permissions import has_app_permission
 from src.core.utils.embeds.sLilyEmbed import simple_embed
@@ -638,7 +643,7 @@ async def mod_logs(
 
 async def moderation_insights(
     interaction: discord.Interaction
-):
+) -> None:
     if interaction.guild is None:
         await interaction.response.send_message(
             embed=simple_embed(
@@ -847,7 +852,7 @@ async def setup_mod_appeal(
 
 async def accept_appeal(
     interaction: discord.Interaction
-):
+) -> None:
     if interaction.guild is None:
         return
 
@@ -856,7 +861,7 @@ async def accept_appeal(
     bot_db = bot.db
 
     if not isinstance(interaction.channel, discord.Thread):
-        return await interaction.response.send_message(
+        await interaction.response.send_message(
             embed=simple_embed(
                 "Unable to accept an invalid instigator appeal.",
                 "cross",
@@ -864,23 +869,28 @@ async def accept_appeal(
             delete_after=5,
         )
 
+        return
+
     appeal = await bot_db.get_appeal(interaction.channel.id)
     if appeal is None:
-        return await interaction.response.send_message(
+        await interaction.response.send_message(
             embed=simple_embed(
                 "Unable to accept an invalid instigator appeal.",
                 "cross",
             ),
             delete_after=5,
         )
+        return
     if appeal["status"] != "pending":
-        return await interaction.response.send_message(
+        await interaction.response.send_message(
             embed=simple_embed(
                 "This appeal is no longer in a valid state for this action.",
                 "cross",
             ),
             delete_after=5,
         )
+
+        return
 
     case = await bot_db.get_case(appeal["case_id"])
 
