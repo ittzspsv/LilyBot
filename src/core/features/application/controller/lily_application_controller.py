@@ -25,7 +25,7 @@ async def create_application(interaction: Interaction):
     if interaction.guild is None:
         raise app_commands.CheckFailure("This command can be only executed inside an guild")
 
-    bot_db = cast(Lily, interaction.client).db
+    bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
     application_groups: List[Dict[str, Any]] = await bot_db.app_management_db.get_groups_by_guild(interaction.guild.id)
     await interaction.response.send_modal(CreateApplicationModal(bot_db, application_groups[:25]))
@@ -38,7 +38,7 @@ async def send_application_view(
     if interaction.guild is None:
         raise app_commands.CheckFailure("This command can be only executed inside an guild")
 
-    bot_db = cast(Lily, interaction.client).db
+    bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
     
     application: Dict[str, Any] | None = await bot_db.app_management_db.get_application(
@@ -71,7 +71,7 @@ async def update_application(
     if interaction.guild is None:
         raise app_commands.CheckFailure("This command can be only executed inside an guild")
 
-    bot_db = cast(Lily, interaction.client).db
+    bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
     
     application = await bot_db.app_management_db.get_application(interaction.guild.id, application_id)
@@ -82,7 +82,7 @@ async def get_application(interaction: Interaction, application_id: int):
     if interaction.guild is None:
         raise app_commands.CheckFailure("This command can be only executed inside an guild")
 
-    bot_db = cast(Lily, interaction.client).db
+    bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
 
     application = await bot_db.app_management_db.get_application(interaction.guild.id,application_id)
@@ -103,7 +103,7 @@ async def list_applications(interaction: Interaction, active_only: bool = False)
         raise app_commands.CheckFailure("This command can be only executed inside an guild")
 
 
-    bot_db = cast(Lily, interaction.client).db
+    bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
 
     applications = await bot_db.app_management_db.get_applications_by_guild(
@@ -139,7 +139,7 @@ async def set_active(
         )
 
 
-    bot_db = cast(Lily, interaction.client).db
+    bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
 
     result = await bot_db.app_management_db.set_active(
@@ -202,7 +202,7 @@ async def advance_wave(interaction: Interaction, application_id: int):
     if interaction.guild is None:
         raise app_commands.CheckFailure("This command can be only executed inside an guild")
 
-    bot_db = cast(Lily, interaction.client).db
+    bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
 
     new_wave = await bot_db.app_management_db.advance_wave(interaction.guild.id, application_id)
@@ -218,7 +218,7 @@ async def delete_application(interaction: Interaction, application_id: int):
     if interaction.guild is None:
         raise app_commands.CheckFailure("This command can be only executed inside an guild")
 
-    bot_db = cast(Lily, interaction.client).db
+    bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
 
 
@@ -253,7 +253,7 @@ async def create_question(
                 "Selector / radio button questions require at least one option."
             )
 
-    bot_db = cast(Lily, interaction.client).db
+    bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
 
     result = await bot_db.app_management_db.create_question(
@@ -278,7 +278,7 @@ async def get_question(interaction: Interaction, question_id: int):
         raise app_commands.CheckFailure("This command can be only executed inside an guild")
 
 
-    bot_db = cast(Lily, interaction.client).db
+    bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
 
     question = await bot_db.app_management_db.get_question(interaction.guild.id, question_id)
@@ -303,7 +303,7 @@ async def list_questions(interaction: Interaction):
         raise app_commands.CheckFailure("This command can be only executed inside an guild")
 
 
-    bot_db = cast(Lily, interaction.client).db
+    bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
 
     questions = await bot_db.app_management_db.get_questions_by_guild(
@@ -340,7 +340,7 @@ async def update_question(
     if interaction.guild is None:
         raise app_commands.CheckFailure("This command can be only executed inside an guild")
 
-    bot_db = cast(Lily, interaction.client).db
+    bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
 
     success = await bot_db.app_management_db.update_question(
@@ -367,7 +367,7 @@ async def delete_question(interaction: Interaction, question_id: int):
     if interaction.guild is None:
         raise app_commands.CheckFailure("This command can be only executed inside an guild")
 
-    bot_db = cast(Lily, interaction.client).db
+    bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
 
     success = await bot_db.app_management_db.delete_question(interaction.guild.id, question_id)
@@ -392,7 +392,7 @@ async def create_group(
     if interaction.guild is None:
         raise app_commands.CheckFailure("This command can be only executed inside an guild")
 
-    bot_db = cast(Lily, interaction.client).db
+    bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
 
     result = await bot_db.app_management_db.create_group(
@@ -413,7 +413,7 @@ async def get_group(interaction: Interaction, group_id: int):
         raise app_commands.CheckFailure("This command can be only executed inside an guild")
 
 
-    bot_db = cast(Lily, interaction.client).db
+    bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
 
     group = await bot_db.app_management_db.get_group(interaction.guild.id, group_id)
@@ -438,7 +438,7 @@ async def list_groups(interaction: Interaction):
         raise app_commands.CheckFailure("This command can be only executed inside an guild")
 
 
-    bot_db = cast(Lily, interaction.client).db
+    bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
 
     groups = await bot_db.app_management_db.get_groups_by_guild(
@@ -470,7 +470,7 @@ async def update_group(
     if interaction.guild is None:
         raise app_commands.CheckFailure("This command can be only executed inside an guild")
 
-    bot_db = cast(Lily, interaction.client).db
+    bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
 
     success = await bot_db.app_management_db.update_group(
@@ -502,7 +502,7 @@ async def set_group_questions(
     except ValueError:
         raise app_commands.CheckFailure("question_ids must be a comma-separated list of numbers.")
 
-    bot_db = cast(Lily, interaction.client).db
+    bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
 
 
@@ -522,7 +522,7 @@ async def delete_group(interaction: Interaction, group_id: int):
     if interaction.guild is None:
         raise app_commands.CheckFailure("This command can be only executed inside an guild")
 
-    bot_db = cast(Lily, interaction.client).db
+    bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
 
     success = await bot_db.app_management_db.delete_group(interaction.guild.id, group_id)
@@ -541,7 +541,7 @@ async def get_applicant_status(
 ):
     assert interaction.guild is not None
 
-    bot_db = cast(Lily, interaction.client).db
+    bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
 
     status = await bot_db.app_management_db.get_applicant_status(
@@ -590,7 +590,7 @@ async def applicant_entry_delete(
 
     assert interaction.guild is not None
 
-    bot_db = cast(Lily, interaction.client).db
+    bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
 
     _application = await bot_db.app_management_db.get_application(interaction.guild.id, application)
@@ -636,7 +636,7 @@ async def applicant_entry_delete(
         await interaction.response.send_message(embed=simple_embed("Failed to Delete Submission", 'cross'))
 
 async def push_submission(user: User, bot: commands.Bot):
-    bot_db = cast(Lily, bot).db
+    bot_db = cast("Lily", bot).db
     assert bot_db is not None
 
 
@@ -785,7 +785,7 @@ async def update_applicant(
     if update not in ("block", "unblock"):
         raise app_commands.CheckFailure("Invalid update action.")
 
-    bot_db = cast(Lily, interaction.client).db
+    bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
 
 
@@ -809,13 +809,12 @@ async def update_applicant(
     )
 
 async def application_invalidate(
-    
     interaction: Interaction,
     application: int,
 ):
     assert interaction.guild is not None
 
-    bot_db = cast(Lily, interaction.client).db
+    bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
 
 
