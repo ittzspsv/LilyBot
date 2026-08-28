@@ -1,5 +1,5 @@
 import discord
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from src.core.configs.path import TRANSCRIPT_TEMPLATE_DIR
 from jinja2 import Environment, FileSystemLoader
 
@@ -35,6 +35,7 @@ async def transcript(interaction: discord.Interaction):
 
     messages = []
     relevant_members: Dict[str, Any] = {}
+    member_cache: Dict[int, Optional[discord.Member]] = {}
 
     async for message in interaction.channel.history(
         limit=None,
@@ -42,17 +43,28 @@ async def transcript(interaction: discord.Interaction):
     ):
 
         author = message.author
-        relevant_members[str(author.id)] = author
 
-        if isinstance(author, discord.Member):
-            display_name = author.display_name
+        if author.id not in member_cache:
+            resolved = guild.get_member(author.id)
+            if resolved is None:
+                try:
+                    resolved = await guild.fetch_member(author.id)
+                except (discord.NotFound, discord.HTTPException):
+                    resolved = None
+            member_cache[author.id] = resolved
+
+        member = member_cache[author.id]
+        relevant_members[str(author.id)] = member if member is not None else author
+
+        if member is not None:
+            display_name = member.display_name
             avatar_url = (
-                author.display_avatar.url
-                if author.display_avatar
+                member.display_avatar.url
+                if member.display_avatar
                 else None
             )
 
-            role = author.top_role
+            role = member.top_role
 
             role_name = (
                 role.name
@@ -84,7 +96,16 @@ async def transcript(interaction: discord.Interaction):
                 for user in message.mentions
             ]
             for user in message.mentions:
-                relevant_members[str(user.id)] = user
+                if user.id not in member_cache:
+                    resolved = guild.get_member(user.id)
+                    if resolved is None:
+                        try:
+                            resolved = await guild.fetch_member(user.id)
+                        except (discord.NotFound, discord.HTTPException):
+                            resolved = None
+                    member_cache[user.id] = resolved
+                mentioned = member_cache[user.id]
+                relevant_members[str(user.id)] = mentioned if mentioned is not None else user
 
         if message.role_mentions:
             mentions["roles"] = [
@@ -143,7 +164,19 @@ async def transcript(interaction: discord.Interaction):
             if isinstance(referenced, discord.Message):
 
                 referenced_author = referenced.author
-                relevant_members[str(referenced_author.id)] = referenced_author
+
+                if referenced_author.id not in member_cache:
+                    resolved = guild.get_member(referenced_author.id)
+                    if resolved is None:
+                        try:
+                            resolved = await guild.fetch_member(referenced_author.id)
+                        except (discord.NotFound, discord.HTTPException):
+                            resolved = None
+                    member_cache[referenced_author.id] = resolved
+                ref_member = member_cache[referenced_author.id]
+                relevant_members[str(referenced_author.id)] = (
+                    ref_member if ref_member is not None else referenced_author
+                )
 
                 referenced_message = {
                     "message_id": str(referenced.id),
