@@ -1,6 +1,6 @@
 from discord.ext import commands
 from typing import Optional
-from src.core.features.permissions.lily_permissions import app_permission, app_permission
+from src.core.features.permissions.lily_permissions import app_permission, permission
 from src.core.utils.embeds.sLilyEmbed import simple_embed
 import json
 import discord, discord.app_commands as app_commands
@@ -24,9 +24,8 @@ class LilyTicketTool(commands.Cog):
         description="Lily Ticketing System Command Hierarchy!"
     )
 
-    """
-    @ticket.command(name='spawn', description='spawn in ticket processor')
-    @app_permission(command_name="spawn_ticket", restrict=True)
+    @commands.command(name='ticket_spawn', description='spawn in ticket processor')
+    @permission(command_name="ticket_spawn", restrict=True)
     async def spawnticket(self, ctx: commands.Context):
         if not ctx.message.attachments:
             await ctx.send("Please attach a .json Config")
@@ -36,9 +35,9 @@ class LilyTicketTool(commands.Cog):
             if attachment.filename.endswith('.json'):
                     content = await attachment.read()
                     json_data = json.loads(content.decode('utf-8'))
-                    await controller.spawn_ticket(ctx, json_data)
+                    await spawn_ticket(ctx, json_data)
                     await ctx.reply("Ticket has been spawned successfully!")
-    """
+
     @app_commands.guild_only()
     @ticket.command(name="close", description="Close a ticket thread")
     @app_permission(command_name="ticket_close")
