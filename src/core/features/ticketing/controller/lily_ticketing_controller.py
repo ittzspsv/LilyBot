@@ -430,7 +430,8 @@ async def ticket_close(interaction: discord.Interaction, reason: str="No reason 
 
         if isinstance(channel, discord.TextChannel):
             transcript_bytes = await transcript(
-                interaction=interaction
+                interaction=interaction,
+                transcript_channel=logs_channel
             )
 
             if transcript_bytes is None:

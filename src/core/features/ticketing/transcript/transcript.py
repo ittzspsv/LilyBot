@@ -2,9 +2,10 @@ import discord
 from typing import Any, Dict, Optional
 from src.core.configs.path import TRANSCRIPT_TEMPLATE_DIR
 from jinja2 import Environment, FileSystemLoader
+import io
 
 
-async def transcript(interaction: discord.Interaction):
+async def transcript(interaction: discord.Interaction, transcript_channel: discord.TextChannel | None):
     if not isinstance(interaction.channel, discord.TextChannel):
         return
 
@@ -36,6 +37,19 @@ async def transcript(interaction: discord.Interaction):
     messages = []
     relevant_members: Dict[str, Any] = {}
     member_cache: Dict[int, Optional[discord.Member]] = {}
+
+    async def attachment_persistance(attachment: discord.Attachment) -> str:
+        if transcript_channel is None:
+            return attachment.url
+        try:
+            data = await attachment.read()
+            file = discord.File(io.BytesIO(data), filename=attachment.filename)
+            sent = await transcript_channel.send(file=file)
+            if sent.attachments:
+                return sent.attachments[0].url
+            return attachment.url
+        except (discord.HTTPException, discord.Forbidden, discord.NotFound):
+            return attachment.url
 
     async for message in interaction.channel.history(
         limit=None,
@@ -124,9 +138,7 @@ async def transcript(interaction: discord.Interaction):
                 "type": attachment.content_type.split("/")[0]
                 if attachment.content_type
                 else "file",
-
-                "url": attachment.url,
-
+                "url": await attachment_persistance(attachment),
                 "filename": attachment.filename,
             }
 
