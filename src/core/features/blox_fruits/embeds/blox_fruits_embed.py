@@ -63,8 +63,7 @@ def build_win_loss_embed(
         perm_emoji = config.emoji.get("perm", "🔒")
 
         for fruit, ftype, value in zip(fruits, fruit_types, values):
-            fruit_name = fruit.replace(" ", "_").replace("-", "_").lower()
-            fruit_emoji = config.fruit_emojis.get(fruit_name, "🍎")
+            fruit_emoji = config.emoji.get(fruit, "🍎")
 
             formatted_value = format_currency(value)
 

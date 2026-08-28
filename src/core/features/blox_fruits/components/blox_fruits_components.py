@@ -10,6 +10,7 @@ from ....database.integrations.blox_fruits import BloxFruitsDatabase
 from src.core.utils.lily_utility import format_currency
 from typing import List, TYPE_CHECKING, cast
 from ..utils.trade_calculator import calculate_fruit_values
+from src.core.utils.embeds.sLilyEmbed import simple_embed
 
 if TYPE_CHECKING:
     from src.lily import Lily
@@ -26,8 +27,8 @@ class TradeSuggestorComponent(discord.ui.LayoutView):
         self.type = type
 
         self.permanent_emoji = config.emoji.get('perm')
-        self.gamepass_emoji = config.fruit_emojis.get('dark_blade')
-        self.fruit_skins_emoji = config.fruit_emojis.get('galaxy_kitsune')
+        self.gamepass_emoji = config.emoji.get('DarkBlade')
+        self.fruit_skins_emoji = config.emoji.get('GalaxyKitsune')
         self.default_emoji = config.emoji.get("default") or "🍉"
         self.overpay_emoji = "🔥"
         self.fair_emoji = "🤝"
@@ -61,7 +62,7 @@ class TradeSuggestorComponent(discord.ui.LayoutView):
 
         self.storage_select = discord.ui.Select(
             custom_id="storage_select",
-            options=[discord.SelectOption(label=str(i), value=str(i), emoji=config.fruit_emojis['fruit_storage']) for i in range(1, 5)]
+            options=[discord.SelectOption(label=str(i), value=str(i), emoji=config.emoji['FruitStorage']) for i in range(1, 5)]
         )
         self.storage_select.callback = self.storage_select_callback
 
@@ -342,8 +343,7 @@ class WinLossComponent(discord.ui.LayoutView):
         perm_emoji = config.emoji.get("perm", "🔒")
 
         for fruit, ftype in zip(fruits, fruit_types):
-            fruit_name = fruit.replace(" ", "_").replace("-", "_").lower()
-            fruit_emoji = config.fruit_emojis.get(fruit_name, "🍎")
+            fruit_emoji = config.emoji.get(fruit.replace(" ", ""), "🍎")
 
             if ftype.lower() == "permanent":
                 details += f"{perm_emoji}{fruit_emoji} "
@@ -364,44 +364,74 @@ class InviteView(discord.ui.View):
             )
         )
 
-class BloxFruitsDashboard(discord.ui.Modal):
-    item_values = discord.ui.Label(
-        text='Item Values Channel',
-        description='Select the channel where item values will be used.',
-        component=discord.ui.ChannelSelect(
-            channel_types=[discord.ChannelType.text],
-            min_values=1,
-            max_values=1,
-            required=True,
-            custom_id="bf_fruit_values"
-        )
-    )
-
-    win_loss = discord.ui.Label(
-        text='Win-Loss Channel',
-        description='Select the channel where win-loss records will be used.',
-        component=discord.ui.ChannelSelect(
-            channel_types=[discord.ChannelType.text],
-            min_values=1,
-            max_values=1,
-            required=True,
-            custom_id="bf_win_loss"
-        )
-    )
-
+class BloxFruitsDashboard(discord.ui.LayoutView):
     def __init__(self) -> None:
-        super().__init__(title="Blox Fruits Configure")
+        super().__init__(timeout=None)
 
-    async def on_submit(self, interaction: discord.Interaction):
-        bot = cast(Lily, interaction.client)
-        db = bot.db
+        self.item_values = discord.ui.ChannelSelect(
+            channel_types=[discord.ChannelType.text],
+            min_values=1,
+            max_values=1,
+            required=True,
+            placeholder="Choose the item values channel",
+        )
 
-        assert db is not None
+        self.win_loss = discord.ui.ChannelSelect(
+            channel_types=[discord.ChannelType.text],
+            min_values=1,
+            max_values=1,
+            required=True,
+            placeholder="Choose the win-loss channel",
+        )
+
+        self.item_values.callback = self.item_values_callback
+        self.win_loss.callback = self.win_loss_callback
+
+        container = discord.ui.Container(
+            discord.ui.TextDisplay(content="## Blox Fruits Dashboard"),
+            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+
+            discord.ui.TextDisplay(content="### Item Values Channel"),
+            discord.ui.ActionRow(
+                self.item_values
+            ),
+
+            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+
+            discord.ui.TextDisplay(content="### Win-Loss Channel"),
+            discord.ui.ActionRow(
+                self.win_loss
+            ),
+        )
+
+        self.add_item(container)
+
+    async def item_values_callback(self, interaction: discord.Interaction):
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
         assert interaction.guild is not None
-        assert isinstance(self.item_values.component, discord.ui.ChannelSelect)
-        assert isinstance(self.win_loss.component, discord.ui.ChannelSelect)
 
-        await db.set_channel(interaction.guild.id, self.win_loss.component.values[0].id, "bf_win_loss")
-        await db.set_channel(interaction.guild.id, self.item_values.component.values[0].id, "bf_fruit_values")
+        await bot_db.set_channel(
+            interaction.guild.id,
+            self.item_values.values[0].id,
+            channel_type="bf_fruit_values"
+        )
 
-        await interaction.response.send_message("Successfully Configured the Blox Fruits Dashboard!", ephemeral=True)
+        await interaction.response.send_message(
+            embed=simple_embed(f"Successfully set item values channel to {self.item_values.values[0].mention}")
+        )
+
+    async def win_loss_callback(self, interaction: discord.Interaction):
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+        assert interaction.guild is not None
+
+        await bot_db.set_channel(
+            interaction.guild.id,
+            self.win_loss.values[0].id,
+            channel_type="bf_win_loss"
+        )
+
+        await interaction.response.send_message(
+            embed=simple_embed(f"Successfully set win-loss channel to {self.win_loss.values[0].mention}")
+        )

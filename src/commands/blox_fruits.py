@@ -180,9 +180,9 @@ class LilyBloxFruits(commands.Cog):
             await interaction.response.send_message(embed=simple_embed("An error occurred while updating the item."))
 
     @bloxfruits.command(name = "dashboard", description="Spawn the customizable dashboard")
-    @app_permission(command_name="staff_coverage")
+    @app_permission(command_name="dashboard")
     async def dashboard(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(BloxFruitsDashboard())
+        await interaction.response.send_message(view=BloxFruitsDashboard(), ephemeral=True)
 
 async def setup(bot):
     cog = LilyBloxFruits(bot)
