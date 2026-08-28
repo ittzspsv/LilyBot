@@ -632,7 +632,7 @@ async def get_all_staff_roles(interaction: discord.Interaction):
         print(f"Exception [GetAllStaffRoles] {e}")
         await interaction.response.send_message(embed=simple_embed("Error fetching staff roles", 'cross'))
 
-async def update_staff(interaction: discord.Interaction, staff: discord.Member, reason: str, update_type: str):
+async def update_staff(interaction: discord.Interaction, staff: discord.Member, reason: str, update_type: str) -> None:
     if interaction.guild is None:
         embed = discord.Embed(
             title=f"{emoji['cross']} Error",
