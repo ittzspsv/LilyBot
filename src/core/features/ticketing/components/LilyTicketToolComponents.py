@@ -865,6 +865,23 @@ class TicketModal(discord.ui.Modal):
             send_messages_in_threads=False
         )
 
+        overwrites[interaction.guild.me] = discord.PermissionOverwrite(
+            view_channel=True,
+            send_messages=True,
+            embed_links=True,
+            attach_files=True,
+            add_reactions=True,
+            use_external_emojis=True,
+            use_external_stickers=True,
+            read_message_history=True,
+            create_public_threads=True,
+            create_private_threads=True,
+            send_messages_in_threads=True,
+            manage_channels=True,
+            manage_threads=True,
+            mention_everyone=True
+        )
+
         for role_id in roles:
             role = interaction.guild.get_role(role_id)
             if role:
