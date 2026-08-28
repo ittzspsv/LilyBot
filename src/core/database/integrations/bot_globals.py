@@ -510,11 +510,18 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
             (guild_id, channel_type, channel_id),
         )
 
-    async def set_webhook(self, guild_id: int, channel_type ,webhook_url: str) -> None:
+    async def set_webhook(
+        self,
+        guild_id: int,
+        channel_type: str,
+        webhook_url: str
+    ) -> None:
         await self.execute(
             """
-            INSERT OR IGNORE INTO guild_webhooks (guild_id, channel_type, webhook_url)
+            INSERT INTO guild_webhooks (guild_id, channel_type, webhook_url)
             VALUES (?, ?, ?)
+            ON CONFLICT (guild_id, channel_type)
+            DO UPDATE SET webhook_url = excluded.webhook_url
             """,
             (guild_id, channel_type, webhook_url),
         )
