@@ -680,6 +680,13 @@ class RankConfigureModal(discord.ui.Modal):
             "Also All of the previously configured ranks will be cleared"
         )
 
+        self.rank_display = discord.ui.TextDisplay(
+            content=(
+                "Current Rank Hierarchy of this server is\n"
+                + "\n".join(f"<@&{role}>" for role in roles)
+            )
+        )
+
         self.rank_roles = discord.ui.Label(
             text="Rank Roles",
             description="Select your rank roles",
@@ -691,6 +698,7 @@ class RankConfigureModal(discord.ui.Modal):
         )
 
         self.add_item(self.text)
+        self.add_item(self.rank_display)
         self.add_item(self.rank_roles)
 
     async def on_submit(
