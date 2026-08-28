@@ -270,7 +270,6 @@
         line-height: 1.375rem;
       }
 
-      /* ===== MESSAGE LIST ===== */
       #message-list {
         display: flex;
         flex-direction: column;
@@ -387,10 +386,6 @@
       .msg-group.compact .compact-timestamp {
         display: block;
       }
-
-      /* reply reference - sits as its own full-width row above the
-         avatar/name row, indented to align with the display name so
-         the avatar always lines up with the name/role-icon row below it */
       .msg-reply-ref {
         display: flex;
         align-items: center;
@@ -510,7 +505,6 @@
         vertical-align: middle;
       }
 
-      /* ===== ATTACHMENTS ===== */
       .msg-attachments {
         display: flex;
         flex-wrap: wrap;
@@ -634,7 +628,6 @@
         height: 16px;
       }
 
-      /* ===== EMBED ===== */
       .msg-embed {
         display: flex;
         margin-top: 6px;
@@ -676,6 +669,9 @@
         font-size: 13px;
         color: var(--text-secondary);
         line-height: 1.3;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        overflow-wrap: anywhere;
       }
       .msg-embed-thumb {
         width: 72px;
@@ -814,7 +810,6 @@
         opacity: 0.5;
       }
 
-      /* ===== TOAST ===== */
       #toast {
         position: fixed;
         bottom: 24px;
@@ -850,7 +845,6 @@
         flex-shrink: 0;
       }
 
-      /* ===== LIGHTBOX ===== */
       #lightbox {
         position: fixed;
         inset: 0;
@@ -894,7 +888,6 @@
         height: 20px;
       }
 
-      /* highlight flash for jump-to-reply */
       .msg-group.flash {
         animation: flash-bg 1.1s ease;
       }
@@ -907,7 +900,6 @@
         }
       }
 
-      /* ===== SIDEBAR BACKDROP (mobile overlay dimmer) ===== */
       #sidebar-backdrop {
         display: none;
         position: fixed;
@@ -923,7 +915,6 @@
         pointer-events: auto;
       }
 
-      /* ===== MOBILE ===== */
       @media (max-width: 768px) {
         html,
         body {
@@ -1055,7 +1046,6 @@
           height: 56px;
         }
 
-        /* larger, thumb-friendly tap targets */
         .member-row {
           padding: 10px 8px;
         }
@@ -1358,7 +1348,7 @@
         }
 
         function showTooltip(targetEl, text) {
-          if (isMobile()) return; // avoid stuck hover tooltips on touch
+          if (isMobile()) return;
           var tip = ensureTooltip();
           tip.textContent = text;
           var rect = targetEl.getBoundingClientRect();
@@ -1454,6 +1444,16 @@
           if (c) return { label: "#" + c, resolved: true };
           return { label: "#unknown-channel", resolved: false };
         }
+
+        function customEmojiUrl(id, animated) {
+          return (
+            "https://cdn.discordapp.com/emojis/" +
+            id +
+            (animated ? ".gif" : ".png") +
+            "?size=48"
+          );
+        }
+
         function renderMessageContent(raw) {
           if (!raw) return "";
 
@@ -1490,6 +1490,21 @@
                   '" target="_blank" rel="noopener noreferrer">' +
                   escapeHtml(url) +
                   "</a>",
+              );
+            },
+          );
+
+          text = text.replace(
+            /&lt;(a?):([a-zA-Z0-9_]+):(\d+)&gt;/g,
+            function (m, animatedFlag, name, id) {
+              return stash(
+                '<img class="custom-emoji" src="' +
+                  escapeHtml(customEmojiUrl(id, animatedFlag === "a")) +
+                  '" alt=":' +
+                  escapeHtml(name) +
+                  ':" title=":' +
+                  escapeHtml(name) +
+                  ':" loading="lazy" />',
               );
             },
           );
@@ -1682,18 +1697,20 @@
           if (embed.title) {
             var title = document.createElement("div");
             title.className = "msg-embed-title" + (embed.url ? "" : " no-link");
-            title.textContent = embed.title;
+            title.innerHTML = renderMessageContent(embed.title);
             if (embed.url) {
               title.addEventListener("click", function () {
                 openAttachment(embed.url);
               });
             }
+            renderMentionClickHandlers(title);
             textCol.appendChild(title);
           }
           if (embed.description) {
             var desc = document.createElement("div");
             desc.className = "msg-embed-desc";
-            desc.textContent = embed.description;
+            desc.innerHTML = renderMessageContent(embed.description);
+            renderMentionClickHandlers(desc);
             textCol.appendChild(desc);
           }
 
