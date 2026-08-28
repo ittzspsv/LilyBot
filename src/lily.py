@@ -17,7 +17,7 @@ class Lily(commands.Bot):
         intents = discord.Intents.all() 
         intents.presences = False
         intents.members = False
-        intents.message_content = False
+        intents.message_content = True
 
         self.lily_session = None
         self.db: Optional[BotGlobalsDatabaseAccess] = None
@@ -59,6 +59,23 @@ class Lily(commands.Bot):
         if bot.user is None:
             return []
 
+        if message.guild is None:
+            return []
+
+        if self.db is None:
+            return []
+
+        prefix = self.db.get_prefix_member(
+            message.author.id,
+            message.guild.id
+        )
+
+        if prefix is None:
+            return self.db.get_prefix(message.guild.id)
+
+        return prefix
+
+        # Prefix when there is no message content intent. (Use this if necessary :)
         mention = re.escape(bot.user.mention)
 
         match = re.match(
