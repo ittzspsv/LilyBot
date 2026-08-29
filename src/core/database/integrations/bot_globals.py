@@ -589,26 +589,34 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
     async def remove_channel(
         self,
         guild_id: int,
-        channel_id: int,
+        channel_id: Optional[int] = None,
         channel_type: Optional[str] = None,
     ) -> None:
+        if channel_id is None and channel_type is None:
+            raise ValueError("remove_channel requires at least one of channel_id or channel_type")
+
         guild = self.cache.get(guild_id)
         if guild:
             channels = guild.get("channels", {})
-            if channel_type:
+
+            if channel_type and channel_id:
                 if channel_type in channels:
                     channels[channel_type] = [
                         c for c in channels[channel_type] if c != channel_id
                     ]
                     if not channels[channel_type]:
                         del channels[channel_type]
-            else:
+
+            elif channel_id:
                 for ctype in list(channels.keys()):
                     channels[ctype] = [c for c in channels[ctype] if c != channel_id]
                     if not channels[ctype]:
                         del channels[ctype]
 
-        if channel_type:
+            elif channel_type:
+                channels.pop(channel_type, None)
+
+        if channel_type and channel_id:
             await self.execute(
                 """
                 DELETE FROM guild_channels
@@ -616,10 +624,15 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
                 """,
                 (guild_id, channel_id, channel_type),
             )
-        else:
+        elif channel_id:
             await self.execute(
                 "DELETE FROM guild_channels WHERE guild_id = ? AND channel_id = ?",
                 (guild_id, channel_id),
+            )
+        elif channel_type:
+            await self.execute(
+                "DELETE FROM guild_channels WHERE guild_id = ? AND channel_type = ?",
+                (guild_id, channel_type),
             )
 
     async def remove_permission(
@@ -1138,7 +1151,6 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
             return None
 
         return dict(row)
-
 
     async def delete_case(self, case_id: int) -> Dict[str, Any]:
         if not case_id:
