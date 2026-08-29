@@ -6,6 +6,11 @@ import json
 import discord, discord.app_commands as app_commands
 
 from src.core.features.ticketing.controller.lily_ticketing_controller import *
+from src.core.features.ticketing.components.LilyTicketToolComponents import TicketList
+
+import logging
+
+logger = logging.getLogger("lily")
 
 class LilyTicketTool(commands.Cog):
     def __init__(self, bot):
@@ -131,6 +136,26 @@ class LilyTicketTool(commands.Cog):
             embed=simple_embed("Ticket panel configuration has been updated."),
             ephemeral=True,
         )
+
+
+    @commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
+    @app_permission(command_name="ticket_retrieve")
+    @app_commands.guild_only()
+    @ticket.command(name="retrieve", description="Retrieve all tickets (can be filtered)")
+    async def ticket_retrieve(self, interaction: discord.Interaction):
+        assert interaction.guild is not None
+
+        ticket_results = await self.bot.db.get_ticket_logs(guild_id=interaction.guild.id)
+        ticket_types = await self.bot.db.get_ticket_types(interaction.guild.id)
+        guild_avatar = interaction.guild.icon.url if interaction.guild.icon else None
+        try:
+            await interaction.response.send_message(
+                view=TicketList(ticket_results, guild_avatar=guild_avatar, ticket_types=ticket_types),
+                ephemeral=True
+            )
+        except Exception:
+            logger.exception("Failed to send ticket list view")
+
 
 
 async def setup(bot):
