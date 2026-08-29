@@ -551,20 +551,3 @@ async def ticket_stats(interaction: discord.Interaction, member: discord.Member)
     embed.set_image(url=img['border'])
 
     await interaction.response.send_message(embed=embed)
-    
-async def ticket_retrieve(interaction: discord.Interaction, member_id: int):
-        if interaction.guild is None:
-            return
-
-        bot_db = cast("Lily", interaction.client).db
-        assert bot_db is not None
-        result: List[Dict[str, Any]] = await bot_db.get_member_ticket_logs(interaction.guild.id, member_id)
-
-        if len(result) <= 0:
-            await interaction.response.send_message(
-                embed=simple_embed(
-                    "No ticket logs found!", 'cross'
-                )
-            )
-
-            return
