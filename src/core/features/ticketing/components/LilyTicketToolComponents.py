@@ -1,9 +1,13 @@
-from typing import Dict, List, Optional, cast
+from __future__ import annotations
+
+from typing import Dict, List, Optional, cast, Any, TYPE_CHECKING
 import re
 
 import discord
 from discord.ext import commands
 from discord.ext.commands import MemberConverter
+from datetime import datetime
+from src.core.configs.sBotDetails import emoji
 
 from src.core.configs.sBotDetails import (
     emoji,
@@ -28,6 +32,9 @@ from src.core.features.moderation.controller.lily_moderation_controller import (
 from ..classes.ticketing_classes import (
     DatabaseAccess,
 )
+
+if TYPE_CHECKING:
+    from src.lily import Lily
 
 bot = None
 
@@ -1175,3 +1182,251 @@ class TicketLogDirectMessage(discord.ui.LayoutView):
         )
 
         self.add_item(container)
+
+class TicketList(discord.ui.LayoutView):
+    def __init__(
+        self,
+        ticket_result: dict[str, Any],
+        ticket_types: List[str],
+        *,
+        opened_user_id: int | None = None,
+        staff_handled: int | None = None,
+        ticket_type: str | None = None,
+        guild_avatar: str | None = None
+    ) -> None:
+        super().__init__(timeout=None)
+
+        self.page = ticket_result["page"]
+        self.max_page = ticket_result["max_page"]
+        self.total_count = ticket_result["total_count"]
+        self.ticket_types = ticket_types
+        self.opened_user_id = opened_user_id
+        self.staff_handled = staff_handled
+        self.ticket_type = ticket_type
+        self.guild_avatar: str | None = guild_avatar
+
+        self.ticket_results = ticket_result["results"]
+        self.ticket_sections: List[discord.ui.Section] = []
+
+        for result in self.ticket_results:
+            retrieve_ticket = discord.ui.Button(
+                style=discord.ButtonStyle.secondary,
+                emoji=emoji["paper_clip"],
+                custom_id=str(result["id"]),
+            )
+    
+            retrieve_ticket.callback = self.retrieve_ticket_callback
+
+            self.ticket_sections.append(
+                discord.ui.Section(
+                    discord.ui.TextDisplay(
+                        content=f"### {result['ticket_type'].replace("_", " ").title()} | <@{result['opened_user_id']}>"
+                    ),
+                    discord.ui.TextDisplay(
+                        content=f"- {emoji["staff"]} Staff Handled: <@{result['staff_handled']}>\n- {emoji["clock"]} Timestamp: <t:{int(datetime.fromisoformat(result['timestamp']).timestamp())}:f>"
+                    ),
+                    accessory=retrieve_ticket
+                )
+            )
+
+        self.prev_button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            emoji=emoji["left"],
+            disabled=not ticket_result["has_prev"],
+        )
+        self.prev_button.callback = self.on_prev
+
+        self.page_indicator = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label=f"{self.page} / {self.max_page}",
+            disabled=True,
+        )
+
+        self.next_button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            emoji=emoji["right"],
+            disabled=not ticket_result["has_next"],
+        )
+        self.next_button.callback = self.on_next
+
+        self.container = discord.ui.Container(
+            discord.ui.Section(
+                discord.ui.TextDisplay(content="## Ticket Logs"),
+                discord.ui.TextDisplay(content="- Displaying All Ticket Logs Available on this server."),
+                discord.ui.TextDisplay(content=f"- Total Tickets: {self.total_count}"),
+                accessory=discord.ui.Thumbnail(
+                    media=guild_avatar or (
+                        "https://media.discordapp.net/attachments/1510416807847133274/1518277154889269248/Kaede.png?ex=6a93a409&is=6a925289&hm=3daa457e8c1924deb10c3b367bad064bd538b61ab408b5cb77629864a8aca4d3&=&format=webp&quality=lossless"
+                    ),
+                ),
+            ),
+            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+            *self.ticket_sections,
+            discord.ui.ActionRow(self.prev_button, self.page_indicator, self.next_button),
+        )
+
+        self.user_select = discord.ui.UserSelect(
+            placeholder="Filter based on Ticket Opener",
+            min_values=0,
+            max_values=1
+        )
+
+        self.user_select.callback = self.default_selector_callback
+
+        self.staff_select = discord.ui.UserSelect(
+            placeholder="Filter based on Staffs Handled",
+            min_values=0,
+            max_values=1
+        )
+
+        self.staff_select.callback = self.default_selector_callback
+
+
+        type_options = [
+            discord.SelectOption(label="All Types", value="__all__", default=self.ticket_type is None)
+        ]
+        for t in self.ticket_types:
+            type_options.append(
+                discord.SelectOption(
+                    label=t.replace("_", " ").title(),
+                    value=t,
+                    default=t == self.ticket_type,
+                )
+            )
+
+        self.ticket_type_select = discord.ui.Select(
+            placeholder="Filter based on Ticket Type",
+            min_values=1,
+            max_values=1,
+            options=type_options,
+        )
+
+        self.ticket_type_select.callback = self.default_selector_callback
+
+        self.apply_filter_btn = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label="Apply Filter"
+        )
+        self.apply_filter_btn.callback = self.on_apply_filter
+
+        self.filter_container = discord.ui.Container(
+            discord.ui.TextDisplay(content="### Ticket Filters"),
+            discord.ui.ActionRow(
+                self.user_select
+            ),
+            discord.ui.ActionRow(
+                self.staff_select
+            ),
+            discord.ui.ActionRow(
+                self.ticket_type_select
+            ),
+            discord.ui.ActionRow(
+                self.apply_filter_btn
+            )
+        )
+
+        self.add_item(self.container)
+        self.add_item(self.filter_container)
+
+    async def on_prev(self, interaction: discord.Interaction) -> None:
+        self.page -= 1
+        await self.refresh(interaction)
+
+    async def on_next(self, interaction: discord.Interaction) -> None:
+        self.page += 1
+        await self.refresh(interaction)
+
+    async def default_selector_callback(self, interaction: discord.Interaction):
+        await interaction.response.send_message(content=f"{emoji["verified"]}", ephemeral=True)
+
+    async def retrieve_ticket_callback(self, interaction: discord.Interaction) -> None:
+        assert interaction.data is not None
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+        assert interaction.custom_id is not None
+        assert interaction.guild is not None
+        ticket_id = int(interaction.custom_id)
+
+        result = await bot_db.get_ticket_log(
+            ticket_id,
+            interaction.guild.id
+        )
+
+        if result is None:
+            await interaction.response.send_message(
+                f"Ticket #{ticket_id} could not be found.",
+                ephemeral=True,
+            )
+            return
+
+        embed = discord.Embed(
+            title="Ticket Information",
+            description=f"Showing ticket information for #{ticket_id}",
+            color=discord.Color.from_rgb(255, 255, 255),
+        )
+
+        embed.add_field(
+            name="Opened By",
+            value=f"<@{result['opened_user_id']}>",
+            inline=False,
+        )
+        embed.add_field(
+            name="Staff Handled",
+            value=f"<@{result['staff_handled']}>" if result["staff_handled"] else "*Unassigned*",
+            inline=False,
+        )
+        embed.add_field(
+            name="Ticket Type",
+            value=result["ticket_type"].replace("_", " ").title(),
+            inline=False,
+        )
+        embed.add_field(
+            name="Timestamp",
+            value=f"<t:{int(datetime.fromisoformat(result['timestamp']).timestamp())}:f>",
+            inline=False,
+        )
+        embed.add_field(
+            name="Reason",
+            value=result["reason"] or "*No reason provided*",
+            inline=False,
+        )
+
+        if result["transcripts_reference"] is not None:
+            embed.add_field(
+                name="Transcript Reference",
+                value=str(result["transcripts_reference"]),
+                inline=False,
+            )
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def on_apply_filter(self, interaction: discord.Interaction) -> None:
+        self.opened_user_id = self.user_select.values[0].id if self.user_select.values else None
+        self.staff_handled = self.staff_select.values[0].id if self.staff_select.values else None
+        chosen_type = self.ticket_type_select.values[0] if self.ticket_type_select.values else "__all__"
+        self.ticket_type = None if chosen_type == "__all__" else chosen_type
+        self.page = 1
+        await self.refresh(interaction)
+
+    async def refresh(self, interaction: discord.Interaction) -> None:
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+        assert interaction.guild is not None
+        ticket_result = await bot_db.get_ticket_logs(
+            interaction.guild.id,
+            opened_user_id=self.opened_user_id,
+            staff_handled=self.staff_handled,
+            ticket_type=self.ticket_type,
+            page=self.page,
+        )
+
+        guild_avatar = interaction.guild.icon.url if interaction.guild.icon else None
+        new_view = TicketList(
+            ticket_result,
+            self.ticket_types,
+            opened_user_id=self.opened_user_id,
+            staff_handled=self.staff_handled,
+            ticket_type=self.ticket_type,
+            guild_avatar=guild_avatar
+        )
+        await interaction.response.edit_message(view=new_view)
