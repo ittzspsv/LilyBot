@@ -888,5 +888,53 @@ class LilyUtility(commands.Cog):
             ephemeral=True
         )
 
+    @commands.hybrid_command(
+        name="myprefix",
+        description="Get your bot prefix assigned to this server"
+    )
+    async def get_my_prefix(
+        self,
+        ctx: commands.Context,
+        prefix: str | None = None
+    ):
+        if ctx.guild is None:
+            await ctx.reply(
+                embed=simple_embed(
+                    "You can only use this command inside a guild!"
+                )
+            )
+            return
+
+        bot_db: BotGlobalsDatabaseAccess = self.bot.db
+
+        if prefix is None:
+            prefix = bot_db.get_prefix_member(
+                ctx.author.id,
+                ctx.guild.id
+            )
+
+            if prefix:
+                await ctx.reply(f"Your prefix is `{prefix}`")
+            else:
+                await ctx.reply(
+                    f"You haven't configured your prefix yet. "
+                    f"Hence the default prefix for this server is "
+                    f"`{bot_db.get_prefix(ctx.guild.id)}`"
+                )
+        else:
+            stored_prefix = prefix if len(prefix) == 1 else prefix + " "
+
+            await bot_db.set_prefix_member(
+                ctx.author.id,
+                ctx.guild.id,
+                stored_prefix
+            )
+
+            await ctx.reply(
+                embed=simple_embed(
+                    f"Successfully assigned prefix `{prefix}` for you!"
+                )
+            )
+
 async def setup(bot):
     await bot.add_cog(LilyUtility(bot))
