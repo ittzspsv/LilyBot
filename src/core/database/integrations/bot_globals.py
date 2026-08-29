@@ -1308,32 +1308,89 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
             "transcripts_reference": row["transcripts_reference"],
         }
 
-    async def get_member_ticket_logs(
-        self, guild_id: int, member_id: int
-    ) -> list[dict[str, Any]]:
+    async def get_ticket_logs(
+        self,
+        guild_id: int,
+        *,
+        opened_user_id: int | None = None,
+        staff_handled: int | None = None,
+        ticket_type: str | None = None,
+        page: int = 1,
+        page_size: int = 3,
+    ) -> dict[str, Any]:
+        if page < 1:
+            raise ValueError("page must be >= 1")
+        if page_size < 1:
+            raise ValueError("page_size must be >= 1")
+
+        conditions = ["guild_id = ?"]
+        params: list[Any] = [guild_id]
+
+        if opened_user_id is not None:
+            conditions.append("opened_user_id = ?")
+            params.append(opened_user_id)
+
+        if staff_handled is not None:
+            conditions.append("staff_handled = ?")
+            params.append(staff_handled)
+
+        if ticket_type is not None:
+            conditions.append("ticket_type = ?")
+            params.append(ticket_type)
+
+        where_clause = " AND ".join(conditions)
+
+        count_row = await self.fetch_one(
+            f"SELECT COUNT(*) AS total FROM ticket_logs WHERE {where_clause}",
+            tuple(params),
+        )
+        total_count = count_row["total"] if count_row is not None else 0
+        max_page = max(1, -(-total_count // page_size))  # ceil division
+
+        offset = (page - 1) * page_size
+
+        query = f"""
+            SELECT id, opened_user_id, staff_handled, ticket_type, timestamp
+            FROM ticket_logs
+            WHERE {where_clause}
+            ORDER BY id DESC
+            LIMIT ? OFFSET ?
+        """
+        rows = await self.fetch_all(query, tuple(params) + (page_size + 1, offset))
+
+        has_next = len(rows) > page_size
+        rows = rows[:page_size]
+
+        return {
+            "results": [
+                {
+                    "id": row["id"],
+                    "opened_user_id": row["opened_user_id"],
+                    "staff_handled": row["staff_handled"],
+                    "ticket_type": row["ticket_type"],
+                    "timestamp": row["timestamp"],
+                }
+                for row in rows
+            ],
+            "page": page,
+            "has_prev": page > 1,
+            "has_next": has_next,
+            "total_count": total_count,
+            "max_page": max_page,
+        }
+
+    async def get_ticket_types(self, guild_id: int) -> List[str]:
         rows = await self.fetch_all(
             """
-            SELECT id, guild_id, opened_user_id, staff_handled, reason,
-                   ticket_type, timestamp, transcripts_reference
+            SELECT DISTINCT ticket_type
             FROM ticket_logs
-            WHERE guild_id = ? AND opened_user_id = ?
-            ORDER BY id DESC
+            WHERE guild_id = ?
+            AND ticket_type IS NOT NULL
             """,
-            (guild_id, member_id),
+            (guild_id,),
         )
-        return [
-            {
-                "id": row["id"],
-                "guild_id": row["guild_id"],
-                "opened_user_id": row["opened_user_id"],
-                "staff_handled": row["staff_handled"],
-                "reason": row["reason"],
-                "ticket_type": row["ticket_type"],
-                "timestamp": row["timestamp"],
-                "transcripts_reference": row["transcripts_reference"],
-            }
-            for row in rows
-        ]
+
+        return [row["ticket_type"] for row in rows]
 
     async def delete_ticket(self, ticket_id: int) -> None:
         await self.execute("DELETE FROM tickets WHERE ticket_id = ?", (ticket_id,))
