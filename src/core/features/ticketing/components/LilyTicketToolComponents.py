@@ -268,28 +268,19 @@ def build_ticket_summary(submission_json: dict) -> discord.Embed:
     roles = submission_json.get("ping_roles", [])
     ticket_mentions: str = " ".join(f"<@&{role_id}>" for role_id in roles) if roles else "No Mentions!"
 
-    embed = discord.Embed(
-        title="Ticket Summary",
-        description=f"**Type:** {ticket_name}",
-    )
+    description_parts: list[str] = [f"**Type:** {ticket_name}"]
 
     opener_details: dict = submission_json.get("opener", {}) or {}
 
     if opener_details:
-        embed.add_field(
-            name=f"Ticket Opener | {opener_details.get('member_id', 0)}",
-            value=(
-                f"- **ID**: {opener_details.get('member_id', 0)}\n"
-                f"- **Created on**: {opener_details.get('created_on')}\n"
-                f"- **Joined on**: {opener_details.get('joined_on')}"
-            ),
-            inline=False,
+        description_parts.append(
+            f"### Ticket Opener | {opener_details.get('member_id', 0)}\n"
+            f"- **ID**: {opener_details.get('member_id', 0)}\n"
+            f"- **Created on**: {opener_details.get('created_on')}\n"
+            f"- **Joined on**: {opener_details.get('joined_on')}"
         )
-        avatar = opener_details.get("avatar")
-        if avatar:
-            embed.set_thumbnail(url=avatar)
     else:
-        embed.add_field(name="Ticket Opener", value="User information unavailable", inline=False)
+        description_parts.append("### Ticket Opener\nUser information unavailable")
 
     field_data = submission_json.get("field_data", []) or []
 
@@ -301,25 +292,31 @@ def build_ticket_summary(submission_json: dict) -> discord.Embed:
         label = field.get("label", "label")
 
         if field_type in ("short", "long"):
-            embed.add_field(name=label, value=str(value), inline=False)
+            description_parts.append(f"### {label}\n{value}")
 
         elif field_type == "member":
             if isinstance(value, dict) and value.get("flag") == 0:
-                embed.add_field(
-                    name=f"{label} | {value['member_id']}",
-                    value=(
-                        f"- **ID**: {value['member_id']}\n"
-                        f"- **Created on**: {value['created_on']}\n"
-                        f"- **Joined on**: {value['joined_on']}"
-                    ),
-                    inline=False,
+                description_parts.append(
+                    f"### {label} | {value['member_id']}\n"
+                    f"- **ID**: {value['member_id']}\n"
+                    f"- **Created on**: {value['created_on']}\n"
+                    f"- **Joined on**: {value['joined_on']}"
                 )
             else:
                 username = value["username"] if isinstance(value, dict) else value
-                embed.add_field(name=label, value=str(username), inline=False)
+                description_parts.append(f"### {label}\n{username}")
 
         elif field_type == "role_select":
-            embed.add_field(name=label, value=" , ".join(value), inline=False)
+            description_parts.append(f"### {label}\n{' , '.join(value)}")
+
+    embed = discord.Embed(
+        title="Ticket Summary",
+        description="\n\n".join(description_parts),
+    )
+
+    avatar = opener_details.get("avatar")
+    if avatar:
+        embed.set_thumbnail(url=avatar)
 
     return embed
 
