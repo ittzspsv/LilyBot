@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import discord
 from discord.utils import MISSING
+from discord.ext import commands
 import src.core.configs.sBotDetails as config
 from ..embeds.blox_fruits_embed import build_win_loss_embed
 from ..utils.trade_calculator import win_or_lose
@@ -240,7 +241,7 @@ class FruitValueComponent(discord.ui.LayoutView):
             discord.ui.ActionRow(
                 discord.ui.Button(
                     label="Add Bot",
-                    url="https://discord.com/oauth2/authorize?client_id=1240222509811499050&permissions=140794709184&integration_type=0&scope=bot",
+                    url="https://discord.com/oauth2/authorize?client_id=1516297235384762489&permissions=2279554899373264&integration_type=0&scope=bot",
                     style=discord.ButtonStyle.link
                 )
             )  
@@ -331,7 +332,7 @@ class WinLossComponent(discord.ui.LayoutView):
             discord.ui.ActionRow(
                 discord.ui.Button(
                     label="Add Bot",
-                    url="https://discord.com/oauth2/authorize?client_id=1240222509811499050&permissions=140794709184&integration_type=0&scope=bot",
+                    url="https://discord.com/oauth2/authorize?client_id=1516297235384762489&permissions=2279554899373264&integration_type=0&scope=bot",
                     style=discord.ButtonStyle.link
                 )
             )  
@@ -359,7 +360,7 @@ class InviteView(discord.ui.View):
         self.add_item(
             discord.ui.Button(
                 label="Add Bot",
-                url="https://discord.com/oauth2/authorize?client_id=1240222509811499050&permissions=140794709184&integration_type=0&scope=bot",
+                url="https://discord.com/oauth2/authorize?client_id=1516297235384762489&permissions=2279554899373264&integration_type=0&scope=bot",
                 style=discord.ButtonStyle.link
             )
         )
@@ -372,7 +373,7 @@ class BloxFruitsDashboard(discord.ui.LayoutView):
             channel_types=[discord.ChannelType.text],
             min_values=1,
             max_values=1,
-            required=True,
+            required=False,
             placeholder="Choose the item values channel",
         )
 
@@ -380,7 +381,7 @@ class BloxFruitsDashboard(discord.ui.LayoutView):
             channel_types=[discord.ChannelType.text],
             min_values=1,
             max_values=1,
-            required=True,
+            required=False,
             placeholder="Choose the win-loss channel",
         )
 
@@ -411,6 +412,8 @@ class BloxFruitsDashboard(discord.ui.LayoutView):
         assert bot_db is not None
         assert interaction.guild is not None
 
+        await bot_db.remove_channel(interaction.guild.id, channel_type="bf_fruit_values")
+
         await bot_db.set_channel(
             interaction.guild.id,
             self.item_values.values[0].id,
@@ -418,13 +421,16 @@ class BloxFruitsDashboard(discord.ui.LayoutView):
         )
 
         await interaction.response.send_message(
-            embed=simple_embed(f"Successfully set item values channel to {self.item_values.values[0].mention}")
+            embed=simple_embed(f"Successfully set item values channel to {self.item_values.values[0].mention}"),
+            ephemeral=True
         )
 
     async def win_loss_callback(self, interaction: discord.Interaction):
         bot_db = cast("Lily", interaction.client).db
         assert bot_db is not None
         assert interaction.guild is not None
+
+        await bot_db.remove_channel(interaction.guild.id, channel_type="bf_win_loss")
 
         await bot_db.set_channel(
             interaction.guild.id,
@@ -433,5 +439,6 @@ class BloxFruitsDashboard(discord.ui.LayoutView):
         )
 
         await interaction.response.send_message(
-            embed=simple_embed(f"Successfully set win-loss channel to {self.win_loss.values[0].mention}")
+            embed=simple_embed(f"Successfully set win-loss channel to {self.win_loss.values[0].mention}"),
+            ephemeral=True
         )
