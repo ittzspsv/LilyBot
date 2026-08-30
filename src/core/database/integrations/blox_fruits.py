@@ -1,5 +1,5 @@
 import ast
-from ..sLilyDatabaseAccess import LilyDatabaseAccess
+from ..access import LilyDatabaseAccess
 from typing import Dict
 
 class BloxFruitsDatabase(LilyDatabaseAccess):

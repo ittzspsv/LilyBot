@@ -1,4 +1,4 @@
-from ..sLilyDatabaseAccess import LilyDatabaseAccess
+from ..access import LilyDatabaseAccess
 
 
 class LevelingManagement:
