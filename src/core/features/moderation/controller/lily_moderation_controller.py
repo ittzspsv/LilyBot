@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
 from src.core.database.integrations.bot_globals import BanLimitStatus
-from src.core.features.moderation.components.sLilyModerationComponents import (
+from src.core.features.moderation.components.lily_moderation_components import (
     CaseListView,
     CaseProofsView,
     build_ms_embed,

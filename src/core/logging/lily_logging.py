@@ -1,6 +1,6 @@
 from ..database.integrations.bot_globals import BotGlobalsDatabaseAccess
 from .embeds.logging_embeds import write_log_embed, moderation_embed
-from ..features.moderation.components.sLilyModerationComponents import action_log
+from ..features.moderation.components.lily_moderation_components import action_log
 
 from discord.ext import commands
 from datetime import datetime
@@ -8,7 +8,7 @@ from typing import Optional, Union, Sequence, List, Dict, Any
 from src.core.utils.embeds.sLilyEmbed import simple_embed
 from src.core.utils.lily_utility import utcnow
 from .components.logging_components import ProofComponentModal
-from src.core.features.moderation.components.sLilyModerationComponents import AppealButton
+from src.core.features.moderation.components.lily_moderation_components import AppealButton
 
 import discord
 import io

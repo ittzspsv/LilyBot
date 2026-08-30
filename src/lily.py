@@ -6,7 +6,7 @@ from discord.ext import commands, tasks
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
 from src.core.logging.lily_logging import LilyLoggingController
 from src.core.utils.embeds.sLilyEmbed import simple_embed
-from src.core.features.moderation.components.sLilyModerationComponents import AppealButton
+from src.core.features.moderation.components.lily_moderation_components import AppealButton
 from src.core.configs.path import CONFIG_DB
 import re
 

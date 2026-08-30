@@ -14,7 +14,7 @@ from src.core.configs.bot_details import (
     img,
 )
 
-from src.core.features.moderation.components.sLilyModerationComponents import (
+from src.core.features.moderation.components.lily_moderation_components import (
     CaseListView
 )
 

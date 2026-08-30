@@ -7,7 +7,7 @@ from enum import Enum
 
 from src.core.utils.components.sLIlyGlobalComponents import CommandInfo
 from src.core.utils.embeds.sLilyEmbed import simple_embed
-from src.core.features.moderation.components.sLilyModerationComponents import AppealForumCustomize, AppealMessageView
+from src.core.features.moderation.components.lily_moderation_components import AppealForumCustomize, AppealMessageView
 from src.core.features.permissions.lily_permissions import permission, app_permission
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
 from src.core.logging.lily_logging import LilyLoggingController
