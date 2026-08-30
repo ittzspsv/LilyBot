@@ -6,7 +6,7 @@ import json
 import discord, discord.app_commands as app_commands
 
 from src.core.features.ticketing.controller.lily_ticketing_controller import *
-from src.core.features.ticketing.components.LilyTicketToolComponents import TicketList
+from src.core.features.ticketing.components.lily_ticket_tool_components import TicketList
 
 import logging
 

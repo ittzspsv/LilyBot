@@ -18,7 +18,7 @@ from src.core.utils.embeds.sLilyEmbed import (
 from ..classes.ticketing_classes import (
     DatabaseAccess,
 )
-from ..components.LilyTicketToolComponents import (
+from ..components.lily_ticket_tool_components import (
     TicketComponentEmbed,
     TicketOpenerComponent,
     TicketSelectComponent,
