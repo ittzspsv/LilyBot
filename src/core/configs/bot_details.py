@@ -133,7 +133,8 @@ emoji = {
     "Werewolf": "<:Werewolf:1541880751551811584>",
     "WestDragon": "<:WestDragon:1541880754676572333>",
     "YellowLightning": "<:YellowLightning:1541880762939220111>",
-    "Yeti": "<:Yeti:1541880771659440190>"
+    "Yeti": "<:Yeti:1541880771659440190>",
+    "Magnet": "<:Magnet:1543549153689346048>"
 }
     
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import discord
 from discord.utils import MISSING
 from discord.ext import commands
-import src.core.configs.sBotDetails as config
+import src.core.configs.bot_details as config
 from ..embeds.blox_fruits_embed import build_win_loss_embed
 from ..utils.trade_calculator import win_or_lose
 from ..utils.trade_suggestor import trade_suggestor

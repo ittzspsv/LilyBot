@@ -11,7 +11,7 @@ import asyncio
 import logging
 from io import BytesIO
 from discord.ext import commands
-from src.core.configs.sBotDetails import img
+from src.core.configs.bot_details import img
 from typing import Optional, List, Dict, Any, cast, TYPE_CHECKING
 
 if TYPE_CHECKING:

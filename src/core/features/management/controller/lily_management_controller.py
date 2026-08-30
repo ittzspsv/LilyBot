@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ....database.integrations.bot_globals import BotGlobalsDatabaseAccess
-from src.core.configs.sBotDetails import emoji, img
+from src.core.configs.bot_details import emoji, img
 from src.core.utils.embeds.sLilyEmbed import simple_embed
 from ..types.staff_management_types import QuotaCheckBy
 from typing import Optional, cast, Final, TYPE_CHECKING

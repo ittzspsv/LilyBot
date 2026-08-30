@@ -1,5 +1,5 @@
 import discord
-import src.core.configs.sBotDetails as Configs
+import src.core.configs.bot_details as Configs
 import io
 from discord.ui import View, Button
 

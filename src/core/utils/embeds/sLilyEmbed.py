@@ -2,7 +2,7 @@ import discord
 import re
 from datetime import datetime
 from typing import Optional
-import src.core.configs.sBotDetails as Configs
+import src.core.configs.bot_details as Configs
 
 def ParseAdvancedEmbed(data: dict):
     content = data.get("content") or None

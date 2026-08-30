@@ -1,6 +1,6 @@
 import discord
 from discord.utils import MISSING
-import src.core.configs.sBotDetails as Config
+import src.core.configs.bot_details as Config
 
 from discord.ext import commands
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess

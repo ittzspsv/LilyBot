@@ -54,7 +54,6 @@ class BloxFruitsController:
         elif message.channel.id in bot.db.get_channels(message.guild.id, "bf_trading_channels"):
             await self.bf_automoderation(message, bot.db)
 
-
     async def fruit_value(self, message: discord.Message, bot: Any):
         item_name = re.sub(r"^(perm|permanent|fruit value of|value of|value)\s+", "", self.strip_mention(message.content, bot.user.id)).strip()
 
@@ -207,7 +206,6 @@ class BloxFruitsController:
 
             except Exception:
                 return
-
 
     async def trade_suggestor(self, message: discord.Message ,fruits, fruit_types):
         view = TradeSuggestorComponent(

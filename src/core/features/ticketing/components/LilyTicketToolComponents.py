@@ -7,9 +7,9 @@ import discord
 from discord.ext import commands
 from discord.ext.commands import MemberConverter
 from datetime import datetime
-from src.core.configs.sBotDetails import emoji
+from src.core.configs.bot_details import emoji
 
-from src.core.configs.sBotDetails import (
+from src.core.configs.bot_details import (
     emoji,
     img,
 )

@@ -28,7 +28,7 @@ from lavalink.errors import ClientError
 from lavalink.filters import LowPass
 from lavalink.server import LoadType
 
-import src.core.configs.sBotDetails as Configs
+import src.core.configs.bot_details as Configs
 
 url_rx = re.compile(r'https?://(?:www\.)?.+')
 Host = "lavalink.jirayu.net"

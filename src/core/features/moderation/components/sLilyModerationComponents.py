@@ -7,10 +7,10 @@ from datetime import datetime
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
 from src.core.logging.components.logging_components import ProofsComponentCommandModal
 
-import src.core.configs.sBotDetails as Config
+import src.core.configs.bot_details as Config
 import io
 from math import ceil
-from src.core.configs.sBotDetails import img, emoji
+from src.core.configs.bot_details import img, emoji
 import re
 
 if TYPE_CHECKING:
@@ -886,24 +886,35 @@ commands_list: Dict[str, Dict[str, str]] = {
 
 
 class PermissionConfigureModal(discord.ui.Modal):
-    allowed_roles = discord.ui.Label(
-        text='Allowed Roles',
-        description='Select the roles that you want to allow',
-        component=discord.ui.RoleSelect(
-            min_values=1,
-            max_values=25,
-            required=True
-        )
-    )
-
-    def __init__(self, command_name: str, app_permission: str) -> None:
+    def __init__(self, command_name: str, app_permission: str, roles: List[int]) -> None:
         super().__init__(title="Permission Configure")
 
         self.command_name = command_name
         self.app_permission = app_permission
+        default_values = []
+        for role in roles:
+            default_values.append(
+                discord.SelectDefaultValue(
+                    id=role,
+                    type=discord.SelectDefaultValueType.role
+                )
+            )
+
+        self.allowed_roles = discord.ui.Label(
+                text='Allowed Roles',
+                description='Select the roles that you want to allow',
+                component=discord.ui.RoleSelect(
+                    min_values=1,
+                    max_values=25,
+                    required=True,
+                    default_values=default_values
+                )
+            )
+
+        self.add_item(self.allowed_roles)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        bot = cast(Lily, interaction.client)
+        bot = cast("Lily", interaction.client)
         db = bot.db
 
         assert db is not None
@@ -923,6 +934,22 @@ class PermissionConfigureModal(discord.ui.Modal):
             ephemeral=True
         )
 
+class Confirm(discord.ui.View):
+    def __init__(self):
+        super().__init__()
+        self.value = None
+
+    @discord.ui.button(label='Confirm', style=discord.ButtonStyle.secondary)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        self.value = True
+        self.stop()
+
+    @discord.ui.button(label='Cancel', style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        self.value = False
+        self.stop()
 
 """ Moderation Dashboard """
 class ModerationDashboard(discord.ui.LayoutView):
@@ -946,9 +973,22 @@ class ModerationDashboard(discord.ui.LayoutView):
             label="Click to Configure"
         )
 
-        self.moderation_logging = discord.ui.Button(
+        self.appeal_handling_edit_btn = discord.ui.Button(
             style=discord.ButtonStyle.secondary,
-            label="Click to Configure"
+            label="Edit"
+        )
+
+        self.moderation_logging = discord.ui.ChannelSelect(
+            channel_types=[discord.ChannelType.text],
+            required=True,
+            min_values=1,
+            placeholder="Choose a channel",
+            max_values=1
+        )
+
+        self.moderation_logging_btn = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label="Edit"
         )
 
         self.appeal_handling_btn.callback = self.appeal_handling_btn_callback
@@ -982,11 +1022,65 @@ class ModerationDashboard(discord.ui.LayoutView):
     async def commands_select_callback(self, interaction: discord.Interaction):
         command_name = self.commands_select.values[0]
         app_permission = commands_list[command_name]["app_permission"]
+
+        """ Send the prefilled values """
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+        assert interaction.guild is not None
+
+        roles = bot_db.get_permission_roles(interaction.guild.id, app_permission)
         
-        await interaction.response.send_modal(PermissionConfigureModal(command_name, app_permission))
+        await interaction.response.send_modal(PermissionConfigureModal(command_name, app_permission, roles))
 
     async def appeal_handling_btn_callback(self, interaction: discord.Interaction):
-        ...
+        """ Check appropriate permissions before performing """
+
+        view = Confirm()
+
+        await interaction.response.send_message(
+            (
+                'This will create the following\n'
+                '- **Forums Channel** : A forum channel where the bot would recieve appeals from the member\n'
+                '- **Webhook**: A webhook will be created inside the forums channel where it will recieve messages from Users.\n'
+                '\n'
+                "-# Note: Please allow the bot to do this process on it`s own as It has to setup few things \n"
+                'Are you sure you have to proceed with this?'
+            ),
+            view=view,
+            ephemeral=True
+        )
+
+        await view.wait()
+        
+        if view.value is None:
+            await interaction.edit_original_response(
+                embed=simple_embed("Confirmation timed out.", 'cross'),
+                view=None,
+            )
+            return
+
+        if not view.value:
+            await interaction.edit_original_response(
+                embed=simple_embed('Process has been cancelled.', 'cross'),
+                view=None,
+            )
+            return
+
+        else:
+            pass
+            #await setup_mod_appeal(interaction)
 
     async def moderation_logging_callback(self, interaction: discord.Interaction):
-        ...
+        assert isinstance(self.moderation_logging, discord.ui.ChannelSelect)
+
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+        assert interaction.guild is not None
+
+        await bot_db.set_channel(
+            interaction.guild.id,
+            self.moderation_logging.values[0].id,
+            channel_type="logs_channel"
+        )
+
+        await interaction.response.send_message(embed=simple_embed(f"Successfully assigned logging channel to {self.moderation_logging.values[0].mention}"))

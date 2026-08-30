@@ -1,6 +1,6 @@
 import discord
 
-from src.core.configs.sBotDetails import emoji, img
+from src.core.configs.bot_details import emoji, img
 from discord.ext import commands
 from typing import Optional
 from datetime import datetime

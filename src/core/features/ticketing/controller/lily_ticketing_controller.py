@@ -9,7 +9,7 @@ from discord.ext import commands
 
 from typing import List, Dict, Any, TYPE_CHECKING, cast
 
-from src.core.configs.sBotDetails import img
+from src.core.configs.bot_details import img
 from src.core.utils.embeds.sLilyEmbed import (
     ParseAdvancedEmbed,
     simple_embed,

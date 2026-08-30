@@ -1,5 +1,5 @@
 import discord
-import src.core.configs.sBotDetails as config
+import src.core.configs.bot_details as config
 
 from src.core.utils.lily_utility import format_currency
 from typing import List

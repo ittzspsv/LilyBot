@@ -1,5 +1,5 @@
 import discord
-import src.core.configs.sBotDetails as Configs
+import src.core.configs.bot_details as Configs
 
 from typing import Dict, Optional
 from discord.ext import commands
