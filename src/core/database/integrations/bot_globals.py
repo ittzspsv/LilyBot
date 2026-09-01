@@ -981,70 +981,84 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         self,
         guild_id: int,
         target_user_id: int,
-        moderator_id: int,
+        *,
+        moderator_id: int | None = None,
         mod_type: str = "all",
+        page: int = 1,
+        page_size: int = 3,
     ) -> Dict[str, Any]:
-        """If there is a secondary guild id then we should fetch modlogs of that guild id than"""
+        """If there is a secondary guild id then we should fetch modlogs of that guild id instead"""
+        if page < 1:
+            raise ValueError("page must be >= 1")
+        if page_size < 1:
+            raise ValueError("page_size must be >= 1")
+
         _guild_id = self.get_secondary_guild_id(guild_id) or guild_id
 
-        base_params: list = [_guild_id, target_user_id]
+        conditions = ["guild_id = ?", "target_user_id = ?", "deleted = 0"]
+        params: list[Any] = [_guild_id, target_user_id]
 
-        base_condition = "WHERE guild_id = ? AND target_user_id = ? AND deleted = 0"
-        if moderator_id:
-            base_condition += " AND moderator_id = ?"
-            base_params.append(moderator_id)
+        if moderator_id is not None:
+            conditions.append("moderator_id = ?")
+            params.append(moderator_id)
 
         normalized_type = mod_type.lower()
-        type_filter = normalized_type != "all"
+        if normalized_type != "all":
+            conditions.append("lower(mod_type) = ?")
+            params.append(normalized_type)
 
-        count_params = base_params.copy()
-        count_query = f"SELECT COUNT(*) AS cnt FROM modlogs {base_condition}"
-        if type_filter:
-            count_query += " AND lower(mod_type) = ?"
-            count_params.append(normalized_type)
+        where_clause = " AND ".join(conditions)
 
-        count_row = await self.fetch_one(count_query, tuple(count_params))
-        total_count = count_row["cnt"] if count_row else 0
-        if not total_count:
-            return {"success": False, "message": "No logs found"}
-
-        type_rows = await self.fetch_all(
-            f"""
-            SELECT lower(mod_type) AS mod_type, COUNT(*) AS cnt
-            FROM modlogs {base_condition}
-            GROUP BY lower(mod_type)
-            """,
-            tuple(base_params),
+        count_row = await self.fetch_one(
+            f"SELECT COUNT(*) AS total FROM modlogs WHERE {where_clause}",
+            tuple(params),
         )
-        mod_type_counts = {r["mod_type"]: r["cnt"] for r in type_rows}
+        total_count = count_row["total"] if count_row is not None else 0
 
-        log_query = f"SELECT id, moderator_id, mod_type, reason, timestamp FROM modlogs {base_condition}"
-        log_params = base_params.copy()
-        if type_filter:
-            log_query += " AND lower(mod_type) = ?"
-            log_params.append(normalized_type)
-        log_query += " ORDER BY id DESC"
+        if not total_count:
+            return {
+                "success": False,
+                "message": "No logs found",
+                "results": [],
+                "page": page,
+                "has_prev": False,
+                "has_next": False,
+                "total_count": 0,
+                "max_page": 1,
+            }
 
-        log_rows = await self.fetch_all(log_query, tuple(log_params))
+        max_page = max(1, -(-total_count // page_size))
+        offset = (page - 1) * page_size
 
-        logs = []
-        for row in log_rows:
-            proofs_reference = await self.get_proof_references(_guild_id, case_id=row["id"])
-            logs.append({
-                "case_id": row["id"],
-                "moderator_id": row["moderator_id"],
-                "mod_type": row["mod_type"].lower(),
-                "reason": row["reason"],
-                "proofs_reference": proofs_reference,
-                "timestamp": row["timestamp"],
-            })
+        query = f"""
+            SELECT id, moderator_id, mod_type, reason, timestamp
+            FROM modlogs
+            WHERE {where_clause}
+            ORDER BY id DESC
+            LIMIT ? OFFSET ?
+        """
+        rows = await self.fetch_all(query, tuple(params) + (page_size + 1, offset))
+
+        has_next = len(rows) > page_size
+        rows = rows[:page_size]
 
         return {
             "success": True,
-            "total_logs": total_count,
-            "proofs_exists": any(log["proofs_reference"] for log in logs),
-            "counts": mod_type_counts,
-            "logs": logs,
+            "results": [
+                {
+                    "case_id": row["id"],
+                    "moderator_id": row["moderator_id"],
+                    "mod_type": row["mod_type"].lower(),
+                    "reason": row["reason"],
+                    "timestamp": row["timestamp"],
+                }
+                for row in rows
+            ],
+            "page": page,
+            "has_prev": page > 1,
+            "has_next": has_next,
+            "total_count": total_count,
+            "max_page": max_page,
         }
 
     async def fetch_moderation_leaderboard(
