@@ -344,7 +344,6 @@ class LilyModeration(commands.Cog):
         try:
             await mod_logs(
                 interaction,
-                target_user_id=target_id,
                 user=user,
                 moderator=moderator,
                 mod_type=mod_type.value
