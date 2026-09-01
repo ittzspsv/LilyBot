@@ -607,7 +607,6 @@ async def ms(
 
 async def mod_logs(
     interaction: discord.Interaction,
-    target_user_id: int,
     user: discord.Member | discord.User,
     moderator: discord.User | discord.Member | None = None,
     mod_type: str = "all"
@@ -625,20 +624,26 @@ async def mod_logs(
     assert bot.db is not None
     bot_db = bot.db
 
-    payload = {
-        "guild_id": interaction.guild.id,
-        "target_user_id": target_user_id,
-        "moderator_id": moderator.id if moderator else None,
-        "mod_type": mod_type
-    }
-
-    result = await bot_db.fetch_mod_logs(**payload)
+    result = await bot_db.fetch_mod_logs(
+        guild_id=interaction.guild.id,
+        target_user_id=user.id,
+        moderator_id=moderator.id if moderator else None,
+        mod_type=mod_type,
+    )
 
     if not result["success"]:
         await interaction.response.send_message(embed=simple_embed("No cases found.", 'cross'))
         return
 
-    view = CaseListView((user.display_name.title(), user.display_avatar.url), result, bot_db)
+    view = CaseListView(
+        (user.display_name.title(), user.display_avatar.url),
+        result,
+        bot_db,
+        guild_id=interaction.guild.id,
+        target_user_id=user.id,
+        moderator_id=moderator.id if moderator else None,
+        mod_type=mod_type,
+    )
     await interaction.response.send_message(view=view, allowed_mentions=discord.AllowedMentions.none())
 
 async def moderation_insights(

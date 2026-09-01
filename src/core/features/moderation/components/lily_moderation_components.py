@@ -6,10 +6,11 @@ from typing import Optional, cast, Any, TYPE_CHECKING, List, Dict, Tuple, Union
 from datetime import datetime
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
 from src.core.logging.components.logging_components import ProofsComponentCommandModal
+from src.core.features.permissions.lily_permissions import has_app_permission
 
 import src.core.configs.bot_details as Config
+import json
 import io
-from math import ceil
 from src.core.configs.bot_details import img, emoji
 import re
 
@@ -246,161 +247,145 @@ def build_ms_embed(
 
     return embeds
 
-class CaseListView(discord.ui.LayoutView):
-    PAGE_SIZE = 3
+class EditCaseModal(discord.ui.Modal):
+    def __init__(self,case_id: int, reason: str, _interaction: discord.Interaction) -> None:
+        super().__init__(title="Edit Reason")
+        self.reason = discord.ui.Label(
+            text="Reason",
+            description="The description for the case",
+            component=discord.ui.TextInput(
+                style=discord.TextStyle.short,
+                default=reason,
+                required=False
+            )
+        )
 
-    def __init__(
-        self,
-        user: Tuple[str, str],
-        case_list_data: Dict[str, Any],
-        db: BotGlobalsDatabaseAccess,
-        page: int = 0,
-    ) -> None:
-        super().__init__(timeout=300)
+        self.add_item(self.reason)
+        self.case_id = case_id
+        self._interaction = _interaction
 
-        self.user = user
-        self.case_list_data = case_list_data
-        self.db = db
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
 
+        assert isinstance(self.reason.component, discord.ui.TextInput)
+
+        result = await bot_db.edit_case(
+            interaction.user.id,
+            case_id=self.case_id,
+            case_statement=self.reason.component.value,
+            absolute=False
+        )
+
+        if not result["success"]:
+            await interaction.response.send_message(embed=simple_embed(result["message"], 'cross'), ephemeral=True)
+            return
+
+        assert interaction.guild is not None
+        updated_case_data = await bot_db.get_case(self.case_id)
+
+        if updated_case_data is None:
+            await interaction.response.send_message(embed=simple_embed(result["message"]), ephemeral=True)
+            return
+
+        new_view = CaseView(self.case_id, updated_case_data)
+
+        if self._interaction.message is not None:
+            await self._interaction.edit_original_response(view=new_view)
+
+        await interaction.response.send_message(embed=simple_embed(result["message"]), ephemeral=True)
+
+class CaseView(discord.ui.LayoutView):
+    def __init__(self, case_id: int, case_data: Dict[str, Any]) -> None:
+        super().__init__(timeout=None)
+
+        self.case_id = case_id
+        self.case_data = case_data
+
+        moderator_id = case_data["moderator_id"]
+        mod_type = case_data["mod_type"]
+        self.reason = case_data["reason"]
+        timestamp = case_data["timestamp"]
         self.channel = None
 
-        all_logs = self.case_list_data["logs"]
-        self.total_pages = max(1, ceil(len(all_logs) / self.PAGE_SIZE))
-        self.page = max(0, min(page, self.total_pages - 1))
+        try:
+            dt = datetime.fromisoformat(timestamp)
+        except Exception:
+            dt = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
+        ts_unix = int(dt.timestamp())
 
-        start = self.page * self.PAGE_SIZE
-        end = start + self.PAGE_SIZE
-        page_logs = all_logs[start:end]
+        raw_metadata = case_data.get("metadata")
+        try:
+            metadata: Dict[str, Any] = json.loads(raw_metadata) if raw_metadata else {}
+        except (TypeError, json.JSONDecodeError):
+            metadata = {}
 
-        case_summary = "\n".join(
-            f"> - {action.title()}s: **{count}**"
-            for action, count in case_list_data["counts"].items()
+
+        if metadata:
+            metadata_lines = "\n".join(
+                f"> - **{key.title()}**: {value}" for key, value in metadata.items()
+            )
+        else:
+            metadata_lines = "> - *No metadata available*"
+
+        self.edit_case = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            emoji=emoji["pencil"]
         )
 
-        total_logs = self.case_list_data["total_logs"]
+        self.get_proofs = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            emoji=emoji["paper_clip"]
+        )
 
-        case_info = discord.ui.Container(
+        self.edit_case.callback = self.edit_case_callback
+        self.get_proofs.callback = self.proofs_button_callback
+
+        case_overview = discord.ui.Container(
+            discord.ui.TextDisplay(
+                content=f"## {emoji['pin']} Case {case_id} | {mod_type.title() if mod_type else '*Unknown*'}"
+            ),
+            discord.ui.TextDisplay(
+                content=(
+                    f"> {Config.emoji['staff']} Moderator: <@{moderator_id}>\n"
+                    f"> {Config.emoji['clock']} Time: <t:{ts_unix}:f>"
+                )
+            ),
             discord.ui.Section(
-                discord.ui.TextDisplay(content=f"# {user[0]}'s Case List"),
-                discord.ui.TextDisplay(content=f"### Logs Summary\n{case_summary}"),
-                discord.ui.TextDisplay(content=f"### Total Logs\n- {total_logs}"),
-                accessory=discord.ui.Thumbnail(
-                    media=user[1],
-                ),
+                discord.ui.TextDisplay(content=f"> {Config.emoji['pencil']} Reason: {self.reason}\n"),
+                accessory=self.edit_case
+            ),
+            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+            discord.ui.TextDisplay(content=f"### Metadata\n{metadata_lines}"),
+            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+            discord.ui.Section(
+                discord.ui.TextDisplay(content=f"> {Config.emoji['logs']} Proofs\n"),
+                accessory=self.get_proofs
             ),
         )
+        self.add_item(case_overview)
 
-        cases: List[discord.ui.Item] = []
-
-        for log in page_logs:
-            ts: str = cast(str, log.get("timestamp"))
-
-            try:
-                dt = datetime.fromisoformat(ts)
-            except Exception:
-                dt = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
-
-            ts_unix = int(dt.timestamp())
-            case_id = log.get("case_id")
-
-            if len(log["proofs_reference"]) > 0:
-                proof_button: discord.ui.Button = discord.ui.Button(
-                    style=discord.ButtonStyle.secondary,
-                    emoji=emoji["paper_clip"],
-                    custom_id=f"case_proof:{case_id}",
-                )
-                proof_button.callback = self.proofs_button_callback
-
-                cases.append(
-                    discord.ui.Section(
-                        discord.ui.TextDisplay(
-                            content=(
-                                f"### {emoji["pin"]} Log #{case_id} • {log['mod_type'].title()}\n"
-                                f"> {Config.emoji['shield']} Moderator: <@{log['moderator_id']}>\n"
-                                f"> {Config.emoji['pencil']} Reason: {log['reason']}\n"
-                                f"> {Config.emoji['clock']} Time: <t:{ts_unix}:R>"
-                            )
-                        ),
-                        accessory=proof_button,
-                    )
-                )
-
-            else:
-                cases.append(
-                    discord.ui.TextDisplay(
-                    content=(
-                        f"### {emoji["pin"]} Log #{case_id} • {log['mod_type'].title()}\n"
-                        f"> {Config.emoji['shield']} Moderator: <@{log['moderator_id']}>\n"
-                        f"> {Config.emoji['pencil']} Reason: {log['reason']}\n"
-                        f"> {Config.emoji['clock']} Time: <t:{ts_unix}:R>"
-                    )
-                ))
-
-        case_list = discord.ui.Container(
-            discord.ui.TextDisplay(content="# Log's Overview"),
-            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
-            *cases,
-        )
-
-        self.add_item(case_info)
-        self.add_item(case_list)
-        self.add_item(self.pagination())
-
-    def pagination(self) -> discord.ui.ActionRow:
-        row = discord.ui.ActionRow()
-
-        prev_button: discord.ui.Button = discord.ui.Button(
-            style=discord.ButtonStyle.secondary,
-            emoji=emoji["left"],
-            disabled=self.page <= 0,
-        )
-        prev_button.callback = self.previous_button_callback
-        row.add_item(prev_button)
-
-        page_indicator: discord.ui.Button = discord.ui.Button(
-            label=f"Page {self.page + 1}/{self.total_pages}",
-            style=discord.ButtonStyle.secondary,
-            disabled=True,
-        )
-        row.add_item(page_indicator)
-
-        next_button: discord.ui.Button = discord.ui.Button(
-            style=discord.ButtonStyle.secondary,
-            emoji=emoji["right"],
-            disabled=self.page >= self.total_pages - 1,
-        )
-        next_button.callback = self.next_button_callback
-        row.add_item(next_button)
-
-        return row
-
-    async def previous_button_callback(self, interaction: discord.Interaction) -> None:
-        new_view = CaseListView(self.user, self.case_list_data, page=self.page - 1, db=self.db)
-        await interaction.response.edit_message(view=new_view, allowed_mentions=discord.AllowedMentions.none())
-
-    async def next_button_callback(self, interaction: discord.Interaction) -> None:
-        new_view = CaseListView(self.user, self.case_list_data, page=self.page + 1, db=self.db)
-        await interaction.response.edit_message(view=new_view, allowed_mentions=discord.AllowedMentions.none())
+    async def edit_case_callback(self, interaction: discord.Interaction):
+        if has_app_permission(interaction, command_name="case_edit"):
+            await interaction.response.send_modal(EditCaseModal(self.case_id, self.reason, interaction))
+        else:
+            await interaction.response.send_message(embed=simple_embed("Access denied!", 'cross'), ephemeral=True)
+            return
 
     async def proofs_button_callback(self, interaction: discord.Interaction) -> None:
         assert interaction.guild is not None
-        custom_id = interaction.custom_id
-        if custom_id is None:
-            return
 
-        case_id_str = custom_id.split(":", 1)[1] if ":" in custom_id else None
-        if case_id_str is None:
-            return
-        case_id = int(case_id_str)
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
 
-        proofs_references = await self.db.get_proof_references(interaction.guild.id, case_id=case_id)
+        proofs_references = await bot_db.get_proof_references(interaction.guild.id, case_id=self.case_id)
         if len(proofs_references) <= 0:
             await interaction.response.send_message(
                 embed=simple_embed("No Proofs Found for the given case id", 'cross'), ephemeral=True
             )
             return
 
-        logs_channel_id = self.db.get_channel(interaction.guild.id, "logs_channel")
+        logs_channel_id = bot_db.get_channel(interaction.guild.id, "logs_channel")
 
         await interaction.response.defer(ephemeral=True)
 
@@ -472,10 +457,168 @@ class CaseListView(discord.ui.LayoutView):
             return
 
         await interaction.followup.send(
-            content=f"Proofs for case `{case_id}`",
+            content=f"Proofs for case `{self.case_id}`",
             files=files,
             ephemeral=True
         )  
+
+class CaseListView(discord.ui.LayoutView):
+    def __init__(
+        self,
+        user: Tuple[str, str],
+        case_list_data: Dict[str, Any],
+        db: BotGlobalsDatabaseAccess,
+        *,
+        guild_id: int,
+        target_user_id: int,
+        moderator_id: int | None = None,
+        mod_type: str = "all",
+    ) -> None:
+        super().__init__(timeout=300)
+
+        self.user = user
+        self.case_list_data = case_list_data
+        self.db = db
+
+        self.guild_id = guild_id
+        self.target_user_id = target_user_id
+        self.moderator_id = moderator_id
+        self.mod_type = mod_type
+
+        self.channel = None
+
+        self.page = case_list_data["page"]
+        self.max_page = case_list_data["max_page"]
+        self.total_count = case_list_data["total_count"]
+        page_logs = case_list_data["results"]
+
+        case_info = discord.ui.Container(
+            discord.ui.Section(
+                discord.ui.TextDisplay(content=f"# {user[0]}'s Case List"),
+                discord.ui.TextDisplay(content=f"### Total Logs\n- {self.total_count}"),
+                accessory=discord.ui.Thumbnail(
+                    media=user[1],
+                ),
+            ),
+        )
+
+        cases: List[discord.ui.Item] = []
+
+        for log in page_logs:
+            ts: str = cast(str, log.get("timestamp"))
+
+            try:
+                dt = datetime.fromisoformat(ts)
+            except Exception:
+                dt = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
+
+            ts_unix = int(dt.timestamp())
+            case_id = log.get("case_id")
+
+            info_button: discord.ui.Button = discord.ui.Button(
+                style=discord.ButtonStyle.secondary,
+                emoji=emoji["paper_clip"],
+                custom_id=str(case_id),
+            )
+            info_button.callback = self.case_info_callback
+
+            cases.append(
+                discord.ui.Section(
+                    discord.ui.TextDisplay(
+                        content=(
+                            f"### {emoji["pin"]} Log #{case_id} • {log['mod_type'].title()}\n"
+                            f"> {Config.emoji['shield']} Moderator: <@{log['moderator_id']}>\n"
+                            f"> {Config.emoji['pencil']} Reason: {log['reason']}\n"
+                            f"> {Config.emoji['clock']} Time: <t:{ts_unix}:R>"
+                        )
+                    ),
+                    accessory=info_button,
+                )
+            )
+
+        case_list = discord.ui.Container(
+            discord.ui.TextDisplay(content="# Log's Overview"),
+            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+            *cases,
+        )
+
+        self.add_item(case_info)
+        self.add_item(case_list)
+        self.add_item(self.pagination())
+
+    def pagination(self) -> discord.ui.ActionRow:
+        row = discord.ui.ActionRow()
+
+        prev_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            emoji=emoji["left"],
+            disabled=not self.case_list_data["has_prev"],
+        )
+        prev_button.callback = self.previous_button_callback
+        row.add_item(prev_button)
+
+        page_indicator: discord.ui.Button = discord.ui.Button(
+            label=f"Page {self.page}/{self.max_page}",
+            style=discord.ButtonStyle.secondary,
+            disabled=True,
+        )
+        row.add_item(page_indicator)
+
+        next_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            emoji=emoji["right"],
+            disabled=not self.case_list_data["has_next"],
+        )
+        next_button.callback = self.next_button_callback
+        row.add_item(next_button)
+
+        return row
+
+    async def _refresh_page(self, interaction: discord.Interaction, new_page: int) -> None:
+        result = await self.db.fetch_mod_logs(
+            guild_id=self.guild_id,
+            target_user_id=self.target_user_id,
+            moderator_id=self.moderator_id,
+            mod_type=self.mod_type,
+            page=new_page,
+        )
+
+        new_view = CaseListView(
+            self.user,
+            result,
+            self.db,
+            guild_id=self.guild_id,
+            target_user_id=self.target_user_id,
+            moderator_id=self.moderator_id,
+            mod_type=self.mod_type,
+        )
+        await interaction.response.edit_message(view=new_view, allowed_mentions=discord.AllowedMentions.none())
+
+    async def previous_button_callback(self, interaction: discord.Interaction) -> None:
+        await self._refresh_page(interaction, self.page - 1)
+
+    async def next_button_callback(self, interaction: discord.Interaction) -> None:
+        await self._refresh_page(interaction, self.page + 1)
+
+    async def case_info_callback(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+        custom_id = interaction.custom_id
+        if custom_id is None:
+            return
+
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+
+        case_id = int(custom_id)
+        case_data = await bot_db.get_case(case_id)
+
+        if case_data is None:
+            await interaction.response.send_message(embed=simple_embed("Case not found", 'cross'), ephemeral=True)
+            return
+
+        view = CaseView(case_id, case_data)
+
+        await interaction.response.send_message(view=view, ephemeral=True)
 
 class AppealForumCustomize(discord.ui.Modal):
     name = discord.ui.Label(
@@ -858,7 +1001,6 @@ class AppealMessageView(discord.ui.LayoutView):
         self.container1 = discord.ui.Container(*components)
         self.add_item(self.container1)
 
-
 commands_list: Dict[str, Dict[str, str]] = {
     "ban": {"app_permission": "ban"},
     "quarantine": {"app_permission": "quarantine"},
@@ -883,7 +1025,6 @@ commands_list: Dict[str, Dict[str, str]] = {
     "appeal_accept": {"app_permission": "mod_appeal_handlers"},
     "appeal_reject": {"app_permission": "mod_appeal_handlers"},
 }
-
 
 class PermissionConfigureModal(discord.ui.Modal):
     def __init__(self, command_name: str, app_permission: str, roles: List[int]) -> None:
