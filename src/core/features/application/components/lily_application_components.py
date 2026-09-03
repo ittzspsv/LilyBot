@@ -1,10 +1,15 @@
 import discord
 import json
+import logging
 
 from typing import Dict, Any, List
 
 from ....database.integrations.bot_globals import BotGlobalsDatabaseAccess
 from src.core.utils.embeds.sLilyEmbed import simple_embed
+
+logger = logging.getLogger("lily")
+
+
 class CreateApplicationModal(discord.ui.Modal, title="Create Application"):
     def __init__(self, bot_db: BotGlobalsDatabaseAccess, application_groups: List[Dict[str, Any]]) -> None:
         super().__init__()
@@ -76,6 +81,10 @@ class CreateApplicationModal(discord.ui.Modal, title="Create Application"):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
+            logger.warning(
+                "CreateApplicationModal.on_submit called outside of a guild (user_id=%s)",
+                interaction.user.id if interaction.user else None,
+            )
             raise discord.app_commands.CheckFailure("This command can be only executed inside an guild")
 
         await interaction.response.defer()
@@ -127,42 +136,95 @@ class CreateApplicationModal(discord.ui.Modal, title="Create Application"):
             )
 
         except discord.Forbidden:
-            raise discord.app_commands.CheckFailure("I don't have permissions creating text channels.")
-        except Exception as e:
-            raise discord.app_commands.CheckFailure(f"Failed to create submission forms: {e}")
-        
-        selected_group_ids = [int(value) for value in self.app_groups.component.values]
-
-        application = await self.bot_db.app_management_db.create_application(
-            interaction.guild.id,
-            self.name.component.value,
-            self.description.component.value,
-            forum.id,
-            self.submit_btn_name.component.value
-        )
-
-        await self.bot_db.app_management_db.assign_groups(
-            interaction.guild.id,
-            application["id"],
-            selected_group_ids
-        )
-
-        await interaction.followup.send(
-            embed=discord.Embed(
-                color=16777215,
-                title=f"Successfully Created an Application with name **{self.name.component.value}**",
-                description=(
-                    f"- Created a submission forum: <#{forum.id}>.\n"
-                    "- Tags:\n"
-                    "  - Pending (don't rename or delete)\n"
-                    "  - Accepted\n"
-                    "  - Denied\n",
-                    "  - In Review\n"
-                    "- You can add more tags as needed.\n"
-                    "- **Pending** is used internally to auto-assign application submissions."
-                ),
+            logger.exception(
+                "Missing permissions to create submission forum in guild_id=%s",
+                interaction.guild.id,
             )
-        )
+            raise discord.app_commands.CheckFailure("I don't have permissions creating text channels.")
+        except discord.HTTPException:
+            logger.exception(
+                "Discord HTTP error while creating submission forum in guild_id=%s",
+                interaction.guild.id,
+            )
+            raise discord.app_commands.CheckFailure("Failed to create submission forms due to a Discord API error.")
+        except Exception as e:
+            logger.exception(
+                "Unexpected error while creating submission forum in guild_id=%s",
+                interaction.guild.id,
+            )
+            raise discord.app_commands.CheckFailure(f"Failed to create submission forms: {e}")
+
+        try:
+            selected_group_ids = [int(value) for value in self.app_groups.component.values]
+        except (TypeError, ValueError):
+            logger.exception(
+                "Failed to parse selected application group ids: %s",
+                self.app_groups.component.values,
+            )
+            await interaction.followup.send(
+                embed=simple_embed("Invalid application group selection.", 'cross')
+            )
+            return
+
+        try:
+            application = await self.bot_db.app_management_db.create_application(
+                interaction.guild.id,
+                self.name.component.value,
+                self.description.component.value,
+                forum.id,
+                self.submit_btn_name.component.value
+            )
+        except Exception:
+            logger.exception(
+                "Failed to create application record in database for guild_id=%s",
+                interaction.guild.id,
+            )
+            await interaction.followup.send(
+                embed=simple_embed("Failed to save the application. Please try again later.", 'cross')
+            )
+            return
+
+        try:
+            await self.bot_db.app_management_db.assign_groups(
+                interaction.guild.id,
+                application["id"],
+                selected_group_ids
+            )
+        except Exception:
+            logger.exception(
+                "Failed to assign groups %s to application_id=%s in guild_id=%s",
+                selected_group_ids,
+                application["id"],
+                interaction.guild.id,
+            )
+            await interaction.followup.send(
+                embed=simple_embed("Application was created, but assigning question groups failed.", 'cross')
+            )
+            return
+
+        try:
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    color=16777215,
+                    title=f"Successfully Created an Application with name **{self.name.component.value}**",
+                    description=(
+                        f"- Created a submission forum: <#{forum.id}>.\n"
+                        "- Tags:\n"
+                        "  - Pending (don't rename or delete)\n"
+                        "  - Accepted\n"
+                        "  - Denied\n",
+                        "  - In Review\n"
+                        "- You can add more tags as needed.\n"
+                        "- **Pending** is used internally to auto-assign application submissions."
+                    ),
+                )
+            )
+        except Exception:
+            logger.exception(
+                "Failed to send success confirmation for application_id=%s in guild_id=%s",
+                application["id"],
+                interaction.guild.id,
+            )
 
 class UpdateApplicationModal(discord.ui.Modal, title="Update Application"):
     def __init__(self, bot_db: BotGlobalsDatabaseAccess, application: Dict[str, Any]) -> None:
@@ -214,6 +276,10 @@ class UpdateApplicationModal(discord.ui.Modal, title="Update Application"):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
+            logger.warning(
+                "UpdateApplicationModal.on_submit called outside of a guild (user_id=%s)",
+                interaction.user.id if interaction.user else None,
+            )
             raise discord.app_commands.CheckFailure("This command can be only executed inside an guild")
 
         await interaction.response.defer()
@@ -221,28 +287,51 @@ class UpdateApplicationModal(discord.ui.Modal, title="Update Application"):
         assert isinstance(self.description.component, discord.ui.TextInput)
         assert isinstance(self.submit_btn_name.component, discord.ui.TextInput)
 
-        success = await self.bot_db.app_management_db.update_application(
-            interaction.guild.id,
-            self.application["id"],
-            self.name.component.value,
-            self.description.component.value,
-            self.submit_btn_name.component.value
-        )
+        try:
+            success = await self.bot_db.app_management_db.update_application(
+                interaction.guild.id,
+                self.application["id"],
+                self.name.component.value,
+                self.description.component.value,
+                self.submit_btn_name.component.value
+            )
+        except Exception:
+            logger.exception(
+                "Failed to update application_id=%s in guild_id=%s",
+                self.application["id"],
+                interaction.guild.id,
+            )
+            await interaction.followup.send(embed=simple_embed("Failed to update Application", 'cross'))
+            return
 
         if success:
             """ Update the application view """
-            application_view = await self.bot_db.app_management_db.get_application_with_view(
-                interaction.guild.id,
-                self.application["id"]
-            )
-            assert application_view is not None
+            try:
+                application_view = await self.bot_db.app_management_db.get_application_with_view(
+                    interaction.guild.id,
+                    self.application["id"]
+                )
+                assert application_view is not None
 
-            application = await self.bot_db.app_management_db.get_application(
-                interaction.guild.id,
-                self.application["id"]
-            )
+                application = await self.bot_db.app_management_db.get_application(
+                    interaction.guild.id,
+                    self.application["id"]
+                )
 
-            assert application is not None
+                assert application is not None
+            except Exception:
+                logger.exception(
+                    "Failed to fetch application/view data for application_id=%s in guild_id=%s after update",
+                    self.application["id"],
+                    interaction.guild.id,
+                )
+                await interaction.followup.send(
+                    embed=simple_embed(
+                        "Application was updated, but refreshing the application message failed.",
+                        'cross',
+                    )
+                )
+                return
 
             updated_view = ApplicationView(
                 self.bot_db,
@@ -251,11 +340,50 @@ class UpdateApplicationModal(discord.ui.Modal, title="Update Application"):
                 application
             )
 
-            channel = interaction.guild.get_channel(application_view["channel_id"])
-            if not isinstance(channel, discord.TextChannel):
-                channel = await interaction.guild.fetch_channel(application_view["channel_id"])
+            try:
+                channel = interaction.guild.get_channel(application_view["channel_id"])
+                if not isinstance(channel, discord.TextChannel):
+                    channel = await interaction.guild.fetch_channel(application_view["channel_id"])
+            except discord.NotFound:
+                logger.exception(
+                    "Application channel_id=%s no longer exists for application_id=%s in guild_id=%s",
+                    application_view["channel_id"],
+                    self.application["id"],
+                    interaction.guild.id,
+                )
+                await interaction.followup.send(embed=simple_embed("Application channel no longer exists.", 'cross'))
+                return
+            except discord.Forbidden:
+                logger.exception(
+                    "Missing permissions to fetch channel_id=%s for application_id=%s in guild_id=%s",
+                    application_view["channel_id"],
+                    self.application["id"],
+                    interaction.guild.id,
+                )
+                await interaction.followup.send(
+                    embed=simple_embed("I don't have permission to access the application channel.", 'cross')
+                )
+                return
+            except Exception:
+                logger.exception(
+                    "Unexpected error fetching channel_id=%s for application_id=%s in guild_id=%s",
+                    application_view["channel_id"],
+                    self.application["id"],
+                    interaction.guild.id,
+                )
+                await interaction.followup.send(
+                    embed=simple_embed("Failed to access the application channel.", 'cross')
+                )
+                return
 
             if not isinstance(channel, discord.TextChannel):
+                logger.warning(
+                    "Resolved channel_id=%s for application_id=%s in guild_id=%s is not a TextChannel (type=%s)",
+                    application_view["channel_id"],
+                    self.application["id"],
+                    interaction.guild.id,
+                    type(channel),
+                )
                 await interaction.followup.send(embed=simple_embed("Application channel no longer exists.", 'cross'))
                 return
 
@@ -263,12 +391,59 @@ class UpdateApplicationModal(discord.ui.Modal, title="Update Application"):
                 message = await channel.fetch_message(application_view["message_id"])
                 await message.edit(view=updated_view)
             except discord.NotFound:
+                logger.exception(
+                    "Application message_id=%s no longer exists in channel_id=%s for application_id=%s",
+                    application_view["message_id"],
+                    channel.id,
+                    self.application["id"],
+                )
                 await interaction.followup.send(embed=simple_embed("The application message no longer exists.", 'cross'))
                 return
+            except discord.Forbidden:
+                logger.exception(
+                    "Missing permissions to edit message_id=%s in channel_id=%s for application_id=%s",
+                    application_view["message_id"],
+                    channel.id,
+                    self.application["id"],
+                )
+                await interaction.followup.send(
+                    embed=simple_embed("I don't have permission to update the application message.", 'cross')
+                )
+                return
+            except Exception:
+                logger.exception(
+                    "Unexpected error editing message_id=%s in channel_id=%s for application_id=%s",
+                    application_view["message_id"],
+                    channel.id,
+                    self.application["id"],
+                )
+                await interaction.followup.send(
+                    embed=simple_embed("Failed to update the application message.", 'cross')
+                )
+                return
 
-            await interaction.followup.send(embed=simple_embed(f"Successfully updated {self.name.component.value}"))
+            try:
+                await interaction.followup.send(embed=simple_embed(f"Successfully updated {self.name.component.value}"))
+            except Exception:
+                logger.exception(
+                    "Failed to send update confirmation for application_id=%s in guild_id=%s",
+                    self.application["id"],
+                    interaction.guild.id,
+                )
         else:
-            await interaction.followup.send(embed=simple_embed("Failed to update Application", 'cross'))
+            logger.warning(
+                "update_application returned falsy success for application_id=%s in guild_id=%s",
+                self.application["id"],
+                interaction.guild.id,
+            )
+            try:
+                await interaction.followup.send(embed=simple_embed("Failed to update Application", 'cross'))
+            except Exception:
+                logger.exception(
+                    "Failed to send failure notice for application_id=%s in guild_id=%s",
+                    self.application["id"],
+                    interaction.guild.id,
+                )
 
 class ApplicationQuestionView(discord.ui.LayoutView):
     def __init__(
@@ -291,34 +466,51 @@ class ApplicationQuestionView(discord.ui.LayoutView):
 
         question_type: str = question["type"]
 
-        metadata: Dict[str, Any] = (
-            json.loads(question["metadata"])
-            if question["metadata"] is not None
-            else {}
-        )
-
+        try:
+            metadata: Dict[str, Any] = (
+                json.loads(question["metadata"])
+                if question["metadata"] is not None
+                else {}
+            )
+        except json.JSONDecodeError:
+            logger.exception(
+                "Failed to parse metadata JSON for question_id=%s in application_id=%s",
+                self.question_id,
+                self.application_id,
+            )
+            metadata = {}
 
         self.additional_component: discord.ui.Select | discord.ui.RadioGroup | None = None
 
-        if question_type == "selector":
-            options = metadata["options"]
-            self.additional_component = discord.ui.Select(
-                min_values=1,
-                placeholder="Select an Option...",
-                max_values=1,
-                options=[
-                    discord.SelectOption(label=option, value=option)
-                    for option in options
-                ]
+        try:
+            if question_type == "selector":
+                options = metadata["options"]
+                self.additional_component = discord.ui.Select(
+                    min_values=1,
+                    placeholder="Select an Option...",
+                    max_values=1,
+                    options=[
+                        discord.SelectOption(label=option, value=option)
+                        for option in options
+                    ]
+                )
+            elif question_type == "radio_button":
+                options = metadata["options"]
+                self.additional_component = discord.ui.RadioGroup(
+                    options=[
+                        discord.RadioGroupOption(label=option, value=option)
+                        for option in options
+                    ]
+                )
+        except (KeyError, TypeError):
+            logger.exception(
+                "Malformed metadata for question_id=%s (type=%s) in application_id=%s: %s",
+                self.question_id,
+                question_type,
+                self.application_id,
+                metadata,
             )
-        elif question_type == "radio_button":
-            options = metadata["options"]
-            self.additional_component = discord.ui.RadioGroup(
-                options=[
-                    discord.RadioGroupOption(label=option, value=option)
-                    for option in options
-                ]
-            )
+            self.additional_component = None
 
         if self.additional_component is not None:
             self.additional_component.callback = self.additional_components_callback
@@ -351,6 +543,10 @@ class ApplicationQuestionView(discord.ui.LayoutView):
 
     async def submit_button_callback(self, interaction: discord.Interaction):
         if self.additional_component is None:
+            logger.warning(
+                "submit_button_callback invoked with no additional_component for question_id=%s",
+                self.question_id,
+            )
             await interaction.response.send_message(
                 "Additional Components is None",
                 ephemeral=True,
@@ -362,6 +558,11 @@ class ApplicationQuestionView(discord.ui.LayoutView):
         elif isinstance(self.additional_component, discord.ui.RadioGroup):
             value = self.additional_component.value
         else:
+            logger.warning(
+                "Unexpected additional_component type=%s for question_id=%s",
+                type(self.additional_component),
+                self.question_id,
+            )
             return
 
         if value is None:
@@ -372,38 +573,107 @@ class ApplicationQuestionView(discord.ui.LayoutView):
             return
 
         self.submit_button.disabled = True
-        await interaction.response.edit_message(view=self)
 
-        await self.db.app_management_db.save_application_answer(
-            submission_id=self.submission_id,
-            group_id=self.group_id,
-            question_id=self.question_id,
-            answer_value=value,
-        )
+        try:
+            await interaction.response.edit_message(view=self)
+        except Exception:
+            logger.exception(
+                "Failed to disable submit button on message for question_id=%s",
+                self.question_id,
+            )
 
-        next_question = await self.db.app_management_db.get_unanswered_application_question(
-            self.submission_id
-        )
-
-        if next_question is None:
-            await self.db.app_management_db.update_submission_status(
+        try:
+            await self.db.app_management_db.save_application_answer(
+                submission_id=self.submission_id,
+                group_id=self.group_id,
+                question_id=self.question_id,
+                answer_value=value,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to save answer for question_id=%s in submission_id=%s",
+                self.question_id,
                 self.submission_id,
-                "completed"
             )
-            await interaction.followup.send(
-                content="Your application has been submitted successfully. Thank you!"
-            )
+            try:
+                await interaction.followup.send(
+                    content="Something went wrong saving your answer. Please try again.",
+                    ephemeral=True,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to notify user of save failure for question_id=%s in submission_id=%s",
+                    self.question_id,
+                    self.submission_id,
+                )
             return
 
-        await interaction.followup.send(
-            view=ApplicationQuestionView(
-                self.db,
-                next_question
+        try:
+            next_question = await self.db.app_management_db.get_unanswered_application_question(
+                self.submission_id
             )
-        )
+        except Exception:
+            logger.exception(
+                "Failed to fetch next unanswered question for submission_id=%s",
+                self.submission_id,
+            )
+            try:
+                await interaction.followup.send(
+                    content="Your answer was saved, but I couldn't load the next question. Please try again later.",
+                    ephemeral=True,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to notify user of next-question fetch failure for submission_id=%s",
+                    self.submission_id,
+                )
+            return
+
+        if next_question is None:
+            try:
+                await self.db.app_management_db.update_submission_status(
+                    self.submission_id,
+                    "completed"
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to mark submission_id=%s as completed",
+                    self.submission_id,
+                )
+
+            try:
+                await interaction.followup.send(
+                    content="Your application has been submitted successfully. Thank you!"
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to send completion message for submission_id=%s",
+                    self.submission_id,
+                )
+            return
+
+        try:
+            await interaction.followup.send(
+                view=ApplicationQuestionView(
+                    self.db,
+                    next_question
+                )
+            )
+        except Exception:
+            logger.exception(
+                "Failed to send next question view for submission_id=%s, next_question_id=%s",
+                self.submission_id,
+                next_question.get("id") if isinstance(next_question, dict) else None,
+            )
 
     async def additional_components_callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message("Successfully selected. Please press the Submit button once you've confirmed your choice.", ephemeral=True)
+        try:
+            await interaction.response.send_message("Successfully selected. Please press the Submit button once you've confirmed your choice.", ephemeral=True)
+        except Exception:
+            logger.exception(
+                "Failed to send selection confirmation for question_id=%s",
+                self.question_id,
+            )
 
 class Confirm(discord.ui.View):
     def __init__(self):
@@ -412,13 +682,19 @@ class Confirm(discord.ui.View):
 
     @discord.ui.button(label='Confirm', style=discord.ButtonStyle.secondary)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
+        try:
+            await interaction.response.defer()
+        except Exception:
+            logger.exception("Failed to defer interaction on Confirm button")
         self.value = True
         self.stop()
 
     @discord.ui.button(label='Cancel', style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
+        try:
+            await interaction.response.defer()
+        except discord.HTTPException:
+            logger.exception("Failed to defer interaction on Cancel button")
         self.value = False
         self.stop()
 
@@ -468,6 +744,18 @@ class ApplicationView(discord.ui.LayoutView):
                             discord.ui.TextDisplay(content=item["value"])
                         )
         except json.JSONDecodeError:
+            logger.debug(
+                "application_description for application_id=%s is not JSON layout, treating as plain text",
+                self.application_id,
+            )
+            self.description.append(
+                discord.ui.TextDisplay(content=f"{self.application_description}")
+            )
+        except (KeyError, TypeError):
+            logger.exception(
+                "Malformed description layout for application_id=%s",
+                self.application_id,
+            )
             self.description.append(
                 discord.ui.TextDisplay(content=f"{self.application_description}")
             )
@@ -501,11 +789,28 @@ class ApplicationView(discord.ui.LayoutView):
 
     async def submit_button_callback(self, interaction: discord.Interaction):
         if interaction.guild is None:
+            logger.warning(
+                "ApplicationView.submit_button_callback invoked outside of a guild (user_id=%s)",
+                interaction.user.id if interaction.user else None,
+            )
             return
 
-        blocked = await self.db.app_management_db.is_applicant_blocked(
-            interaction.guild.id, interaction.user.id
-        )
+        try:
+            blocked = await self.db.app_management_db.is_applicant_blocked(
+                interaction.guild.id, interaction.user.id
+            )
+        except Exception:
+            logger.exception(
+                "Failed to check blocked status for user_id=%s in guild_id=%s",
+                interaction.user.id,
+                interaction.guild.id,
+            )
+            await interaction.response.send_message(
+                embed=simple_embed("Something went wrong. Please try again later.", 'cross'),
+                ephemeral=True,
+            )
+            return
+
         if blocked:
             await interaction.response.send_message(
                 embed=simple_embed("You have been blocked.", 'cross'),
@@ -513,9 +818,20 @@ class ApplicationView(discord.ui.LayoutView):
             )
             return
 
-        existing = await self.db.app_management_db.get_pending_submission(
-            interaction.user.id
-        )
+        try:
+            existing = await self.db.app_management_db.get_pending_submission(
+                interaction.user.id
+            )
+        except Exception:
+            logger.exception(
+                "Failed to fetch pending submission for user_id=%s",
+                interaction.user.id,
+            )
+            await interaction.response.send_message(
+                embed=simple_embed("Something went wrong. Please try again later.", 'cross'),
+                ephemeral=True,
+            )
+            return
 
         if existing is not None:
             await interaction.response.send_message(
@@ -524,12 +840,25 @@ class ApplicationView(discord.ui.LayoutView):
             )
             return
 
-        submission = await self.db.app_management_db.get_submission(
-            guild_id=interaction.guild.id,
-            application_id=self.application_id,
-            member_id=interaction.user.id,
-            wave=self.current_wave,
-        )
+        try:
+            submission = await self.db.app_management_db.get_submission(
+                guild_id=interaction.guild.id,
+                application_id=self.application_id,
+                member_id=interaction.user.id,
+                wave=self.current_wave,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to fetch submission for user_id=%s, application_id=%s, wave=%s",
+                interaction.user.id,
+                self.application_id,
+                self.current_wave,
+            )
+            await interaction.response.send_message(
+                embed=simple_embed("Something went wrong. Please try again later.", 'cross'),
+                ephemeral=True,
+            )
+            return
 
         if submission is not None and submission["status"] in ("submitted", "accepted", "rejected"):
             await interaction.response.send_message(
@@ -539,45 +868,106 @@ class ApplicationView(discord.ui.LayoutView):
             return
 
         view = Confirm()
-        await interaction.response.send_message(
-            embed=simple_embed("Are you sure you want to start this application?", 'warn'),
-            view=view,
-            ephemeral=True,
-        )
+        try:
+            await interaction.response.send_message(
+                embed=simple_embed("Are you sure you want to start this application?", 'warn'),
+                view=view,
+                ephemeral=True,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to send confirmation prompt for user_id=%s, application_id=%s",
+                interaction.user.id,
+                self.application_id,
+            )
+            return
 
         await view.wait()
 
         if view.value is None:
-            await interaction.edit_original_response(
-                embed=simple_embed("Confirmation timed out.", 'cross'),
-                view=None,
-            )
+            try:
+                await interaction.edit_original_response(
+                    embed=simple_embed("Confirmation timed out.", 'cross'),
+                    view=None,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to edit response after confirmation timeout for user_id=%s",
+                    interaction.user.id,
+                )
             return
 
         if not view.value:
-            await interaction.edit_original_response(
-                embed=simple_embed('Process has been cancelled.', 'cross'),
-                view=None,
-            )
+            try:
+                await interaction.edit_original_response(
+                    embed=simple_embed('Process has been cancelled.', 'cross'),
+                    view=None,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to edit response after cancellation for user_id=%s",
+                    interaction.user.id,
+                )
             return
 
         if submission is None:
-            submission = await self.db.app_management_db.create_application_submission(
-                guild_id=interaction.guild.id,
-                application_id=self.application_id,
-                member_id=interaction.user.id,
-                wave=self.current_wave,
-            )
+            try:
+                submission = await self.db.app_management_db.create_application_submission(
+                    guild_id=interaction.guild.id,
+                    application_id=self.application_id,
+                    member_id=interaction.user.id,
+                    wave=self.current_wave,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to create application submission for user_id=%s, application_id=%s",
+                    interaction.user.id,
+                    self.application_id,
+                )
+                try:
+                    await interaction.edit_original_response(
+                        embed=simple_embed("Failed to start your application. Please try again later.", 'cross'),
+                        view=None,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to notify user of submission creation failure for user_id=%s",
+                        interaction.user.id,
+                    )
+                return
 
-        question = await self.db.app_management_db.get_unanswered_application_question(
-            submission["id"]
-        )
+        try:
+            question = await self.db.app_management_db.get_unanswered_application_question(
+                submission["id"]
+            )
+        except Exception:
+            logger.exception(
+                "Failed to fetch first question for submission_id=%s",
+                submission["id"],
+            )
+            try:
+                await interaction.edit_original_response(
+                    embed=simple_embed("Failed to load the application questions. Please try again later.", 'cross'),
+                    view=None,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to notify user of question fetch failure for submission_id=%s",
+                    submission["id"],
+                )
+            return
 
         if question is None:
-            await interaction.edit_original_response(
-                embed=simple_embed("Your application is already complete."),
-                view=None,
-            )
+            try:
+                await interaction.edit_original_response(
+                    embed=simple_embed("Your application is already complete."),
+                    view=None,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to notify user that submission_id=%s is already complete",
+                    submission["id"],
+                )
             return
 
         try:
@@ -585,13 +975,48 @@ class ApplicationView(discord.ui.LayoutView):
                 view=ApplicationQuestionView(self.db, question)
             )
         except discord.Forbidden:
-            await interaction.edit_original_response(
-                embed=simple_embed("I couldn't send you a DM. Please enable Direct Messages from server members and try again.", 'cross'),
-                view=None,
+            logger.exception(
+                "Could not DM user_id=%s for submission_id=%s (DMs closed)",
+                interaction.user.id,
+                submission["id"],
             )
+            try:
+                await interaction.edit_original_response(
+                    embed=simple_embed("I couldn't send you a DM. Please enable Direct Messages from server members and try again.", 'cross'),
+                    view=None,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to notify user_id=%s that DM could not be sent",
+                    interaction.user.id,
+                )
+            return
+        except discord.HTTPException:
+            logger.exception(
+                "Discord HTTP error while DMing user_id=%s for submission_id=%s",
+                interaction.user.id,
+                submission["id"],
+            )
+            try:
+                await interaction.edit_original_response(
+                    embed=simple_embed("Failed to send the application via DM. Please try again later.", 'cross'),
+                    view=None,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to notify user_id=%s of DM HTTP failure",
+                    interaction.user.id,
+                )
             return
 
-        await interaction.edit_original_response(
-            embed=simple_embed("I've sent you the application in DMs. Please continue it there."),
-            view=None,
-        )
+        try:
+            await interaction.edit_original_response(
+                embed=simple_embed("I've sent you the application in DMs. Please continue it there."),
+                view=None,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to send final confirmation for user_id=%s, submission_id=%s",
+                interaction.user.id,
+                submission["id"],
+            )
