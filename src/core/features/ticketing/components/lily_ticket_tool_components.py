@@ -811,8 +811,7 @@ class TicketComponentEmbed(discord.ui.LayoutView):
             await interaction.response.send_message(embed=simple_embed("No cases found.", 'cross'), ephemeral=True)
             return  
 
-        view = CaseListView((member_data["username"], member_data["avatar"]), result, self.db.bot_db)
-
+        view = CaseListView((member_data["username"], member_data["avatar"]), result, self.db.bot_db, guild_id=interaction.guild.id, target_user_id=member_data["id"])
         try:
             await interaction.response.send_message(
                 view=view,
