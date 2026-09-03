@@ -176,27 +176,40 @@ async def ban_user(
         return
     member, status, author_roles = result
 
-    await ctx.guild.ban(
-        discord.Object(id=member.id),
-        reason=f"By {author} | {reason}",
-    )
+    try:
+        await ctx.guild.ban(
+            discord.Object(id=member.id),
+            reason=f"By {author} | {reason}",
+        )
+    except discord.Forbidden:
+        logger.exception("Missing permissions to ban user %s in guild %s", member.id, ctx.guild.id)
+        await bot.send(ctx, embed=simple_embed("I don't have permission to ban this user.", "cross"))
+        return
+    except discord.HTTPException:
+        logger.exception("Failed to ban user %s in guild %s", member.id, ctx.guild.id)
+        await bot.send(ctx, embed=simple_embed("Failed to ban this user due to a Discord API error.", "cross"))
+        return
+
     ban_message: str = f"Banned: <@{member.id}>\n**Remaining:** {max(0, status.remaining_count - 1)}"
 
-    if proofs:
-        await bot.send(ctx, embed=simple_embed(ban_message))
-        await logging_controller.log_moderation_action(
-            ctx, author, member, "ban", reason, proofs.copy()
-        )
-    else:
-        case_id = await logging_controller.log_moderation_action(
-            ctx, author, member, "ban", reason, proofs.copy()
-        )
-        if case_id:
-            view = CaseProofsView(case_id, logging_controller, None)
-            msg = await bot.send(ctx, embed=simple_embed(ban_message), view=view)
-            view.message = msg
-        else:
+    try:
+        if proofs:
             await bot.send(ctx, embed=simple_embed(ban_message))
+            await logging_controller.log_moderation_action(
+                ctx, author, member, "ban", reason, proofs.copy()
+            )
+        else:
+            case_id = await logging_controller.log_moderation_action(
+                ctx, author, member, "ban", reason, proofs.copy()
+            )
+            if case_id:
+                view = CaseProofsView(case_id, logging_controller, None)
+                msg = await bot.send(ctx, embed=simple_embed(ban_message), view=view)
+                view.message = msg
+            else:
+                await bot.send(ctx, embed=simple_embed(ban_message))
+    except Exception:
+        logger.exception("Failed to log/send ban confirmation for user %s in guild %s", member.id, ctx.guild.id)
 
 async def quarantine_user(
     ctx: commands.Context | discord.Interaction,
@@ -222,7 +235,10 @@ async def quarantine_user(
     result = await _validate_moderation_target(ctx, user_input)
     if result is None:
         if ctx.message is not None:
-            await ctx.message.delete()
+            try:
+                await ctx.message.delete()
+            except discord.HTTPException:
+                logger.exception("Failed to delete invalid quarantine command message in guild %s", ctx.guild.id)
             return
         return
     member, status, _ = result
@@ -243,24 +259,37 @@ async def quarantine_user(
         return await bot.send(ctx, embed=simple_embed("Already quarantined.", "cross"))
 
     author = ctx.author if isinstance(ctx, commands.Context) else ctx.user
-    await member.add_roles(quarantine_role, reason=f"Quarantine by {author} | {reason}")
+
+    try:
+        await member.add_roles(quarantine_role, reason=f"Quarantine by {author} | {reason}")
+    except discord.Forbidden:
+        logger.exception("Missing permissions to quarantine user %s in guild %s", member.id, ctx.guild.id)
+        await bot.send(ctx, embed=simple_embed("I don't have permission to add the Quarantine role.", "cross"))
+        return
+    except discord.HTTPException:
+        logger.exception("Failed to quarantine user %s in guild %s", member.id, ctx.guild.id)
+        await bot.send(ctx, embed=simple_embed("Failed to quarantine this user due to a Discord API error.", "cross"))
+        return
 
     quarantine_message: str = f"Quarantined: <@{member.id}>\n**Remaining:** {max(0, status.remaining_count - 1)}"
-    if proofs:
-        await bot.send(ctx, embed=simple_embed(quarantine_message))
-        await logging_controller.log_moderation_action(
-            ctx, author, member, "quarantine", reason, proofs.copy()
-        )
-    else:
-        case_id = await logging_controller.log_moderation_action(
-            ctx, author, member, "quarantine", reason, proofs.copy()
-        )
-        if case_id and not _force_no_proofs:
-            view = CaseProofsView(case_id, logging_controller, None)
-            msg = await bot.send(ctx, embed=simple_embed(quarantine_message), view=view)
-            view.message = msg
-        else:
+    try:
+        if proofs:
             await bot.send(ctx, embed=simple_embed(quarantine_message))
+            await logging_controller.log_moderation_action(
+                ctx, author, member, "quarantine", reason, proofs.copy()
+            )
+        else:
+            case_id = await logging_controller.log_moderation_action(
+                ctx, author, member, "quarantine", reason, proofs.copy()
+            )
+            if case_id and not _force_no_proofs:
+                view = CaseProofsView(case_id, logging_controller, None)
+                msg = await bot.send(ctx, embed=simple_embed(quarantine_message), view=view)
+                view.message = msg
+            else:
+                await bot.send(ctx, embed=simple_embed(quarantine_message))
+    except Exception:
+        logger.exception("Failed to log/send quarantine confirmation for user %s in guild %s", member.id, ctx.guild.id)
 
 async def mute_user(
     ctx: commands.Context | discord.Interaction,
@@ -342,8 +371,17 @@ async def mute_user(
 
             view.message = msg
 
+    except ValueError:
+        logger.exception("Invalid mute duration '%s' provided for user %s", duration, user.id)
+        await bot.send(ctx, embed=simple_embed("Invalid duration format.", 'cross'))
+    except discord.Forbidden:
+        logger.exception("Missing permissions to mute user %s in guild %s", user.id, ctx.guild.id)
+        await bot.send(ctx, embed=simple_embed("I don't have permission to mute this user.", 'cross'))
+    except discord.HTTPException:
+        logger.exception("Failed to mute user %s in guild %s", user.id, ctx.guild.id)
+        await bot.send(ctx, embed=simple_embed("Failed to mute the user due to a Discord API error.", 'cross'))
     except Exception:
-        logger.exception("Failed to mute user")
+        logger.exception("Unexpected error while muting user %s in guild %s", user.id, ctx.guild.id)
         await bot.send(ctx, embed=simple_embed("Failed to mute the user", 'cross'))
 
 async def unmute(
@@ -385,10 +423,11 @@ async def unmute(
         )
 
     except discord.HTTPException as e:
+        logger.exception("Failed to unmute user %s", user.id)
         await bot.send(ctx, embed=simple_embed(f"Failed to unmute user. {e}", 'cross'))
-    except Exception as e:
-        logger.exception("Failed to unmute user")
-        await bot.send(ctx, embed=simple_embed(f"Failed to unmute user", 'cross'))
+    except Exception:
+        logger.exception("Unexpected error while unmuting user %s", user.id)
+        await bot.send(ctx, embed=simple_embed("Failed to unmute user", 'cross'))
 
 async def unban(
     ctx: commands.Context | discord.Interaction,
@@ -424,11 +463,17 @@ async def unban(
             reason
         )
     except discord.NotFound:
+        logger.exception("Attempted to unban user %s who is not banned in guild %s", user.id, ctx.guild.id)
         await bot.send(ctx, embed=simple_embed("This user is not banned.", "cross"))
     except discord.Forbidden:
+        logger.exception("Missing permissions to unban user %s in guild %s", user.id, ctx.guild.id)
         await bot.send(ctx, embed=simple_embed("I don't have permission to unban this user.", "cross"))
     except discord.HTTPException as e:
+        logger.exception("Failed to unban user %s in guild %s", user.id, ctx.guild.id)
         await bot.send(ctx, embed=simple_embed(f"Exception Raised: {e}", "cross"))
+    except Exception:
+        logger.exception("Unexpected error while unbanning user %s in guild %s", user.id, ctx.guild.id)
+        await bot.send(ctx, embed=simple_embed("An unexpected error occurred while unbanning this user.", "cross"))
 
 async def release(
     ctx: commands.Context | discord.Interaction,
@@ -476,9 +521,14 @@ async def release(
             reason
         )
     except discord.Forbidden:
+        logger.exception("Missing permissions to remove Quarantine role from user %s in guild %s", member.id, ctx.guild.id)
         await bot.send(ctx, embed=simple_embed("I don't have permission to remove the Quarantine role.", "cross"))
     except discord.HTTPException as e:
+        logger.exception("Failed to remove Quarantine role from user %s in guild %s", member.id, ctx.guild.id)
         await bot.send(ctx, embed=simple_embed(f"Failed to remove Quarantine role: {e}", "cross"))
+    except Exception:
+        logger.exception("Unexpected error while releasing user %s in guild %s", member.id, ctx.guild.id)
+        await bot.send(ctx, embed=simple_embed("An unexpected error occurred while releasing this user.", "cross"))
 
 async def warn(
     ctx: commands.Context | discord.Interaction,
@@ -521,15 +571,19 @@ async def warn(
     assert bot.logging_controller is not None
     logging_controller = bot.logging_controller
 
-    if len(proofs) > 0:
-        await bot.send(ctx, embed=simple_embed(f"{member.mention} has been warned"))
+    try:
+        if len(proofs) > 0:
+            await bot.send(ctx, embed=simple_embed(f"{member.mention} has been warned"))
 
-    case_id: int | None = await logging_controller.log_moderation_action(ctx, author, member, "warn", reason, proofs)
+        case_id: int | None = await logging_controller.log_moderation_action(ctx, author, member, "warn", reason, proofs)
 
-    if case_id and len(proofs) <= 0:
-        view = CaseProofsView(case_id, logging_controller, None)
-        msg = await bot.send(ctx, embed=simple_embed(f"{member.mention} has been warned"), view=view)
-        view.message = msg
+        if case_id and len(proofs) <= 0:
+            view = CaseProofsView(case_id, logging_controller, None)
+            msg = await bot.send(ctx, embed=simple_embed(f"{member.mention} has been warned"), view=view)
+            view.message = msg
+    except Exception:
+        logger.exception("Failed to warn user %s in guild %s", member.id, ctx.guild.id)
+        await bot.send(ctx, embed=simple_embed("Failed to warn this user due to an unexpected error.", 'cross'))
 
 async def case_edit(
     interaction: discord.Interaction,
@@ -542,7 +596,12 @@ async def case_edit(
     assert bot.db is not None
     bot_db = bot.db
 
-    response = await bot_db.edit_case(**{"staff_id": interaction.user.id, "case_id": case_id, "case_statement": case_statement, "absolute": absolute})
+    try:
+        response = await bot_db.edit_case(**{"staff_id": interaction.user.id, "case_id": case_id, "case_statement": case_statement, "absolute": absolute})
+    except Exception:
+        logger.exception("Failed to edit case %s", case_id)
+        await interaction.response.send_message(embed=simple_embed("An unexpected error occurred while editing this case.", 'cross'))
+        return
 
     if response.get("success"):
         await interaction.response.send_message(embed=simple_embed(str(response.get("message"))))
@@ -558,7 +617,13 @@ async def case_delete(
     assert bot.db is not None
     bot_db = bot.db
 
-    response = await bot_db.delete_case(case_id)
+    try:
+        response = await bot_db.delete_case(case_id)
+    except Exception:
+        logger.exception("Failed to delete case %s", case_id)
+        await interaction.response.send_message(embed=simple_embed("An unexpected error occurred while deleting this case.", 'cross'))
+        return
+
     if response.get("success"):
         await interaction.response.send_message(embed=simple_embed(str(response.get("message"))))
     else:
@@ -584,26 +649,34 @@ async def ms(
         )
         return
 
-    result = await bot_db.fetch_mod_stats(
-        guild_id=interaction.guild.id,
-        moderator_id=moderator.id,
-        page_start=page_start,
-        page_end=page_end
-    )
+    try:
+        result = await bot_db.fetch_mod_stats(
+            guild_id=interaction.guild.id,
+            moderator_id=moderator.id,
+            page_start=page_start,
+            page_end=page_end
+        )
+    except Exception:
+        logger.exception("Failed to fetch mod stats for moderator %s in guild %s", moderator.id, interaction.guild.id)
+        await interaction.response.send_message(embed=simple_embed("An unexpected error occurred while fetching moderator stats.", "cross"))
+        return
 
     if not result["success"]:
         await interaction.response.send_message(embed=simple_embed("No stats found For the given moderator ID"))
         return
 
-    embeds = build_ms_embed(
-        moderator=moderator,
-        logs=result["logs"],
-        stats=result["stats"],
-        total_logs=result["total_logs"],
-        page_start=page_start
-    )
-
-    await interaction.response.send_message(embeds=embeds)
+    try:
+        embeds = build_ms_embed(
+            moderator=moderator,
+            logs=result["logs"],
+            stats=result["stats"],
+            total_logs=result["total_logs"],
+            page_start=page_start
+        )
+        await interaction.response.send_message(embeds=embeds)
+    except Exception:
+        logger.exception("Failed to build/send mod stats embed for moderator %s in guild %s", moderator.id, interaction.guild.id)
+        await interaction.response.send_message(embed=simple_embed("An unexpected error occurred while displaying moderator stats.", "cross"))
 
 async def mod_logs(
     interaction: discord.Interaction,
@@ -624,27 +697,36 @@ async def mod_logs(
     assert bot.db is not None
     bot_db = bot.db
 
-    result = await bot_db.fetch_mod_logs(
-        guild_id=interaction.guild.id,
-        target_user_id=user.id,
-        moderator_id=moderator.id if moderator else None,
-        mod_type=mod_type,
-    )
+    try:
+        result = await bot_db.fetch_mod_logs(
+            guild_id=interaction.guild.id,
+            target_user_id=user.id,
+            moderator_id=moderator.id if moderator else None,
+            mod_type=mod_type,
+        )
+    except Exception:
+        logger.exception("Failed to fetch mod logs for user %s in guild %s", user.id, interaction.guild.id)
+        await interaction.response.send_message(embed=simple_embed("An unexpected error occurred while fetching moderation logs.", 'cross'))
+        return
 
     if not result["success"]:
         await interaction.response.send_message(embed=simple_embed("No cases found.", 'cross'))
         return
 
-    view = CaseListView(
-        (user.display_name.title(), user.display_avatar.url),
-        result,
-        bot_db,
-        guild_id=interaction.guild.id,
-        target_user_id=user.id,
-        moderator_id=moderator.id if moderator else None,
-        mod_type=mod_type,
-    )
-    await interaction.response.send_message(view=view, allowed_mentions=discord.AllowedMentions.none())
+    try:
+        view = CaseListView(
+            (user.display_name.title(), user.display_avatar.url),
+            result,
+            bot_db,
+            guild_id=interaction.guild.id,
+            target_user_id=user.id,
+            moderator_id=moderator.id if moderator else None,
+            mod_type=mod_type,
+        )
+        await interaction.response.send_message(view=view, allowed_mentions=discord.AllowedMentions.none())
+    except Exception:
+        logger.exception("Failed to build/send mod logs view for user %s in guild %s", user.id, interaction.guild.id)
+        await interaction.response.send_message(embed=simple_embed("An unexpected error occurred while displaying moderation logs.", 'cross'))
 
 async def moderation_insights(
     interaction: discord.Interaction
@@ -665,88 +747,97 @@ async def moderation_insights(
 
     await interaction.response.defer()
 
-    """ Create an image of moderation last 30 days analytics using matplotlib """
-    data = await bot_db.get_moderation_monthly_analysis(interaction.guild.id)
-    days = [
-        datetime.strptime(item["day"], "%Y-%m-%d")
-        for item in data
-    ]
+    try:
+        """ Create an image of moderation last 30 days analytics using matplotlib """
+        data = await bot_db.get_moderation_monthly_analysis(interaction.guild.id)
+        days = [
+            datetime.strptime(item["day"], "%Y-%m-%d")
+            for item in data
+        ]
 
-    totals = [
-        item["total"]
-        for item in data
-    ]
+        totals = [
+            item["total"]
+            for item in data
+        ]
 
-    x = np.arange(1, len(totals) + 1)
+        x = np.arange(1, len(totals) + 1)
 
-    k = min(3, len(x) - 1) if len(x) > 1 else 1
-    x_smooth = np.linspace(x.min(), x.max(), 500)
-    spline = make_interp_spline(x, totals, k=k)
-    y_smooth = spline(x_smooth)
-    y_smooth = np.clip(y_smooth, 0, None)  
+        k = min(3, len(x) - 1) if len(x) > 1 else 1
+        x_smooth = np.linspace(x.min(), x.max(), 500)
+        spline = make_interp_spline(x, totals, k=k)
+        y_smooth = spline(x_smooth)
+        y_smooth = np.clip(y_smooth, 0, None)  
 
-    fig, ax = plt.subplots(figsize=(12, 5.2))
+        fig, ax = plt.subplots(figsize=(12, 5.2))
 
-    fig.patch.set_facecolor("#111214")
-    ax.set_facecolor("#111214")
+        fig.patch.set_facecolor("#111214")
+        ax.set_facecolor("#111214")
 
-    ax.fill_between(
-        x_smooth,
-        y_smooth,
-        0,
-        color="#5a5a5a",
-        alpha=0.45
-    )
+        ax.fill_between(
+            x_smooth,
+            y_smooth,
+            0,
+            color="#5a5a5a",
+            alpha=0.45
+        )
 
-    ax.plot(
-        x_smooth,
-        y_smooth,
-        color="#d0d0d0",
-        linewidth=7
-    )
+        ax.plot(
+            x_smooth,
+            y_smooth,
+            color="#d0d0d0",
+            linewidth=7
+        )
 
-    max_total = max(totals) if totals else 0
-    y_top = max(20, int(max_total * 1.15))
-    ax.set_ylim(0, y_top)
-    ax.set_yticks(np.linspace(0, y_top, 7).astype(int))
+        max_total = max(totals) if totals else 0
+        y_top = max(20, int(max_total * 1.15))
+        ax.set_ylim(0, y_top)
+        ax.set_yticks(np.linspace(0, y_top, 7).astype(int))
 
-    ax.tick_params(
-        axis="y",
-        colors="#bdbdbd",
-        labelsize=14,
-        length=0
-    )
+        ax.tick_params(
+            axis="y",
+            colors="#bdbdbd",
+            labelsize=14,
+            length=0
+        )
 
-    ax.tick_params(
-        axis="x",
-        bottom=False,
-        labelbottom=False
-    )
+        ax.tick_params(
+            axis="x",
+            bottom=False,
+            labelbottom=False
+        )
 
-    for spine in ax.spines.values():
-        spine.set_visible(False)
+        for spine in ax.spines.values():
+            spine.set_visible(False)
 
-    ax.grid(False)
+        ax.grid(False)
 
-    ax.margins(x=0)
+        ax.margins(x=0)
 
-    plt.tight_layout()
+        plt.tight_layout()
 
-    buffer = io.BytesIO()
-    plt.savefig(
-        buffer,
-        format="png",
-        dpi=150,
-        facecolor="#111214",
-        bbox_inches="tight"
-    )
+        buffer = io.BytesIO()
+        plt.savefig(
+            buffer,
+            format="png",
+            dpi=150,
+            facecolor="#111214",
+            bbox_inches="tight"
+        )
 
-    buffer.seek(0)
-    plt.close(fig)
+        buffer.seek(0)
+        plt.close(fig)
+    except Exception:
+        logger.exception("Failed to build moderation insights chart for guild %s", interaction.guild.id)
+        await interaction.followup.send(embed=simple_embed("An unexpected error occurred while generating moderation insights.", "cross"))
+        return
 
-    """ Returns the total, monthly, weekly, daily modlogs in a server """
-    view = ModerationInsights(interaction.guild.me, bot_db)
-    view.message = await interaction.followup.send(view=view, file=discord.File(buffer, filename="moderation_analytics.png"))
+    try:
+        """ Returns the total, monthly, weekly, daily modlogs in a server """
+        view = ModerationInsights(interaction.guild.me, bot_db)
+        view.message = await interaction.followup.send(view=view, file=discord.File(buffer, filename="moderation_analytics.png"))
+    except Exception:
+        logger.exception("Failed to send moderation insights view for guild %s", interaction.guild.id)
+        await interaction.followup.send(embed=simple_embed("An unexpected error occurred while sending moderation insights.", "cross"))
 
 async def setup_mod_appeal(
     interaction: discord.Interaction
@@ -846,13 +937,21 @@ async def setup_mod_appeal(
         )
 
     except discord.Forbidden:
+        logger.exception("Missing permissions to create moderation appeal forum in guild %s", interaction.guild.id)
         raise discord.app_commands.CheckFailure(
             "I don't have permission to create forum channels."
         )
 
     except discord.HTTPException as e:
+        logger.exception("Failed to create moderation appeal forum in guild %s", interaction.guild.id)
         raise discord.app_commands.CheckFailure(
             f"Failed to create the moderation appeal forum: {e}"
+        )
+
+    except Exception:
+        logger.exception("Unexpected error while setting up moderation appeal forum in guild %s", interaction.guild.id)
+        raise discord.app_commands.CheckFailure(
+            "An unexpected error occurred while setting up the moderation appeal forum."
         )
 
 async def accept_appeal(
@@ -876,7 +975,13 @@ async def accept_appeal(
 
         return
 
-    appeal = await bot_db.get_appeal(interaction.channel.id)
+    try:
+        appeal = await bot_db.get_appeal(interaction.channel.id)
+    except Exception:
+        logger.exception("Failed to fetch appeal for thread %s", interaction.channel.id)
+        await interaction.response.send_message(embed=simple_embed("An unexpected error occurred while fetching this appeal.", "cross"))
+        return
+
     if appeal is None:
         await interaction.response.send_message(
             embed=simple_embed(
@@ -897,7 +1002,12 @@ async def accept_appeal(
 
         return
 
-    case = await bot_db.get_case(appeal["case_id"])
+    try:
+        case = await bot_db.get_case(appeal["case_id"])
+    except Exception:
+        logger.exception("Failed to fetch case %s for appeal on thread %s", appeal["case_id"], interaction.channel.id)
+        await interaction.response.send_message(embed=simple_embed("An unexpected error occurred while fetching the related case.", 'cross'))
+        return
 
     if case is None:
         await interaction.response.send_message(embed=simple_embed("Unable to find the case", 'cross'))
@@ -937,8 +1047,8 @@ async def accept_appeal(
                 )
 
         await member.send(embed=simple_embed("Your appeal has been accepted and the action has been lifted"))
-    except:
-        pass
+    except Exception:
+        logger.exception("Failed to fully process appeal acceptance for case %s in guild %s", appeal["case_id"], interaction.guild.id)
 
     assert isinstance(interaction.channel, discord.Thread)
     assert isinstance(interaction.channel.parent, discord.ForumChannel)
@@ -947,10 +1057,13 @@ async def accept_appeal(
     if accepted is None:
         return
 
-    await bot_db.set_appeal_status(appeal["case_id"], "accepted")
-    await interaction.response.send_message(embed=simple_embed(f"Successfully Accepted the appeal and their punishment has been lifted.\n This thread will be archived."))
-    await asyncio.sleep(2)
-    await interaction.channel.edit(applied_tags=[accepted], locked=True, archived=True)
+    try:
+        await bot_db.set_appeal_status(appeal["case_id"], "accepted")
+        await interaction.response.send_message(embed=simple_embed(f"Successfully Accepted the appeal and their punishment has been lifted.\n This thread will be archived."))
+        await asyncio.sleep(2)
+        await interaction.channel.edit(applied_tags=[accepted], locked=True, archived=True)
+    except Exception:
+        logger.exception("Failed to finalize appeal acceptance for case %s in guild %s", appeal["case_id"], interaction.guild.id)
 
 async def reject_appeal(
     interaction: discord.Interaction,
@@ -972,7 +1085,12 @@ async def reject_appeal(
     assert bot.db is not None
     bot_db = bot.db
 
-    appeal = await bot_db.get_appeal(interaction.channel.id)
+    try:
+        appeal = await bot_db.get_appeal(interaction.channel.id)
+    except Exception:
+        logger.exception("Failed to fetch appeal for thread %s", interaction.channel.id)
+        return await interaction.response.send_message(embed=simple_embed("An unexpected error occurred while fetching this appeal.", "cross"))
+
     if appeal is None:
         return await interaction.response.send_message(
             embed=simple_embed(
@@ -991,7 +1109,12 @@ async def reject_appeal(
             delete_after=5,
         )
 
-    case = await bot_db.get_case(appeal["case_id"])
+    try:
+        case = await bot_db.get_case(appeal["case_id"])
+    except Exception:
+        logger.exception("Failed to fetch case %s for appeal on thread %s", appeal["case_id"], interaction.channel.id)
+        await interaction.response.send_message(embed=simple_embed("An unexpected error occurred while fetching the related case.", 'cross'))
+        return
 
     if case is None:
         await interaction.response.send_message(embed=simple_embed("Unable to find the case", 'cross'))
@@ -1008,18 +1131,21 @@ async def reject_appeal(
     try:
         member = await interaction.guild.fetch_member(case["target_user_id"])
         await member.send(embed=simple_embed(f"Your appeal has been denied. Sorry\n- Reason: {reason or "No reason Provided"}", 'cross'))
-    except:
-        pass
+    except Exception:
+        logger.exception("Failed to notify user of appeal rejection for case %s in guild %s", appeal["case_id"], interaction.guild.id)
 
     assert isinstance(interaction.channel, discord.Thread)
     assert isinstance(interaction.channel.parent, discord.ForumChannel)
     rejected = discord.utils.get(interaction.channel.parent.available_tags, name="Denied")
 
     if rejected is None:
-        print("Tag is not found")
+        logger.error("Denied tag not found on appeal forum for guild %s", interaction.guild.id)
         return
 
-    await bot_db.set_appeal_status(appeal["case_id"], "rejected")
-    await interaction.response.send_message(embed=simple_embed(f"Successfully rejected the appeal, This thread will be archived!"))
-    await asyncio.sleep(2)
-    await interaction.channel.edit(applied_tags=[rejected], locked=True, archived=True)
+    try:
+        await bot_db.set_appeal_status(appeal["case_id"], "rejected")
+        await interaction.response.send_message(embed=simple_embed(f"Successfully rejected the appeal, This thread will be archived!"))
+        await asyncio.sleep(2)
+        await interaction.channel.edit(applied_tags=[rejected], locked=True, archived=True)
+    except Exception:
+        logger.exception("Failed to finalize appeal rejection for case %s in guild %s", appeal["case_id"], interaction.guild.id)
