@@ -325,7 +325,8 @@ class ApplicationQuestionView(discord.ui.LayoutView):
 
         self.container = discord.ui.Container(
             discord.ui.TextDisplay(
-                content=f"### {label}\n- {description or ''}"
+                content=f"### {label}\n"
+                        f"{'- ' + description if description else ''}"
             ),
             discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small)
         )
