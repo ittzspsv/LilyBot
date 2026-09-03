@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, cast, Any, TYPE_CHECKING
 import re
+import logging
 
 import discord
 from discord.ext import commands
@@ -35,6 +36,8 @@ from ..classes.ticketing_classes import (
 
 if TYPE_CHECKING:
     from src.lily import Lily
+
+logger = logging.getLogger("lily")
 
 bot = None
 
@@ -83,24 +86,31 @@ class MuteModal(discord.ui.Modal):
         try:
             user = await interaction.guild.fetch_member(self.member_id)
         except discord.NotFound:
+            logger.warning("MuteModal: member %s not found in guild %s", self.member_id, interaction.guild.id)
             await interaction.response.send_message(embed=simple_embed("User is not in the guild!", 'cross'), ephemeral=True)
             return
         except discord.HTTPException:
+            logger.exception("MuteModal: HTTP error fetching member %s in guild %s", self.member_id, interaction.guild.id)
             await interaction.response.send_message(embed=simple_embed("Failed to fetch the member due to network error!", 'cross'), ephemeral=True)
             return
         except Exception:
+            logger.exception("MuteModal: unknown error fetching member %s in guild %s", self.member_id, interaction.guild.id)
             await interaction.response.send_message(embed=simple_embed("Failed to fetch the member due to unknown error!", 'cross'), ephemeral=True)
             return
         
         await interaction.response.defer()
         
-        await mute_user(
-            interaction,
-            user,
-            self.duration.component.value,
-            self.reason.component.value,
-            self.proofs
-        )
+        try:
+            await mute_user(
+                interaction,
+                user,
+                self.duration.component.value,
+                self.reason.component.value,
+                self.proofs
+            )
+        except Exception:
+            logger.exception("MuteModal: mute_user failed for member %s in guild %s", self.member_id, interaction.guild.id)
+            await interaction.followup.send(embed=simple_embed("Failed to mute the user due to an unexpected error!", 'cross'), ephemeral=True)
 
 class BanModal(discord.ui.Modal):
     reason = discord.ui.Label(
@@ -141,23 +151,30 @@ class BanModal(discord.ui.Modal):
         try:
             member = await interaction.guild.fetch_member(self.member_id)
         except discord.NotFound:
+            logger.warning("BanModal: member %s not found in guild %s", self.member_id, interaction.guild.id)
             await interaction.response.send_message(embed=simple_embed("User should be in the guild in-order to quarantine him", 'cross'), ephemeral=True)
             return
         except discord.HTTPException:
+            logger.exception("BanModal: HTTP error fetching member %s in guild %s", self.member_id, interaction.guild.id)
             await interaction.response.send_message(embed=simple_embed("Failed to fetch the member due to network error!", 'cross'), ephemeral=True)
             return
         except Exception:
+            logger.exception("BanModal: unknown error fetching member %s in guild %s", self.member_id, interaction.guild.id)
             await interaction.response.send_message(embed=simple_embed("Failed to fetch the member due to unknown error!", 'cross'), ephemeral=True)
             return
         
         await interaction.response.defer()
 
-        await quarantine_user(
-            interaction,
-            member,
-            self.reason.component.value,
-            self.proofs
-        )
+        try:
+            await quarantine_user(
+                interaction,
+                member,
+                self.reason.component.value,
+                self.proofs
+            )
+        except Exception:
+            logger.exception("BanModal: quarantine_user failed for member %s in guild %s", self.member_id, interaction.guild.id)
+            await interaction.followup.send(embed=simple_embed("Failed to ban/quarantine the user due to an unexpected error!", 'cross'), ephemeral=True)
 
 class WarnModal(discord.ui.Modal):
     reason = discord.ui.Label(
@@ -199,21 +216,28 @@ class WarnModal(discord.ui.Modal):
         try:
             member = await interaction.guild.fetch_member(self.member_id)
         except discord.NotFound:
+            logger.warning("WarnModal: member %s not found in guild %s", self.member_id, interaction.guild.id)
             await interaction.response.send_message(embed=simple_embed("User should be in the guild in-order to quarantine him", 'cross'), ephemeral=True)
             return
         except discord.HTTPException:
+            logger.exception("WarnModal: HTTP error fetching member %s in guild %s", self.member_id, interaction.guild.id)
             await interaction.response.send_message(embed=simple_embed("Failed to fetch the member due to network error!", 'cross'), ephemeral=True)
             return
         except Exception:
+            logger.exception("WarnModal: unknown error fetching member %s in guild %s", self.member_id, interaction.guild.id)
             await interaction.response.send_message(embed=simple_embed("Failed to fetch the member due to unknown error!", 'cross'), ephemeral=True)
             return
         
-        await warn(
-            interaction,
-            member,
-            self.reason.component.value,
-            self.proofs
-        )
+        try:
+            await warn(
+                interaction,
+                member,
+                self.reason.component.value,
+                self.proofs
+            )
+        except Exception:
+            logger.exception("WarnModal: warn failed for member %s in guild %s", self.member_id, interaction.guild.id)
+            await interaction.followup.send(embed=simple_embed("Failed to warn the user due to an unexpected error!", 'cross'), ephemeral=True)
 
 class TicketRatingModal(discord.ui.Modal):
     def __init__(self) -> None:
@@ -404,11 +428,28 @@ class TicketOpenerComponent(discord.ui.LayoutView):
             )
             return
 
-        success = await self.db.bot_db.set_ticket_claimer(
-            interaction.user.id, interaction.channel.id, interaction.guild.id
-        )
+        try:
+            success = await self.db.bot_db.set_ticket_claimer(
+                interaction.user.id, interaction.channel.id, interaction.guild.id
+            )
+        except Exception:
+            logger.exception(
+                "TicketOpenerComponent.claim_ticket_callback: set_ticket_claimer failed for channel %s in guild %s",
+                interaction.channel.id, interaction.guild.id
+            )
+            await interaction.followup.send(embed=simple_embed("Failed to claim the ticket due to a database error!", 'cross'), ephemeral=True)
+            return
+
         if not success:
-            claimer = await self.db.bot_db.get_ticket_claimer(interaction.channel.id)
+            try:
+                claimer = await self.db.bot_db.get_ticket_claimer(interaction.channel.id)
+            except Exception:
+                logger.exception(
+                    "TicketOpenerComponent.claim_ticket_callback: get_ticket_claimer failed for channel %s",
+                    interaction.channel.id
+                )
+                await interaction.followup.send(embed=simple_embed("This ticket is already claimed, but the claimer could not be determined.", 'cross'), ephemeral=True)
+                return
             await interaction.followup.send(
                 embed=simple_embed(f"<@{claimer}> has already claimed this ticket!", 'cross'),
                 ephemeral=True
@@ -417,22 +458,39 @@ class TicketOpenerComponent(discord.ui.LayoutView):
 
         channel = interaction.channel
         if isinstance(channel, discord.TextChannel) and isinstance(interaction.user, discord.Member):
-            await channel.set_permissions(
-                interaction.user,
-                send_messages=True,
-                embed_links=True,
-                attach_files=True,
-                add_reactions=True,
-                use_external_emojis=True,
-                read_message_history=True
-            )
+            try:
+                await channel.set_permissions(
+                    interaction.user,
+                    send_messages=True,
+                    embed_links=True,
+                    attach_files=True,
+                    add_reactions=True,
+                    use_external_emojis=True,
+                    read_message_history=True
+                )
+            except discord.Forbidden:
+                logger.exception(
+                    "TicketOpenerComponent.claim_ticket_callback: missing permissions to set overwrites in channel %s",
+                    channel.id
+                )
+            except discord.HTTPException:
+                logger.exception(
+                    "TicketOpenerComponent.claim_ticket_callback: HTTP error setting permissions in channel %s",
+                    channel.id
+                )
 
         self.claim_ticket.disabled = True
         self.claim_ticket.label = "Claimed"
         self.claim_ticket.style = discord.ButtonStyle.secondary
 
         assert interaction.message is not None
-        await interaction.message.edit(view=self)
+        try:
+            await interaction.message.edit(view=self)
+        except discord.HTTPException:
+            logger.exception(
+                "TicketOpenerComponent.claim_ticket_callback: failed to edit ticket message %s",
+                interaction.message.id
+            )
         await interaction.followup.send(embed=simple_embed(f"{interaction.user.mention} has claimed the ticket!"))
 
     async def revoke_claim_callback(self, interaction: discord.Interaction) -> None:
@@ -441,7 +499,15 @@ class TicketOpenerComponent(discord.ui.LayoutView):
         if interaction.channel is None or interaction.guild is None:
             return
 
-        claimer = await self.db.bot_db.get_ticket_claimer(interaction.channel.id)
+        try:
+            claimer = await self.db.bot_db.get_ticket_claimer(interaction.channel.id)
+        except Exception:
+            logger.exception(
+                "TicketOpenerComponent.revoke_claim_callback: get_ticket_claimer failed for channel %s",
+                interaction.channel.id
+            )
+            await interaction.followup.send(embed=simple_embed("Failed to look up the ticket claimer due to a database error!", 'cross'), ephemeral=True)
+            return
 
         if claimer is None:
             await interaction.followup.send(
@@ -454,6 +520,10 @@ class TicketOpenerComponent(discord.ui.LayoutView):
         try:
             claimer_member = await interaction.guild.fetch_member(claimer)
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            logger.exception(
+                "TicketOpenerComponent.revoke_claim_callback: failed to fetch claimer %s in guild %s",
+                claimer, interaction.guild.id
+            )
             claimer_member = None
 
         assert isinstance(interaction.user, discord.Member)
@@ -469,16 +539,39 @@ class TicketOpenerComponent(discord.ui.LayoutView):
 
         channel = interaction.channel
         if claimer_member is not None and isinstance(channel, discord.TextChannel):
-            await channel.set_permissions(claimer_member, overwrite=None)
+            try:
+                await channel.set_permissions(claimer_member, overwrite=None)
+            except discord.Forbidden:
+                logger.exception(
+                    "TicketOpenerComponent.revoke_claim_callback: missing permissions to clear overwrites in channel %s",
+                    channel.id
+                )
+            except discord.HTTPException:
+                logger.exception(
+                    "TicketOpenerComponent.revoke_claim_callback: HTTP error clearing permissions in channel %s",
+                    channel.id
+                )
 
         self.claim_ticket.disabled = False
         self.claim_ticket.label = "Claim"
         self.claim_ticket.style = discord.ButtonStyle.secondary
 
-        await self.db.bot_db.reset_ticket_claimer(interaction.channel.id)
+        try:
+            await self.db.bot_db.reset_ticket_claimer(interaction.channel.id)
+        except Exception:
+            logger.exception(
+                "TicketOpenerComponent.revoke_claim_callback: reset_ticket_claimer failed for channel %s",
+                interaction.channel.id
+            )
 
         if interaction.message:
-            await interaction.message.edit(view=self)
+            try:
+                await interaction.message.edit(view=self)
+            except discord.HTTPException:
+                logger.exception(
+                    "TicketOpenerComponent.revoke_claim_callback: failed to edit ticket message %s",
+                    interaction.message.id
+                )
 
         await interaction.followup.send(
             embed=simple_embed("Ticket claim has been revoked!"),
@@ -486,9 +579,15 @@ class TicketOpenerComponent(discord.ui.LayoutView):
         )
 
         assert isinstance(channel, discord.TextChannel)
-        await channel.send(
-            embed=simple_embed(f"{interaction.user.mention} revoked the ticket claim.")
-        )
+        try:
+            await channel.send(
+                embed=simple_embed(f"{interaction.user.mention} revoked the ticket claim.")
+            )
+        except discord.HTTPException:
+            logger.exception(
+                "TicketOpenerComponent.revoke_claim_callback: failed to send revoke notice in channel %s",
+                channel.id
+            )
 
 class TicketComponentEmbed(discord.ui.LayoutView):
     def __init__(self, 
@@ -680,8 +779,16 @@ class TicketComponentEmbed(discord.ui.LayoutView):
 
         assert isinstance(interaction.guild, discord.Guild)
 
-        _guild_id = self.db.bot_db.get_secondary_guild_id(interaction.guild.id) or interaction.guild.id
-        
+        try:
+            _guild_id = self.db.bot_db.get_secondary_guild_id(interaction.guild.id) or interaction.guild.id
+        except Exception:
+            logger.exception(
+                "TicketComponentEmbed.case_list_handler: get_secondary_guild_id failed for guild %s",
+                interaction.guild.id
+            )
+            await interaction.response.send_message(embed=simple_embed("Failed to resolve the guild configuration!", 'cross'), ephemeral=True)
+            return
+
         """ Fetch modlogs of the given member """
         payload = {
             "guild_id": _guild_id,
@@ -690,54 +797,87 @@ class TicketComponentEmbed(discord.ui.LayoutView):
             "mod_type": "all"
         }
 
-        result = await self.db.bot_db.fetch_mod_logs(**payload)
+        try:
+            result = await self.db.bot_db.fetch_mod_logs(**payload)
+        except Exception:
+            logger.exception(
+                "TicketComponentEmbed.case_list_handler: fetch_mod_logs failed for user %s in guild %s",
+                member_data["id"], _guild_id
+            )
+            await interaction.response.send_message(embed=simple_embed("Failed to fetch mod logs due to a database error!", 'cross'), ephemeral=True)
+            return
+
         if not result["success"]:
             await interaction.response.send_message(embed=simple_embed("No cases found.", 'cross'), ephemeral=True)
             return  
 
         view = CaseListView((member_data["username"], member_data["avatar"]), result, self.db.bot_db)
 
-        await interaction.response.send_message(
-            view=view,
-            allowed_mentions=discord.AllowedMentions.none(),
-            ephemeral=True
-        )
+        try:
+            await interaction.response.send_message(
+                view=view,
+                allowed_mentions=discord.AllowedMentions.none(),
+                ephemeral=True
+            )
+        except discord.HTTPException:
+            logger.exception(
+                "TicketComponentEmbed.case_list_handler: failed to send case list for user %s",
+                member_data["id"]
+            )
 
     async def ban_callback(self, interaction: discord.Interaction):
         if not await self._check_permissions(interaction):
             return
 
-        await interaction.response.send_modal(
-            BanModal(
-                db=self.db,
-                member_id=self.misc["reported_member"]["id"],
-                proofs=self.misc["proofs"]
+        try:
+            await interaction.response.send_modal(
+                BanModal(
+                    db=self.db,
+                    member_id=self.misc["reported_member"]["id"],
+                    proofs=self.misc["proofs"]
+                )
             )
-        )
+        except Exception:
+            logger.exception(
+                "TicketComponentEmbed.ban_callback: failed to open BanModal for channel %s",
+                self.ticket_channel_id
+            )
 
     async def mute_callback(self, interaction: discord.Interaction):
         if not await self._check_permissions(interaction):
             return
 
-        await interaction.response.send_modal(
-            MuteModal(
-                db=self.db,
-                member_id=self.misc["reported_member"]["id"],
-                proofs=self.misc["proofs"]
+        try:
+            await interaction.response.send_modal(
+                MuteModal(
+                    db=self.db,
+                    member_id=self.misc["reported_member"]["id"],
+                    proofs=self.misc["proofs"]
+                )
             )
-        )
+        except Exception:
+            logger.exception(
+                "TicketComponentEmbed.mute_callback: failed to open MuteModal for channel %s",
+                self.ticket_channel_id
+            )
 
     async def warn_callback(self, interaction: discord.Interaction):
         if not await self._check_permissions(interaction):
             return
 
-        await interaction.response.send_modal(
-            WarnModal(
-                db=self.db,
-                member_id=self.misc["reported_member"]["id"],
-                proofs=self.misc["proofs"]
+        try:
+            await interaction.response.send_modal(
+                WarnModal(
+                    db=self.db,
+                    member_id=self.misc["reported_member"]["id"],
+                    proofs=self.misc["proofs"]
+                )
             )
-        )
+        except Exception:
+            logger.exception(
+                "TicketComponentEmbed.warn_callback: failed to open WarnModal for channel %s",
+                self.ticket_channel_id
+            )
 
 class TicketModal(discord.ui.Modal):
     def __init__(self, title: str, modal_data: dict, json_data, db: DatabaseAccess, message: discord.Message):
@@ -841,9 +981,26 @@ class TicketModal(discord.ui.Modal):
         channel_category = interaction.guild.get_channel(channel_id)
 
         if not isinstance(channel_category, discord.CategoryChannel):
-            channel_category = await interaction.guild.fetch_channel(channel_id)
+            try:
+                channel_category = await interaction.guild.fetch_channel(channel_id)
+            except discord.NotFound:
+                logger.exception(
+                    "TicketModal.ticket_thread_constructor: category channel %s not found in guild %s",
+                    channel_id, interaction.guild.id
+                )
+                channel_category = None
+            except discord.HTTPException:
+                logger.exception(
+                    "TicketModal.ticket_thread_constructor: HTTP error fetching category channel %s in guild %s",
+                    channel_id, interaction.guild.id
+                )
+                channel_category = None
 
         if not isinstance(channel_category, discord.CategoryChannel):
+            logger.error(
+                "TicketModal.ticket_thread_constructor: misconfigured ticket category %s in guild %s",
+                channel_id, interaction.guild.id
+            )
             await interaction.followup.send(
                 embed=simple_embed("Misconfigured ticket category. Please contact an admin."),
                 ephemeral=True
@@ -916,51 +1073,108 @@ class TicketModal(discord.ui.Modal):
                     create_private_threads=False,
                     send_messages_in_threads=False
                 )
-        if isinstance(channel_category, discord.CategoryChannel):
-            text_channel: discord.TextChannel = await interaction.guild.create_text_channel(
-                name=f"{ticket_name}-{opener.name}",
-                category=channel_category,
-                overwrites=overwrites
+
+        try:
+            if isinstance(channel_category, discord.CategoryChannel):
+                text_channel: discord.TextChannel = await interaction.guild.create_text_channel(
+                    name=f"{ticket_name}-{opener.name}",
+                    category=channel_category,
+                    overwrites=overwrites
+                )
+            else:
+                text_channel: discord.TextChannel = await interaction.guild.create_text_channel(
+                    name=f"{ticket_name}-{opener.name}",
+                    overwrites=overwrites
+                )
+        except discord.Forbidden:
+            logger.exception(
+                "TicketModal.ticket_thread_constructor: missing permissions to create ticket channel in guild %s",
+                interaction.guild.id
             )
-        else:
-            text_channel: discord.TextChannel = await interaction.guild.create_text_channel(
-                name=f"{ticket_name}-{opener.name}",
-                overwrites=overwrites
+            await interaction.followup.send(
+                embed=simple_embed("I don't have permission to create the ticket channel!", 'cross'),
+                ephemeral=True
             )
+            return None
+        except discord.HTTPException:
+            logger.exception(
+                "TicketModal.ticket_thread_constructor: HTTP error creating ticket channel in guild %s",
+                interaction.guild.id
+            )
+            await interaction.followup.send(
+                embed=simple_embed("Failed to create the ticket channel due to a network error!", 'cross'),
+                ephemeral=True
+            )
+            return None
 
         if not isinstance(opener, discord.Member):
+            logger.error(
+                "TicketModal.ticket_thread_constructor: opener %s is not a Member instance in guild %s",
+                getattr(opener, "id", "unknown"), interaction.guild.id
+            )
             return
 
         opener_view = TicketOpenerComponent(submission_json=submission_json, core_json=core_json, db=self.db, ticket_channel_id=text_channel.id)
         view = TicketComponentEmbed(ticket_channel_id=text_channel.id, submission_json=submission_json, core_json=core_json, db=self.db)
 
-        ticket_message: discord.Message = await text_channel.send(view=opener_view)
-        ticket_details_thread = await ticket_message.create_thread(
-            name="Ticket Details"
-        )
+        try:
+            ticket_message: discord.Message = await text_channel.send(view=opener_view)
+            ticket_details_thread = await ticket_message.create_thread(
+                name="Ticket Details"
+            )
 
-        ticket_details_message: discord.Message = await ticket_details_thread.send(
-            view=view
-        )
+            ticket_details_message: discord.Message = await ticket_details_thread.send(
+                view=view
+            )
+        except discord.HTTPException:
+            logger.exception(
+                "TicketModal.ticket_thread_constructor: failed to send ticket messages/thread in channel %s",
+                text_channel.id
+            )
+            await interaction.followup.send(
+                embed=simple_embed("Failed to fully set up the ticket channel due to a network error!", 'cross'),
+                ephemeral=True
+            )
+            return None
 
         try:
             await ticket_message.pin()
         except discord.Forbidden:
-            pass
+            logger.exception(
+                "TicketModal.ticket_thread_constructor: missing permissions to pin ticket message %s",
+                ticket_message.id
+            )
+        except discord.HTTPException:
+            logger.exception(
+                "TicketModal.ticket_thread_constructor: HTTP error pinning ticket message %s",
+                ticket_message.id
+            )
 
         if proofs_flag:
-            await text_channel.send(content=f"{proof_url}")
+            try:
+                await text_channel.send(content=f"{proof_url}")
+            except discord.HTTPException:
+                logger.exception(
+                    "TicketModal.ticket_thread_constructor: failed to send proofs in channel %s",
+                    text_channel.id
+                )
 
-        await self.db.bot_db.create_ticket(
-            text_channel.id,
-            interaction.guild.id,
-            opener.id,
-            ticket_name_base,
-            logging_channel_id,
-            submission_json,
-            ticket_message.id,
-            ticket_details_message.id
-        )
+        try:
+            await self.db.bot_db.create_ticket(
+                text_channel.id,
+                interaction.guild.id,
+                opener.id,
+                ticket_name_base,
+                logging_channel_id,
+                submission_json,
+                ticket_message.id,
+                ticket_details_message.id
+            )
+        except Exception:
+            logger.exception(
+                "TicketModal.ticket_thread_constructor: create_ticket db call failed for channel %s",
+                text_channel.id
+            )
         return text_channel
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -969,7 +1183,18 @@ class TicketModal(discord.ui.Modal):
 
         await interaction.response.defer(ephemeral=True)
 
-        rows = await self.db.bot_db.get_ticket_by_opener(interaction.user.id, interaction.guild.id)
+        try:
+            rows = await self.db.bot_db.get_ticket_by_opener(interaction.user.id, interaction.guild.id)
+        except Exception:
+            logger.exception(
+                "TicketModal.on_submit: get_ticket_by_opener failed for user %s in guild %s",
+                interaction.user.id, interaction.guild.id
+            )
+            await interaction.followup.send(
+                embed=simple_embed("Failed to check your existing tickets due to a database error!", 'cross'),
+                ephemeral=True
+            )
+            return
 
         if len(rows) >= 3:
             references = ", ".join(f"<#{r[0]}>" for r in rows)
@@ -992,7 +1217,19 @@ class TicketModal(discord.ui.Modal):
         field_data: List[Dict] = []
 
         bot: commands.Bot = cast(commands.Bot, interaction.client)
-        ctx = await bot.get_context(self.message)
+
+        try:
+            ctx = await bot.get_context(self.message)
+        except Exception:
+            logger.exception(
+                "TicketModal.on_submit: get_context failed for message %s",
+                self.message.id
+            )
+            await interaction.followup.send(
+                embed=simple_embed("Failed to prepare the ticket submission due to an unexpected error!", 'cross'),
+                ephemeral=True
+            )
+            return
 
         for data in self.components:
             field = data["field"]
@@ -1028,7 +1265,12 @@ class TicketModal(discord.ui.Modal):
                             "joined_on": f"<t:{int(member.joined_at.timestamp())}:R>" if member.joined_at else "<t:0:R>",
                         }
                     })
-                except:
+                except Exception:
+                    logger.warning(
+                        "TicketModal.on_submit: could not resolve member field value %r, falling back to raw text",
+                        item.component.value,
+                        exc_info=True
+                    )
                     field_data.append({
                         "field": field,
                         "value": {
@@ -1074,19 +1316,37 @@ class TicketModal(discord.ui.Modal):
             "logs_channel_id" : logs_channel_id,
             "ping_roles" : ping_roles
         }
-        thread_channel: discord.TextChannel | discord.Thread | None = await self.ticket_thread_constructor(
-            interaction,
-            self.json_data,
-            submission
-        )
 
-        if thread_channel is not None:
+        try:
+            thread_channel: discord.TextChannel | discord.Thread | None = await self.ticket_thread_constructor(
+                interaction,
+                self.json_data,
+                submission
+            )
+        except Exception:
+            logger.exception(
+                "TicketModal.on_submit: ticket_thread_constructor raised for user %s in guild %s",
+                interaction.user.id, interaction.guild.id
+            )
             await interaction.followup.send(
-                embed=simple_embed(
-                    f"Your ticket has been created: {thread_channel.mention}"
-                ),
+                embed=simple_embed("Failed to create your ticket due to an unexpected error!", 'cross'),
                 ephemeral=True
             )
+            return
+
+        if thread_channel is not None:
+            try:
+                await interaction.followup.send(
+                    embed=simple_embed(
+                        f"Your ticket has been created: {thread_channel.mention}"
+                    ),
+                    ephemeral=True
+                )
+            except discord.HTTPException:
+                logger.exception(
+                    "TicketModal.on_submit: failed to send ticket-created confirmation for channel %s",
+                    thread_channel.id
+                )
 
 class TicketSelectComponent(discord.ui.LayoutView):
     def __init__(self, json_data: dict, db: DatabaseAccess) -> None:
@@ -1130,18 +1390,48 @@ class TicketSelectComponent(discord.ui.LayoutView):
 
     async def ticket_selector_callback(self, interaction: discord.Interaction):
         selected_index = int(self.ticket_options.values[0])
-        selected_ticket = self.tickets[selected_index]
+
+        try:
+            selected_ticket = self.tickets[selected_index]
+        except IndexError:
+            logger.exception(
+                "TicketSelectComponent.ticket_selector_callback: selected index %s out of range (%s tickets)",
+                selected_index, len(self.tickets)
+            )
+            await interaction.response.send_message(
+                embed=simple_embed("That ticket type is no longer available!", 'cross'),
+                ephemeral=True
+            )
+            return
 
         assert interaction.message is not None
-        modal = TicketModal(
-            title=selected_ticket["label"],
-            modal_data=selected_ticket,
-            json_data=self.json_data,
-            db=self.db,
-            message=interaction.message
-        )
 
-        await interaction.response.send_modal(modal)
+        try:
+            modal = TicketModal(
+                title=selected_ticket["label"],
+                modal_data=selected_ticket,
+                json_data=self.json_data,
+                db=self.db,
+                message=interaction.message
+            )
+        except (TypeError, ValueError):
+            logger.exception(
+                "TicketSelectComponent.ticket_selector_callback: failed to build TicketModal for ticket %r",
+                selected_ticket.get("label")
+            )
+            await interaction.response.send_message(
+                embed=simple_embed("This ticket type is misconfigured. Please contact an admin.", 'cross'),
+                ephemeral=True
+            )
+            return
+
+        try:
+            await interaction.response.send_modal(modal)
+        except discord.HTTPException:
+            logger.exception(
+                "TicketSelectComponent.ticket_selector_callback: failed to send ticket modal for ticket %r",
+                selected_ticket.get("label")
+            )
 
 class TicketLogComponent(discord.ui.LayoutView):
     def __init__(self, ticket_opener: int, ticket_closed_by: int ,ticket_type: str, reason: str, transcript_file_name: str) -> None:
@@ -1344,10 +1634,21 @@ class TicketList(discord.ui.LayoutView):
         assert interaction.guild is not None
         ticket_id = int(interaction.custom_id)
 
-        result = await bot_db.get_ticket_log(
-            ticket_id,
-            interaction.guild.id
-        )
+        try:
+            result = await bot_db.get_ticket_log(
+                ticket_id,
+                interaction.guild.id
+            )
+        except Exception:
+            logger.exception(
+                "TicketList.retrieve_ticket_callback: get_ticket_log failed for ticket %s in guild %s",
+                ticket_id, interaction.guild.id
+            )
+            await interaction.response.send_message(
+                f"Failed to retrieve ticket #{ticket_id} due to a database error.",
+                ephemeral=True,
+            )
+            return
 
         if result is None:
             await interaction.response.send_message(
@@ -1395,7 +1696,13 @@ class TicketList(discord.ui.LayoutView):
                 inline=False,
             )
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        try:
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+        except discord.HTTPException:
+            logger.exception(
+                "TicketList.retrieve_ticket_callback: failed to send ticket info for ticket %s",
+                ticket_id
+            )
 
     async def on_apply_filter(self, interaction: discord.Interaction) -> None:
         self.opened_user_id = self.user_select.values[0].id if self.user_select.values else None
@@ -1409,13 +1716,25 @@ class TicketList(discord.ui.LayoutView):
         bot_db = cast("Lily", interaction.client).db
         assert bot_db is not None
         assert interaction.guild is not None
-        ticket_result = await bot_db.get_ticket_logs(
-            interaction.guild.id,
-            opened_user_id=self.opened_user_id,
-            staff_handled=self.staff_handled,
-            ticket_type=self.ticket_type,
-            page=self.page,
-        )
+
+        try:
+            ticket_result = await bot_db.get_ticket_logs(
+                interaction.guild.id,
+                opened_user_id=self.opened_user_id,
+                staff_handled=self.staff_handled,
+                ticket_type=self.ticket_type,
+                page=self.page,
+            )
+        except Exception:
+            logger.exception(
+                "TicketList.refresh: get_ticket_logs failed for guild %s (page %s)",
+                interaction.guild.id, self.page
+            )
+            await interaction.response.send_message(
+                embed=simple_embed("Failed to refresh ticket logs due to a database error!", 'cross'),
+                ephemeral=True
+            )
+            return
 
         guild_avatar = interaction.guild.icon.url if interaction.guild.icon else None
         new_view = TicketList(
@@ -1426,4 +1745,11 @@ class TicketList(discord.ui.LayoutView):
             ticket_type=self.ticket_type,
             guild_avatar=guild_avatar
         )
-        await interaction.response.edit_message(view=new_view)
+
+        try:
+            await interaction.response.edit_message(view=new_view)
+        except discord.HTTPException:
+            logger.exception(
+                "TicketList.refresh: failed to edit message with refreshed ticket list for guild %s",
+                interaction.guild.id
+            )
