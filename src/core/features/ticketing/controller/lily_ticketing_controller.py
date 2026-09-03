@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import logging
 
 import discord
 from discord.ext import commands
 
-from typing import List, Dict, Any, TYPE_CHECKING, cast
+from typing import List, TYPE_CHECKING, cast
 
 from src.core.configs.bot_details import img
 from src.core.utils.embeds.sLilyEmbed import (
@@ -32,6 +33,9 @@ from ..transcript import transcript
 if TYPE_CHECKING:
     from src.lily import Lily
 
+logger = logging.getLogger("lily")
+
+
 async def initialize_ticket_view(bot):
     try:
         _bot = cast("Lily", bot)
@@ -43,7 +47,7 @@ async def initialize_ticket_view(bot):
         panels = await bot_db.get_ticket_views()
 
         if not panels:
-            print("[InitializeTicketView] No ticket panels found.")
+            logger.info("[InitializeTicketView] No ticket panels found.")
             return
 
         for panel in panels:
@@ -61,7 +65,9 @@ async def initialize_ticket_view(bot):
                     try:
                         channel = await bot.fetch_channel(channel_id)
                     except (discord.NotFound, discord.Forbidden):
-                        print(f"[InitializeTicketView] Missing channel {channel_id}")
+                        logger.warning(
+                            "[InitializeTicketView] Missing channel %s", channel_id
+                        )
                         continue
 
                 selector_view = TicketSelectComponent(config, DatabaseAccess(bot_db, logging_controller))
@@ -89,7 +95,9 @@ async def initialize_ticket_view(bot):
                         )
 
                 except (discord.NotFound, discord.Forbidden):
-                    print(f"[InitializeTicketView] Panel message missing in {channel_id}")
+                    logger.warning(
+                        "[InitializeTicketView] Panel message missing in %s", channel_id
+                    )
                     continue
 
                 try:
@@ -120,17 +128,20 @@ async def initialize_ticket_view(bot):
                             message_id=ticket_message_id
                         )
 
-                except Exception as e:
-                    print(f"[Ticket Component Restore ERROR] {e}")
+                except Exception:
+                    logger.exception(
+                        "[Ticket Component Restore ERROR] guild_id=%s", guild_id
+                    )
 
                 await asyncio.sleep(1)
 
-            except Exception as e:
-                print(f"[TicketPanel Restore ERROR] {e}")
+            except Exception:
+                logger.exception("[TicketPanel Restore ERROR] panel=%s", panel)
                 continue
 
-    except Exception as e:
-        print(f"[InitializeTicketView ERROR] {e}")
+    except Exception:
+        logger.exception("[InitializeTicketView ERROR]")
+
 
 async def spawn_ticket(ctx: commands.Context, json_data: dict) -> None:
     if ctx.guild is None:
@@ -177,12 +188,13 @@ async def spawn_ticket(ctx: commands.Context, json_data: dict) -> None:
         )
 
 
-    except Exception as e:
-        print(f"[SPAWN TICKET ERROR] {e}")
+    except Exception:
+        logger.exception("[SPAWN TICKET ERROR] guild_id=%s", ctx.guild.id)
 
         await ctx.reply(
             "Failed to spawn ticket panel due to an internal error."
         )
+
 
 async def c_ticket_log_action_channel(interaction: discord.Interaction,opened_user_id: int,ticket_type: str, logs_channel: discord.TextChannel, transcripts_file, transcript_file_name: str ,reason: str="No reason provided!") -> int:
     view = TicketLogComponent(
@@ -201,9 +213,13 @@ async def c_ticket_log_action_channel(interaction: discord.Interaction,opened_us
         )
         
         return message.id
-    except Exception as e:
-        print(f"Exception [TicketLogAction] {e}")
+    except Exception:
+        logger.exception(
+            "[TicketLogAction] Failed to send log message to channel_id=%s",
+            logs_channel.id,
+        )
         return 0
+
 
 async def rename_ticket(interaction: discord.Interaction, name: str):
     if not isinstance(interaction.channel, discord.TextChannel):
@@ -211,12 +227,36 @@ async def rename_ticket(interaction: discord.Interaction, name: str):
     bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
 
-    owner = await bot_db.get_ticket_owner(interaction.channel.id)
-    if owner:
-        await interaction.channel.edit(name=name.replace(" ", "_"), reason=f"Ticket renamed by {interaction.user}")
-        await interaction.response.send_message(embed=simple_embed("Ticket renamed successfully!"))
-    else:
-        await interaction.response.send_message(embed=simple_embed("Attempted to rename an invalid Instigator Ticket"))
+    try:
+        owner = await bot_db.get_ticket_owner(interaction.channel.id)
+        if owner:
+            await interaction.channel.edit(name=name.replace(" ", "_"), reason=f"Ticket renamed by {interaction.user}")
+            await interaction.response.send_message(embed=simple_embed("Ticket renamed successfully!"))
+        else:
+            await interaction.response.send_message(embed=simple_embed("Attempted to rename an invalid Instigator Ticket"))
+    except discord.Forbidden:
+        logger.warning(
+            "[RENAME TICKET] Missing permissions to rename channel_id=%s",
+            interaction.channel.id,
+        )
+        await interaction.response.send_message(
+            embed=simple_embed("Missing permissions to rename this channel.", "cross")
+        )
+    except discord.HTTPException:
+        logger.exception(
+            "[RENAME TICKET] Failed to rename channel_id=%s", interaction.channel.id
+        )
+        await interaction.response.send_message(
+            embed=simple_embed("Failed to rename this channel.", "cross")
+        )
+    except Exception:
+        logger.exception(
+            "[RENAME TICKET ERROR] channel_id=%s", interaction.channel.id
+        )
+        await interaction.response.send_message(
+            embed=simple_embed("An internal error occurred while renaming the ticket.", "cross")
+        )
+
 
 async def ticket_add_user(
     interaction: discord.Interaction,
@@ -260,6 +300,11 @@ async def ticket_add_user(
         )
 
     except discord.Forbidden:
+        logger.warning(
+            "[TICKET ADD USER] Missing permissions on channel_id=%s for user_id=%s",
+            interaction.channel.id,
+            user.id,
+        )
         await interaction.response.send_message(
             embed=simple_embed(
                 "Missing permissions to modify channel access.",
@@ -267,16 +312,25 @@ async def ticket_add_user(
             )
         )
 
-    except discord.HTTPException as e:
+    except discord.HTTPException:
+        logger.exception(
+            "[TICKET ADD USER] HTTP error adding user_id=%s to channel_id=%s",
+            user.id,
+            interaction.channel.id,
+        )
         await interaction.response.send_message(
             embed=simple_embed(
-                f"Failed to add user: {e}",
+                "Failed to add user.",
                 "cross"
             )
         )
 
-    except Exception as e:
-        print(f"[TICKET ADD USER ERROR] {e}")
+    except Exception:
+        logger.exception(
+            "[TICKET ADD USER ERROR] channel_id=%s user_id=%s",
+            interaction.channel.id,
+            user.id,
+        )
 
         await interaction.response.send_message(
             embed=simple_embed(
@@ -284,6 +338,7 @@ async def ticket_add_user(
                 "cross"
             )
         )
+
 
 async def ticket_remove_user(
     interaction: discord.Interaction,
@@ -325,6 +380,11 @@ async def ticket_remove_user(
         )
 
     except discord.Forbidden:
+        logger.warning(
+            "[TICKET REMOVE USER] Missing permissions on channel_id=%s for user_id=%s",
+            interaction.channel.id,
+            user.id,
+        )
         await interaction.response.send_message(
             embed=simple_embed(
                 "Missing permissions to modify channel access.",
@@ -332,23 +392,33 @@ async def ticket_remove_user(
             )
         )
 
-    except discord.HTTPException as e:
+    except discord.HTTPException:
+        logger.exception(
+            "[TICKET REMOVE USER] HTTP error removing user_id=%s from channel_id=%s",
+            user.id,
+            interaction.channel.id,
+        )
         await interaction.response.send_message(
             embed=simple_embed(
-                f"Failed to add user: {e}",
+                "Failed to remove user.",
                 "cross"
             )
         )
 
-    except Exception as e:
-        print(f"[TICKET ADD USER ERROR] {e}")
+    except Exception:
+        logger.exception(
+            "[TICKET REMOVE USER ERROR] channel_id=%s user_id=%s",
+            interaction.channel.id,
+            user.id,
+        )
 
         await interaction.response.send_message(
             embed=simple_embed(
-                "An internal error occurred while adding the user.",
+                "An internal error occurred while removing the user.",
                 "cross"
             )
         )
+
 
 async def ticket_close(interaction: discord.Interaction, reason: str="No reason provided"):
     if interaction.guild is None:
@@ -424,8 +494,18 @@ async def ticket_close(interaction: discord.Interaction, reason: str="No reason 
                     logs_channel = None
 
             except discord.NotFound:
+                logger.warning(
+                    "[TICKET CLOSE] Logs channel_id=%s not found for guild_id=%s",
+                    logs_channel_id,
+                    interaction.guild.id,
+                )
                 logs_channel = None
             except discord.Forbidden:
+                logger.warning(
+                    "[TICKET CLOSE] Missing permissions to fetch logs channel_id=%s for guild_id=%s",
+                    logs_channel_id,
+                    interaction.guild.id,
+                )
                 logs_channel = None
 
         if isinstance(channel, discord.TextChannel):
@@ -435,6 +515,10 @@ async def ticket_close(interaction: discord.Interaction, reason: str="No reason 
             )
 
             if transcript_bytes is None:
+                logger.error(
+                    "[TICKET CLOSE] Failed to generate transcript for ticket_id=%s",
+                    ticket_id,
+                )
                 return await interaction.response.send_message("Failed to generate transcript.")
 
 
@@ -504,22 +588,33 @@ async def ticket_close(interaction: discord.Interaction, reason: str="No reason 
                         )
                     )
 
-            except:
-                """ Silently ignore the DM """
-                pass
+            except Exception:
+                logger.info(
+                    "[TICKET CLOSE] Could not DM ticket opener user_id=%s for ticket_id=%s",
+                    opened_user_id,
+                    ticket_id,
+                    exc_info=True,
+                )
 
 
             try:
                 await channel.delete(reason=f"Ticket Closed by {interaction.user}")
             except discord.Forbidden:
+                logger.warning(
+                    "[TICKET CLOSE] Missing permissions to delete channel_id=%s",
+                    ticket_id,
+                )
                 return await interaction.response.send_message("Missing permissions to delete channel.")
-            except discord.HTTPException as e:
-                return await interaction.response.send_message(f"Failed to delete channel: {e}")
+            except discord.HTTPException:
+                logger.exception(
+                    "[TICKET CLOSE] Failed to delete channel_id=%s", ticket_id
+                )
+                return await interaction.response.send_message("Failed to delete channel.")
 
             await bot_db.delete_ticket(ticket_id)
 
-    except Exception as e:
-        print(f"[TICKET CLOSE ERROR] {e}")
+    except Exception:
+        logger.exception("[TICKET CLOSE ERROR] ticket_id=%s", ticket_id)
 
         await message.edit(
             embed=simple_embed(
@@ -528,6 +623,7 @@ async def ticket_close(interaction: discord.Interaction, reason: str="No reason 
             )
         )
 
+
 async def ticket_stats(interaction: discord.Interaction, member: discord.Member):
 
     if interaction.guild is None:
@@ -535,7 +631,19 @@ async def ticket_stats(interaction: discord.Interaction, member: discord.Member)
 
     bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
-    results = await bot_db.ticket_stats(interaction.guild.id, member.id)
+
+    try:
+        results = await bot_db.ticket_stats(interaction.guild.id, member.id)
+    except Exception:
+        logger.exception(
+            "[TICKET STATS ERROR] guild_id=%s member_id=%s",
+            interaction.guild.id,
+            member.id,
+        )
+        return await interaction.response.send_message(
+            embed=simple_embed("Failed to fetch ticket stats due to an internal error.", "cross")
+        )
+
     if not results:
         return await interaction.response.send_message(embed=simple_embed("No ticket stats found!", 'cross'))
 
