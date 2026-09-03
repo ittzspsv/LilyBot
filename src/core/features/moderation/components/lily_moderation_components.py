@@ -13,6 +13,9 @@ import json
 import io
 from src.core.configs.bot_details import img, emoji
 import re
+import logging
+
+logger = logging.getLogger("lily")
 
 if TYPE_CHECKING:
     from .....lily import Lily
@@ -107,20 +110,27 @@ class ModerationInsights(discord.ui.LayoutView):
         if self.logs_db is None:
             await interaction.response.send_message(embed=simple_embed("Internal Failure", 'cross'), ephemeral=True)
             return 
-        await interaction.response.defer()
 
-        selected_ms_leaderboard_option = self.ms_leaderboard_options.values[0]
-        ms_data_dict: dict = await self.logs_db.fetch_moderation_leaderboard(interaction.guild.id, selected_ms_leaderboard_option)
+        try:
+            await interaction.response.defer()
 
+            selected_ms_leaderboard_option = self.ms_leaderboard_options.values[0]
+            ms_data_dict: dict = await self.logs_db.fetch_moderation_leaderboard(interaction.guild.id, selected_ms_leaderboard_option)
 
-        ms_data: list = ms_data_dict.get("moderator_statistics_leaderboard", [])
-        if not ms_data:
-            await interaction.followup.send(embed=simple_embed("No Moderation Data Available", 'cross'))
-            return
+            ms_data: list = ms_data_dict.get("moderator_statistics_leaderboard", [])
+            if not ms_data:
+                await interaction.followup.send(embed=simple_embed("No Moderation Data Available", 'cross'))
+                return
 
-
-        view = Leaderboard(self.bot, selected_ms_leaderboard_option, ms_data)
-        await interaction.followup.send(view=view, ephemeral=True)
+            view = Leaderboard(self.bot, selected_ms_leaderboard_option, ms_data)
+            await interaction.followup.send(view=view, ephemeral=True)
+        except Exception:
+            logger.exception(
+                "Failed to build/send moderation leaderboard for guild_id=%s option=%s",
+                interaction.guild.id,
+                self.ms_leaderboard_options.values[0] if self.ms_leaderboard_options.values else None,
+            )
+            await interaction.followup.send(embed=simple_embed("Something went wrong while fetching the leaderboard.", 'cross'), ephemeral=True)
 
     async def on_timeout(self):
         self.ms_leaderboard_options.disabled = True
@@ -128,7 +138,7 @@ class ModerationInsights(discord.ui.LayoutView):
             try:
                 await self.message.edit(view=self)
             except discord.HTTPException:
-                pass
+                logger.exception("Failed to disable ms_leaderboard_options on timeout for message_id=%s", self.message.id)
 
 def action_log(
     action: str,
@@ -145,6 +155,7 @@ def action_log(
     }
 
     if action not in titles:
+        logger.error("action_log called with unknown action '%s' (guild_name=%s)", action, guild_name)
         raise ValueError(f"Unknown action '{action}'. Must be one of {list(titles)}.")
 
     embed = discord.Embed(
@@ -265,35 +276,42 @@ class EditCaseModal(discord.ui.Modal):
         self._interaction = _interaction
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        bot_db = cast("Lily", interaction.client).db
-        assert bot_db is not None
+        try:
+            bot_db = cast("Lily", interaction.client).db
+            assert bot_db is not None
 
-        assert isinstance(self.reason.component, discord.ui.TextInput)
+            assert isinstance(self.reason.component, discord.ui.TextInput)
 
-        result = await bot_db.edit_case(
-            interaction.user.id,
-            case_id=self.case_id,
-            case_statement=self.reason.component.value,
-            absolute=False
-        )
+            result = await bot_db.edit_case(
+                interaction.user.id,
+                case_id=self.case_id,
+                case_statement=self.reason.component.value,
+                absolute=False
+            )
 
-        if not result["success"]:
-            await interaction.response.send_message(embed=simple_embed(result["message"], 'cross'), ephemeral=True)
-            return
+            if not result["success"]:
+                await interaction.response.send_message(embed=simple_embed(result["message"], 'cross'), ephemeral=True)
+                return
 
-        assert interaction.guild is not None
-        updated_case_data = await bot_db.get_case(self.case_id)
+            assert interaction.guild is not None
+            updated_case_data = await bot_db.get_case(self.case_id)
 
-        if updated_case_data is None:
+            if updated_case_data is None:
+                await interaction.response.send_message(embed=simple_embed(result["message"]), ephemeral=True)
+                return
+
+            new_view = CaseView(self.case_id, updated_case_data)
+
+            if self._interaction.message is not None:
+                await self._interaction.edit_original_response(view=new_view)
+
             await interaction.response.send_message(embed=simple_embed(result["message"]), ephemeral=True)
-            return
-
-        new_view = CaseView(self.case_id, updated_case_data)
-
-        if self._interaction.message is not None:
-            await self._interaction.edit_original_response(view=new_view)
-
-        await interaction.response.send_message(embed=simple_embed(result["message"]), ephemeral=True)
+        except Exception:
+            logger.exception("Failed to submit case edit for case_id=%s by user_id=%s", self.case_id, interaction.user.id)
+            if not interaction.response.is_done():
+                await interaction.response.send_message(embed=simple_embed("Something went wrong while editing the case.", 'cross'), ephemeral=True)
+            else:
+                await interaction.followup.send(embed=simple_embed("Something went wrong while editing the case.", 'cross'), ephemeral=True)
 
 class CaseView(discord.ui.LayoutView):
     def __init__(self, case_id: int, case_data: Dict[str, Any]) -> None:
@@ -311,13 +329,22 @@ class CaseView(discord.ui.LayoutView):
         try:
             dt = datetime.fromisoformat(timestamp)
         except Exception:
-            dt = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
+            try:
+                dt = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                logger.exception(
+                    "Failed to parse timestamp '%s' for case_id=%s; falling back to epoch 0",
+                    timestamp,
+                    case_id,
+                )
+                dt = datetime.fromtimestamp(0)
         ts_unix = int(dt.timestamp())
 
         raw_metadata = case_data.get("metadata")
         try:
             metadata: Dict[str, Any] = json.loads(raw_metadata) if raw_metadata else {}
         except (TypeError, json.JSONDecodeError):
+            logger.exception("Failed to parse metadata JSON for case_id=%s: %r", case_id, raw_metadata)
             metadata = {}
 
 
@@ -366,101 +393,149 @@ class CaseView(discord.ui.LayoutView):
         self.add_item(case_overview)
 
     async def edit_case_callback(self, interaction: discord.Interaction):
-        if has_app_permission(interaction, command_name="case_edit"):
-            await interaction.response.send_modal(EditCaseModal(self.case_id, self.reason, interaction))
-        else:
-            await interaction.response.send_message(embed=simple_embed("Access denied!", 'cross'), ephemeral=True)
-            return
+        try:
+            if has_app_permission(interaction, command_name="case_edit"):
+                await interaction.response.send_modal(EditCaseModal(self.case_id, self.reason, interaction))
+            else:
+                await interaction.response.send_message(embed=simple_embed("Access denied!", 'cross'), ephemeral=True)
+                return
+        except Exception:
+            logger.exception("Failed to open edit-case modal for case_id=%s by user_id=%s", self.case_id, interaction.user.id)
+            if not interaction.response.is_done():
+                await interaction.response.send_message(embed=simple_embed("Something went wrong opening the edit form.", 'cross'), ephemeral=True)
 
     async def proofs_button_callback(self, interaction: discord.Interaction) -> None:
-        assert interaction.guild is not None
+        try:
+            assert interaction.guild is not None
 
-        bot_db = cast("Lily", interaction.client).db
-        assert bot_db is not None
+            bot_db = cast("Lily", interaction.client).db
+            assert bot_db is not None
 
-        proofs_references = await bot_db.get_proof_references(interaction.guild.id, case_id=self.case_id)
-        if len(proofs_references) <= 0:
-            await interaction.response.send_message(
-                embed=simple_embed("No Proofs Found for the given case id", 'cross'), ephemeral=True
-            )
-            return
+            proofs_references = await bot_db.get_proof_references(interaction.guild.id, case_id=self.case_id)
+            if len(proofs_references) <= 0:
+                await interaction.response.send_message(
+                    embed=simple_embed("No Proofs Found for the given case id", 'cross'), ephemeral=True
+                )
+                return
 
-        logs_channel_id = bot_db.get_channel(interaction.guild.id, "logs_channel")
+            logs_channel_id = bot_db.get_channel(interaction.guild.id, "logs_channel")
 
-        await interaction.response.defer(ephemeral=True)
+            await interaction.response.defer(ephemeral=True)
 
-        if not logs_channel_id:
-            await interaction.followup.send(
-                embed=simple_embed(
-                    "Proofs cannot be retrieved: logging channel is not configured.",
-                    "cross"
-                ),
-                ephemeral=True
-            )
-            return
-
-        if self.channel is None:
-            self.channel = interaction.guild.get_channel(logs_channel_id)
-
-            if self.channel is None:
-                try:
-                    self.channel = await interaction.guild.fetch_channel(logs_channel_id)
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                    await interaction.followup.send(
-                        embed=simple_embed(
-                            "Proofs cannot be retrieved: logging channel is missing or inaccessible.",
-                            "cross"
-                        ),
-                        ephemeral=True
-                    )
-                    return
-
-        if not isinstance(self.channel, discord.TextChannel):
-            return
-
-        files: list[discord.File] = []
-
-        for message_id in proofs_references:
-            try:
-                message = await self.channel.fetch_message(message_id)
-            except discord.NotFound:
-                continue
-            except discord.Forbidden:
+            if not logs_channel_id:
                 await interaction.followup.send(
                     embed=simple_embed(
-                        "Missing permission to read messages in the logging channel.",
+                        "Proofs cannot be retrieved: logging channel is not configured.",
                         "cross"
                     ),
                     ephemeral=True
                 )
                 return
-            except discord.HTTPException:
-                continue
 
-            for attachment in message.attachments:
+            if self.channel is None:
+                self.channel = interaction.guild.get_channel(logs_channel_id)
+
+                if self.channel is None:
+                    try:
+                        self.channel = await interaction.guild.fetch_channel(logs_channel_id)
+                    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                        logger.exception(
+                            "Failed to fetch logs channel_id=%s for guild_id=%s (case_id=%s)",
+                            logs_channel_id,
+                            interaction.guild.id,
+                            self.case_id,
+                        )
+                        await interaction.followup.send(
+                            embed=simple_embed(
+                                "Proofs cannot be retrieved: logging channel is missing or inaccessible.",
+                                "cross"
+                            ),
+                            ephemeral=True
+                        )
+                        return
+
+            if not isinstance(self.channel, discord.TextChannel):
+                logger.error(
+                    "Resolved logs channel_id=%s for guild_id=%s is not a TextChannel (case_id=%s)",
+                    logs_channel_id,
+                    interaction.guild.id,
+                    self.case_id,
+                )
+                return
+
+            files: list[discord.File] = []
+
+            for message_id in proofs_references:
                 try:
-                    data = await attachment.read()
-                    files.append(
-                        discord.File(fp=io.BytesIO(data), filename=attachment.filename)
+                    message = await self.channel.fetch_message(message_id)
+                except discord.NotFound:
+                    logger.warning(
+                        "Proof message_id=%s not found in channel_id=%s (case_id=%s)",
+                        message_id,
+                        self.channel.id,
+                        self.case_id,
                     )
+                    continue
+                except discord.Forbidden:
+                    logger.exception(
+                        "Missing permission to fetch message_id=%s in channel_id=%s (case_id=%s)",
+                        message_id,
+                        self.channel.id,
+                        self.case_id,
+                    )
+                    await interaction.followup.send(
+                        embed=simple_embed(
+                            "Missing permission to read messages in the logging channel.",
+                            "cross"
+                        ),
+                        ephemeral=True
+                    )
+                    return
                 except discord.HTTPException:
+                    logger.exception(
+                        "Failed to fetch proof message_id=%s in channel_id=%s (case_id=%s)",
+                        message_id,
+                        self.channel.id,
+                        self.case_id,
+                    )
                     continue
 
-        if not files:
+                for attachment in message.attachments:
+                    try:
+                        data = await attachment.read()
+                        files.append(
+                            discord.File(fp=io.BytesIO(data), filename=attachment.filename)
+                        )
+                    except discord.HTTPException:
+                        logger.exception(
+                            "Failed to read attachment '%s' from message_id=%s (case_id=%s)",
+                            attachment.filename,
+                            message_id,
+                            self.case_id,
+                        )
+                        continue
+
+            if not files:
+                await interaction.followup.send(
+                    embed=simple_embed(
+                        "No valid proof attachments were found for this case.",
+                        "cross"
+                    ),
+                    ephemeral=True
+                )
+                return
+
             await interaction.followup.send(
-                embed=simple_embed(
-                    "No valid proof attachments were found for this case.",
-                    "cross"
-                ),
+                content=f"Proofs for case `{self.case_id}`",
+                files=files,
                 ephemeral=True
             )
-            return
-
-        await interaction.followup.send(
-            content=f"Proofs for case `{self.case_id}`",
-            files=files,
-            ephemeral=True
-        )  
+        except Exception:
+            logger.exception("Unhandled error while fetching proofs for case_id=%s", self.case_id)
+            if not interaction.response.is_done():
+                await interaction.response.send_message(embed=simple_embed("Something went wrong while fetching proofs.", 'cross'), ephemeral=True)
+            else:
+                await interaction.followup.send(embed=simple_embed("Something went wrong while fetching proofs.", 'cross'), ephemeral=True)
 
 class CaseListView(discord.ui.LayoutView):
     def __init__(
@@ -510,7 +585,15 @@ class CaseListView(discord.ui.LayoutView):
             try:
                 dt = datetime.fromisoformat(ts)
             except Exception:
-                dt = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
+                try:
+                    dt = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    logger.exception(
+                        "Failed to parse timestamp '%s' for case_id=%s in case list; falling back to epoch 0",
+                        ts,
+                        log.get("case_id"),
+                    )
+                    dt = datetime.fromtimestamp(0)
 
             ts_unix = int(dt.timestamp())
             case_id = log.get("case_id")
@@ -575,24 +658,36 @@ class CaseListView(discord.ui.LayoutView):
         return row
 
     async def _refresh_page(self, interaction: discord.Interaction, new_page: int) -> None:
-        result = await self.db.fetch_mod_logs(
-            guild_id=self.guild_id,
-            target_user_id=self.target_user_id,
-            moderator_id=self.moderator_id,
-            mod_type=self.mod_type,
-            page=new_page,
-        )
+        try:
+            result = await self.db.fetch_mod_logs(
+                guild_id=self.guild_id,
+                target_user_id=self.target_user_id,
+                moderator_id=self.moderator_id,
+                mod_type=self.mod_type,
+                page=new_page,
+            )
 
-        new_view = CaseListView(
-            self.user,
-            result,
-            self.db,
-            guild_id=self.guild_id,
-            target_user_id=self.target_user_id,
-            moderator_id=self.moderator_id,
-            mod_type=self.mod_type,
-        )
-        await interaction.response.edit_message(view=new_view, allowed_mentions=discord.AllowedMentions.none())
+            new_view = CaseListView(
+                self.user,
+                result,
+                self.db,
+                guild_id=self.guild_id,
+                target_user_id=self.target_user_id,
+                moderator_id=self.moderator_id,
+                mod_type=self.mod_type,
+            )
+            await interaction.response.edit_message(view=new_view, allowed_mentions=discord.AllowedMentions.none())
+        except Exception:
+            logger.exception(
+                "Failed to refresh case list page=%s for guild_id=%s target_user_id=%s",
+                new_page,
+                self.guild_id,
+                self.target_user_id,
+            )
+            if not interaction.response.is_done():
+                await interaction.response.send_message(embed=simple_embed("Something went wrong while changing pages.", 'cross'), ephemeral=True)
+            else:
+                await interaction.followup.send(embed=simple_embed("Something went wrong while changing pages.", 'cross'), ephemeral=True)
 
     async def previous_button_callback(self, interaction: discord.Interaction) -> None:
         await self._refresh_page(interaction, self.page - 1)
@@ -601,24 +696,29 @@ class CaseListView(discord.ui.LayoutView):
         await self._refresh_page(interaction, self.page + 1)
 
     async def case_info_callback(self, interaction: discord.Interaction) -> None:
-        assert interaction.guild is not None
-        custom_id = interaction.custom_id
-        if custom_id is None:
-            return
+        try:
+            assert interaction.guild is not None
+            custom_id = interaction.custom_id
+            if custom_id is None:
+                return
 
-        bot_db = cast("Lily", interaction.client).db
-        assert bot_db is not None
+            bot_db = cast("Lily", interaction.client).db
+            assert bot_db is not None
 
-        case_id = int(custom_id)
-        case_data = await bot_db.get_case(case_id)
+            case_id = int(custom_id)
+            case_data = await bot_db.get_case(case_id)
 
-        if case_data is None:
-            await interaction.response.send_message(embed=simple_embed("Case not found", 'cross'), ephemeral=True)
-            return
+            if case_data is None:
+                await interaction.response.send_message(embed=simple_embed("Case not found", 'cross'), ephemeral=True)
+                return
 
-        view = CaseView(case_id, case_data)
+            view = CaseView(case_id, case_data)
 
-        await interaction.response.send_message(view=view, ephemeral=True)
+            await interaction.response.send_message(view=view, ephemeral=True)
+        except Exception:
+            logger.exception("Failed to open case info for custom_id=%s", getattr(interaction, "custom_id", None))
+            if not interaction.response.is_done():
+                await interaction.response.send_message(embed=simple_embed("Something went wrong opening that case.", 'cross'), ephemeral=True)
 
 class AppealForumCustomize(discord.ui.Modal):
     name = discord.ui.Label(
@@ -649,16 +749,21 @@ class AppealForumCustomize(discord.ui.Modal):
         self.bot_db = bot_db
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        assert interaction.guild is not None
-        assert isinstance(self.name.component, discord.ui.TextInput)
-        await self.bot_db.upsert_appeal_forum(
-            interaction.guild.id,
-            self.name.component.value
-        )
+        try:
+            assert interaction.guild is not None
+            assert isinstance(self.name.component, discord.ui.TextInput)
+            await self.bot_db.upsert_appeal_forum(
+                interaction.guild.id,
+                self.name.component.value
+            )
 
-        await interaction.response.send_message(
-            embed=simple_embed("Successfully Updated Appeal Forum Config!")
-        )
+            await interaction.response.send_message(
+                embed=simple_embed("Successfully Updated Appeal Forum Config!")
+            )
+        except Exception:
+            logger.exception("Failed to update appeal forum config for guild_id=%s", getattr(interaction.guild, "id", None))
+            if not interaction.response.is_done():
+                await interaction.response.send_message(embed=simple_embed("Something went wrong while saving the appeal forum config. Make sure it's valid JSON.", 'cross'), ephemeral=True)
 
 class AppealModal(discord.ui.Modal):
     def __init__(
@@ -705,183 +810,221 @@ class AppealModal(discord.ui.Modal):
         }
 
         await interaction.response.defer()
-        guild = interaction.client.get_guild(self.guild_id)
 
-        if guild is None:
-            try:
-                guild = await interaction.client.fetch_guild(self.guild_id)
-            except discord.NotFound:
-                await interaction.followup.send(
-                    embed=simple_embed("Internal Error", 'cross')
-                )
-                return
-            except discord.Forbidden:
-                await interaction.followup.send(
-                    embed=simple_embed("Internal Error", 'cross')
-                )
-                return
+        try:
+            guild = interaction.client.get_guild(self.guild_id)
 
-        appeal_channel_id: int | None = self.db.get_channel(
-            self.guild_id,
-            "moderation_appeal",
-        )
+            if guild is None:
+                try:
+                    guild = await interaction.client.fetch_guild(self.guild_id)
+                except discord.NotFound:
+                    logger.exception("Guild_id=%s not found while submitting appeal for case_id=%s", self.guild_id, self.case_id)
+                    await interaction.followup.send(
+                        embed=simple_embed("Internal Error", 'cross')
+                    )
+                    return
+                except discord.Forbidden:
+                    logger.exception("Forbidden fetching guild_id=%s while submitting appeal for case_id=%s", self.guild_id, self.case_id)
+                    await interaction.followup.send(
+                        embed=simple_embed("Internal Error", 'cross')
+                    )
+                    return
 
-        if appeal_channel_id is None:
-            await interaction.followup.send(
-                embed=simple_embed("The moderation appeal forum has not been configured.", "cross"),
-                ephemeral=True,
+            appeal_channel_id: int | None = self.db.get_channel(
+                self.guild_id,
+                "moderation_appeal",
             )
-            return
 
-        appeal_forum = guild.get_channel(appeal_channel_id)
-
-        if appeal_forum is None:
-            try:
-                appeal_forum = await guild.fetch_channel(appeal_channel_id)
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            if appeal_channel_id is None:
                 await interaction.followup.send(
-                    embed=simple_embed(
-                        "The configured moderation appeal forum could not be found.",
-                        "cross",
-                    ),
+                    embed=simple_embed("The moderation appeal forum has not been configured.", "cross"),
                     ephemeral=True,
                 )
                 return
-            
-        assert isinstance(appeal_forum, discord.ForumChannel)
 
-        """ Setup an embed """
-        appeal_embed = discord.Embed(
-            title="Case Appeal",
-            description=f"- User: {interaction.user.mention}\n- ID: {interaction.user.id}",
-            color=16777215,
-        )
+            appeal_forum = guild.get_channel(appeal_channel_id)
 
-        for question, answer in answers.items():
-            appeal_embed.add_field(
-                name=question,
-                value=answer[:1024] or "*No response*",
-                inline=False,
+            if appeal_forum is None:
+                try:
+                    appeal_forum = await guild.fetch_channel(appeal_channel_id)
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    logger.exception(
+                        "Failed to fetch appeal forum channel_id=%s for guild_id=%s (case_id=%s)",
+                        appeal_channel_id,
+                        self.guild_id,
+                        self.case_id,
+                    )
+                    await interaction.followup.send(
+                        embed=simple_embed(
+                            "The configured moderation appeal forum could not be found.",
+                            "cross",
+                        ),
+                        ephemeral=True,
+                    )
+                    return
+
+            assert isinstance(appeal_forum, discord.ForumChannel)
+
+            """ Setup an embed """
+            appeal_embed = discord.Embed(
+                title="Case Appeal",
+                description=f"- User: {interaction.user.mention}\n- ID: {interaction.user.id}",
+                color=16777215,
             )
 
-        appeal_embed.set_footer(text=f"Case ID: {self.case_id}")
-        appeal_embed.set_image(url=img["border"])
+            for question, answer in answers.items():
+                appeal_embed.add_field(
+                    name=question,
+                    value=answer[:1024] or "*No response*",
+                    inline=False,
+                )
+
+            appeal_embed.set_footer(text=f"Case ID: {self.case_id}")
+            appeal_embed.set_image(url=img["border"])
 
 
-        case_info_embed = discord.Embed(
-            title="Case Information",
-            color=16777215
-        )
-
-        case_info_embed.add_field(
-            name=f"{emoji["bookmark"]} Case Type",
-            value=self.case['mod_type'].title(),
-            inline=False
-        )
-
-        case_info_embed.add_field(
-            name=f"{emoji["pencil"]} Reason",
-            value=self.case["reason"] or "No reason Provided",
-            inline=False
-        )
-
-        case_info_embed.add_field(
-            name=f"{emoji["shield"]} Moderator",
-            value=f"<@{self.case['moderator_id']}>",
-            inline=False
-        )
-
-        case_info_embed.set_image(url=img["border"])
-
-        """ Create a thread inside that forum and post all of these"""
-        avatar = await interaction.user.display_avatar.to_file(
-            filename="avatar.png"
-        )
-
-        tag = discord.utils.get(
-            appeal_forum.available_tags,
-            name="Pending",
-        )
-
-        try:
-            thread, message = await appeal_forum.create_thread(
-                name=f"{interaction.user.display_name}'s {self.case['mod_type'].title()} Appeal",
-                file=avatar,
-                applied_tags=[tag] if tag else [],
-                embeds=[appeal_embed, case_info_embed],
-                content=f"<@{self.case['moderator_id']}>"
+            case_info_embed = discord.Embed(
+                title="Case Information",
+                color=16777215
             )
 
-        except discord.Forbidden:
-            # Most likely we can assume that it might be an image permission, 
-            thread, message = await appeal_forum.create_thread(
-                name=f"{interaction.user.display_name}'s {self.case['mod_type'].title()} Appeal",
-                applied_tags=[tag] if tag else [],
-                embeds=[appeal_embed, case_info_embed],
-                content=f"<@{self.case['moderator_id']}>"
+            case_info_embed.add_field(
+                name=f"{emoji["bookmark"]} Case Type",
+                value=self.case['mod_type'].title(),
+                inline=False
             )
 
-        assert interaction.client.user is not None
-        await thread.send(
-            content=f"- To reply to the appealer, mention me (<@{interaction.client.user.id}>) and type your message.",
-        )
+            case_info_embed.add_field(
+                name=f"{emoji["pencil"]} Reason",
+                value=self.case["reason"] or "No reason Provided",
+                inline=False
+            )
 
-        await self.db.create_appeal(
-            self.case_id,
-            thread.id
-        )
+            case_info_embed.add_field(
+                name=f"{emoji["shield"]} Moderator",
+                value=f"<@{self.case['moderator_id']}>",
+                inline=False
+            )
 
-        """ Get Proofs """
-        case_proofs = await self.db.get_proof_references(self.guild_id, self.case_id)
-        attachments: list[discord.File] = []
+            case_info_embed.set_image(url=img["border"])
 
-        if case_proofs:
-            _logging_channel = self.db.get_channel(self.guild_id, "logs_channel")
+            """ Create a thread inside that forum and post all of these"""
+            avatar = await interaction.user.display_avatar.to_file(
+                filename="avatar.png"
+            )
 
-            if _logging_channel is not None:
-                logging_channel = guild.get_channel(int(_logging_channel))
+            tag = discord.utils.get(
+                appeal_forum.available_tags,
+                name="Pending",
+            )
 
-                if logging_channel is None:
-                    try:
-                        logging_channel = await guild.fetch_channel(int(_logging_channel))
-                    except (discord.NotFound, discord.Forbidden):
-                        logging_channel = None
-
-                if logging_channel is not None:
-                    for message_id in case_proofs:
-                        try:
-                            assert isinstance(logging_channel, discord.TextChannel)
-                            message = await logging_channel.fetch_message(message_id)
-                        except (discord.NotFound, discord.Forbidden):
-                            continue
-
-                        for attachment in message.attachments:
-                            attachments.append(await attachment.to_file())
-
-        if len(case_proofs) > 0:
             try:
-                await thread.send(
-                    content=f"### Case Proofs",
-                    files=attachments
-                )
-            except discord.Forbidden as e:
-                await thread.send(
-                    f"Cannot attach the file due to server restrictions.\n"
-                    f"Error: {e}"
+                thread, message = await appeal_forum.create_thread(
+                    name=f"{interaction.user.display_name}'s {self.case['mod_type'].title()} Appeal",
+                    file=avatar,
+                    applied_tags=[tag] if tag else [],
+                    embeds=[appeal_embed, case_info_embed],
+                    content=f"<@{self.case['moderator_id']}>"
                 )
 
+            except discord.Forbidden:
+                logger.exception(
+                    "Forbidden creating appeal thread with avatar file in forum channel_id=%s (case_id=%s); retrying without avatar",
+                    appeal_forum.id,
+                    self.case_id,
+                )
+                # Most likely we can assume that it might be an image permission, 
+                thread, message = await appeal_forum.create_thread(
+                    name=f"{interaction.user.display_name}'s {self.case['mod_type'].title()} Appeal",
+                    applied_tags=[tag] if tag else [],
+                    embeds=[appeal_embed, case_info_embed],
+                    content=f"<@{self.case['moderator_id']}>"
+                )
 
-        await interaction.followup.send(
-            embed=simple_embed(
-                "Your appeal has been submitted successfully. Our staff will review it as soon as possible. Thank you for your patience."
-            ),
-            ephemeral=True
-        )
+            assert interaction.client.user is not None
+            await thread.send(
+                content=f"- To reply to the appealer, mention me (<@{interaction.client.user.id}>) and type your message.",
+            )
 
-        await interaction.followup.send(
-            content="### You may continue sending messages in this DM if you'd like to provide any additional information.",
-            ephemeral=True
-        )
+            await self.db.create_appeal(
+                self.case_id,
+                thread.id
+            )
+
+            """ Get Proofs """
+            case_proofs = await self.db.get_proof_references(self.guild_id, self.case_id)
+            attachments: list[discord.File] = []
+
+            if case_proofs:
+                _logging_channel = self.db.get_channel(self.guild_id, "logs_channel")
+
+                if _logging_channel is not None:
+                    logging_channel = guild.get_channel(int(_logging_channel))
+
+                    if logging_channel is None:
+                        try:
+                            logging_channel = await guild.fetch_channel(int(_logging_channel))
+                        except (discord.NotFound, discord.Forbidden):
+                            logger.exception(
+                                "Failed to fetch logs channel_id=%s for guild_id=%s while attaching appeal proofs (case_id=%s)",
+                                _logging_channel,
+                                self.guild_id,
+                                self.case_id,
+                            )
+                            logging_channel = None
+
+                    if logging_channel is not None:
+                        for message_id in case_proofs:
+                            try:
+                                assert isinstance(logging_channel, discord.TextChannel)
+                                message = await logging_channel.fetch_message(message_id)
+                            except (discord.NotFound, discord.Forbidden):
+                                logger.exception(
+                                    "Failed to fetch proof message_id=%s in channel_id=%s (case_id=%s)",
+                                    message_id,
+                                    logging_channel.id,
+                                    self.case_id,
+                                )
+                                continue
+
+                            for attachment in message.attachments:
+                                attachments.append(await attachment.to_file())
+
+            if len(case_proofs) > 0:
+                try:
+                    await thread.send(
+                        content=f"### Case Proofs",
+                        files=attachments
+                    )
+                except discord.Forbidden as e:
+                    logger.exception(
+                        "Forbidden sending proof attachments to appeal thread_id=%s (case_id=%s)",
+                        thread.id,
+                        self.case_id,
+                    )
+                    await thread.send(
+                        f"Cannot attach the file due to server restrictions.\n"
+                        f"Error: {e}"
+                    )
+
+
+            await interaction.followup.send(
+                embed=simple_embed(
+                    "Your appeal has been submitted successfully. Our staff will review it as soon as possible. Thank you for your patience."
+                ),
+                ephemeral=True
+            )
+
+            await interaction.followup.send(
+                content="### You may continue sending messages in this DM if you'd like to provide any additional information.",
+                ephemeral=True
+            )
+        except Exception:
+            logger.exception("Unhandled error while submitting appeal for case_id=%s guild_id=%s", self.case_id, self.guild_id)
+            await interaction.followup.send(
+                embed=simple_embed("Something went wrong while submitting your appeal. Please contact staff directly.", 'cross'),
+                ephemeral=True,
+            )
 
 class AppealButton(discord.ui.DynamicItem[discord.ui.Button], template=r'button:case:(?P<id>[0-9]+)'):
     def __init__(self, case_id: int | None) -> None:
@@ -900,75 +1043,81 @@ class AppealButton(discord.ui.DynamicItem[discord.ui.Button], template=r'button:
         return cls(case_id)
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        db: Optional[BotGlobalsDatabaseAccess] = cast("Lily", interaction.client).db
-        if db is None:
-            return
-        
-        assert self.case_id is not None
+        try:
+            db: Optional[BotGlobalsDatabaseAccess] = cast("Lily", interaction.client).db
+            if db is None:
+                logger.error("BotGlobalsDatabaseAccess is None in AppealButton callback for case_id=%s", self.case_id)
+                return
 
-        """ Check the validity of the case first """
-        _case = await db.get_case(self.case_id)
-        if _case is None:
-            await interaction.response.send_message(
-                embed=simple_embed(
-                    "Maybe This case has been already resolved???",
-                    "cross",
-                ),
-                ephemeral=True
-            )
+            assert self.case_id is not None
 
-            return
-        
-        """ Check the status of the case """
-        appeal_exists = await db.appeal_exists(self.case_id)
-        print(appeal_exists)
-        if appeal_exists:
-            appeal_status = await db.get_appeal_status(self.case_id)
-            print(appeal_status)
-
-            if appeal_status == "pending":
+            """ Check the validity of the case first """
+            _case = await db.get_case(self.case_id)
+            if _case is None:
                 await interaction.response.send_message(
                     embed=simple_embed(
-                        "You have already created an appeal for this case.",
+                        "Maybe This case has been already resolved???",
                         "cross",
                     ),
-                    ephemeral=True,
+                    ephemeral=True
                 )
 
                 return
-
-            elif appeal_status == "accepted":
-                await interaction.response.send_message(
-                    embed=simple_embed(
-                        "This appeal has been accepted.",
-                        "cross",
-                    ),
-                    ephemeral=True,
-                )
             
-                return
+            """ Check the status of the case """
+            appeal_exists = await db.appeal_exists(self.case_id)
+            logger.debug("appeal_exists for case_id=%s: %s", self.case_id, appeal_exists)
+            if appeal_exists:
+                appeal_status = await db.get_appeal_status(self.case_id)
+                logger.debug("appeal_status for case_id=%s: %s", self.case_id, appeal_status)
 
-            elif appeal_status in ("denied", "rejected"):
-                await interaction.response.send_message(
-                    embed=simple_embed(
-                        "This appeal has been denied.",
-                        "cross",
-                    ),
-                    ephemeral=True,
+                if appeal_status == "pending":
+                    await interaction.response.send_message(
+                        embed=simple_embed(
+                            "You have already created an appeal for this case.",
+                            "cross",
+                        ),
+                        ephemeral=True,
+                    )
+
+                    return
+
+                elif appeal_status == "accepted":
+                    await interaction.response.send_message(
+                        embed=simple_embed(
+                            "This appeal has been accepted.",
+                            "cross",
+                        ),
+                        ephemeral=True,
+                    )
+                
+                    return
+
+                elif appeal_status in ("denied", "rejected"):
+                    await interaction.response.send_message(
+                        embed=simple_embed(
+                            "This appeal has been denied.",
+                            "cross",
+                        ),
+                        ephemeral=True,
+                    )
+
+                    return
+
+            else:
+                _config = await db.get_appeal_forum_config(_case["guild_id"])
+                await interaction.response.send_modal(AppealModal(
+                    db,
+                    self.case_id,
+                    _case["guild_id"],
+                    _config,
+                    _case
                 )
-
-                return
-
-        else:
-            _config = await db.get_appeal_forum_config(_case["guild_id"])
-            await interaction.response.send_modal(AppealModal(
-                db,
-                self.case_id,
-                _case["guild_id"],
-                _config,
-                _case
             )
-        )
+        except Exception:
+            logger.exception("Unhandled error in AppealButton callback for case_id=%s", self.case_id)
+            if not interaction.response.is_done():
+                await interaction.response.send_message(embed=simple_embed("Something went wrong while processing your appeal request.", 'cross'), ephemeral=True)
 
 class CaseProofsView(discord.ui.View):
     def __init__(self, case_id: int, controller, message: Optional[discord.Message]):
@@ -987,8 +1136,13 @@ class CaseProofsView(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button
     ):
-        assert isinstance(self.message, discord.Message)
-        await interaction.response.send_modal(ProofsComponentCommandModal(controller=self.controller, case_id=self.case_id, cmd_view=self, msg=self.message))
+        try:
+            assert isinstance(self.message, discord.Message)
+            await interaction.response.send_modal(ProofsComponentCommandModal(controller=self.controller, case_id=self.case_id, cmd_view=self, msg=self.message))
+        except Exception:
+            logger.exception("Failed to open proofs attachment modal for case_id=%s", self.case_id)
+            if not interaction.response.is_done():
+                await interaction.response.send_message(embed=simple_embed("Something went wrong opening the proofs form.", 'cross'), ephemeral=True)
 
 class AppealMessageView(discord.ui.LayoutView):
     def __init__(self, message: str, server: str, attachments: List[discord.Attachment]) -> None:
@@ -1072,25 +1226,35 @@ class PermissionConfigureModal(discord.ui.Modal):
         self.add_item(self.allowed_roles)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        bot = cast("Lily", interaction.client)
-        db = bot.db
+        try:
+            bot = cast("Lily", interaction.client)
+            db = bot.db
 
-        assert db is not None
-        assert interaction.guild is not None
-        assert isinstance(self.allowed_roles, discord.ui.RoleSelect)
+            assert db is not None
+            assert interaction.guild is not None
+            assert isinstance(self.allowed_roles, discord.ui.RoleSelect)
 
 
-        for role in self.allowed_roles.values:
-            await db.set_permission(
-                interaction.guild.id,
-                role.id,
-                self.app_permission
+            for role in self.allowed_roles.values:
+                await db.set_permission(
+                    interaction.guild.id,
+                    role.id,
+                    self.app_permission
+                )
+
+            await interaction.response.send_message(
+                content=f"Successfully Assigned {self.command_name.replace("_", " ").title()} Permission to {', '.join(role.mention for role in self.allowed_roles.values)}", 
+                ephemeral=True
             )
-
-        await interaction.response.send_message(
-            content=f"Successfully Assigned {self.command_name.replace("_", " ").title()} Permission to {', '.join(role.mention for role in self.allowed_roles.values)}", 
-            ephemeral=True
-        )
+        except Exception:
+            logger.exception(
+                "Failed to configure permission '%s' for command '%s' in guild_id=%s",
+                self.app_permission,
+                self.command_name,
+                getattr(interaction.guild, "id", None),
+            )
+            if not interaction.response.is_done():
+                await interaction.response.send_message(embed=simple_embed("Something went wrong while assigning permissions.", 'cross'), ephemeral=True)
 
 class Confirm(discord.ui.View):
     def __init__(self):
@@ -1099,15 +1263,21 @@ class Confirm(discord.ui.View):
 
     @discord.ui.button(label='Confirm', style=discord.ButtonStyle.secondary)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
-        self.value = True
-        self.stop()
+        try:
+            await interaction.response.defer()
+            self.value = True
+            self.stop()
+        except Exception:
+            logger.exception("Failed to handle Confirm button press")
 
     @discord.ui.button(label='Cancel', style=discord.ButtonStyle.secondary)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer()
-        self.value = False
-        self.stop()
+        try:
+            await interaction.response.defer()
+            self.value = False
+            self.stop()
+        except Exception:
+            logger.exception("Failed to handle Cancel button press")
 
 """ Moderation Dashboard """
 class ModerationDashboard(discord.ui.LayoutView):
@@ -1178,67 +1348,96 @@ class ModerationDashboard(discord.ui.LayoutView):
         self.add_item(container)
 
     async def commands_select_callback(self, interaction: discord.Interaction):
-        command_name = self.commands_select.values[0]
-        app_permission = commands_list[command_name]["app_permission"]
+        try:
+            command_name = self.commands_select.values[0]
+            app_permission = commands_list[command_name]["app_permission"]
 
-        """ Send the prefilled values """
-        bot_db = cast("Lily", interaction.client).db
-        assert bot_db is not None
-        assert interaction.guild is not None
+            """ Send the prefilled values """
+            bot_db = cast("Lily", interaction.client).db
+            assert bot_db is not None
+            assert interaction.guild is not None
 
-        roles = bot_db.get_permission_roles(interaction.guild.id, app_permission)
-        
-        await interaction.response.send_modal(PermissionConfigureModal(command_name, app_permission, roles))
+            roles = bot_db.get_permission_roles(interaction.guild.id, app_permission)
+            
+            await interaction.response.send_modal(PermissionConfigureModal(command_name, app_permission, roles))
+        except Exception:
+            logger.exception(
+                "Failed to open permission configure modal for command='%s' guild_id=%s",
+                self.commands_select.values[0] if self.commands_select.values else None,
+                getattr(interaction.guild, "id", None),
+            )
+            if not interaction.response.is_done():
+                await interaction.response.send_message(embed=simple_embed("Something went wrong opening the permission configuration.", 'cross'), ephemeral=True)
 
     async def appeal_handling_btn_callback(self, interaction: discord.Interaction):
         """ Check appropriate permissions before performing """
+        try:
+            view = Confirm()
 
-        view = Confirm()
-
-        await interaction.response.send_message(
-            (
-                'This will create the following\n'
-                '- **Forums Channel** : A forum channel where the bot would recieve appeals from the member\n'
-                '- **Webhook**: A webhook will be created inside the forums channel where it will recieve messages from Users.\n'
-                '\n'
-                "-# Note: Please allow the bot to do this process on it`s own as It has to setup few things \n"
-                'Are you sure you have to proceed with this?'
-            ),
-            view=view,
-            ephemeral=True
-        )
-
-        await view.wait()
-        
-        if view.value is None:
-            await interaction.edit_original_response(
-                embed=simple_embed("Confirmation timed out.", 'cross'),
-                view=None,
+            await interaction.response.send_message(
+                (
+                    'This will create the following\n'
+                    '- **Forums Channel** : A forum channel where the bot would recieve appeals from the member\n'
+                    '- **Webhook**: A webhook will be created inside the forums channel where it will recieve messages from Users.\n'
+                    '\n'
+                    "-# Note: Please allow the bot to do this process on it`s own as It has to setup few things \n"
+                    'Are you sure you have to proceed with this?'
+                ),
+                view=view,
+                ephemeral=True
             )
-            return
 
-        if not view.value:
-            await interaction.edit_original_response(
-                embed=simple_embed('Process has been cancelled.', 'cross'),
-                view=None,
+            await view.wait()
+            
+            if view.value is None:
+                await interaction.edit_original_response(
+                    embed=simple_embed("Confirmation timed out.", 'cross'),
+                    view=None,
+                )
+                return
+
+            if not view.value:
+                await interaction.edit_original_response(
+                    embed=simple_embed('Process has been cancelled.', 'cross'),
+                    view=None,
+                )
+                return
+
+            else:
+                pass
+                #await setup_mod_appeal(interaction)
+        except Exception:
+            logger.exception(
+                "Failed during appeal handling setup confirmation for guild_id=%s",
+                getattr(interaction.guild, "id", None),
             )
-            return
-
-        else:
-            pass
-            #await setup_mod_appeal(interaction)
+            try:
+                await interaction.edit_original_response(
+                    embed=simple_embed("Something went wrong while setting up appeal handling.", 'cross'),
+                    view=None,
+                )
+            except discord.HTTPException:
+                logger.exception("Failed to edit original response after appeal handling setup error")
 
     async def moderation_logging_callback(self, interaction: discord.Interaction):
-        assert isinstance(self.moderation_logging, discord.ui.ChannelSelect)
+        try:
+            assert isinstance(self.moderation_logging, discord.ui.ChannelSelect)
 
-        bot_db = cast("Lily", interaction.client).db
-        assert bot_db is not None
-        assert interaction.guild is not None
+            bot_db = cast("Lily", interaction.client).db
+            assert bot_db is not None
+            assert interaction.guild is not None
 
-        await bot_db.set_channel(
-            interaction.guild.id,
-            self.moderation_logging.values[0].id,
-            channel_type="logs_channel"
-        )
+            await bot_db.set_channel(
+                interaction.guild.id,
+                self.moderation_logging.values[0].id,
+                channel_type="logs_channel"
+            )
 
-        await interaction.response.send_message(embed=simple_embed(f"Successfully assigned logging channel to {self.moderation_logging.values[0].mention}"))
+            await interaction.response.send_message(embed=simple_embed(f"Successfully assigned logging channel to {self.moderation_logging.values[0].mention}"))
+        except Exception:
+            logger.exception(
+                "Failed to set moderation logging channel for guild_id=%s",
+                getattr(interaction.guild, "id", None),
+            )
+            if not interaction.response.is_done():
+                await interaction.response.send_message(embed=simple_embed("Something went wrong while setting the logging channel.", 'cross'), ephemeral=True)
