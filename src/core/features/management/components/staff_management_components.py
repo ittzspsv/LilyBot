@@ -1,13 +1,16 @@
+import logging
 import discord
 import src.core.configs.bot_details as Configs
 
 from typing import Dict, Optional
-from discord.ext import commands
 from src.core.utils.embeds.sLilyEmbed import simple_embed
 from ..embeds.staff_management_embed import loa_accept_embed, loa_reject_embed, infraction_embed
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
 
 from typing import List, Any
+
+logger = logging.getLogger("lily")
+
 
 class StaffListView(discord.ui.LayoutView):
     def __init__(self, interaction: discord.Interaction, role_data: dict, role_id: int, page: int = 0, per_page: int = 6):
@@ -86,44 +89,80 @@ class StaffListView(discord.ui.LayoutView):
         if buttons.children:
             container_items.append(buttons)
 
-        container_items.append(
-            discord.ui.MediaGallery(
-                discord.MediaGalleryItem(media=Configs.img['border'])
+        try:
+            border_media = Configs.img['border']
+        except KeyError:
+            logger.exception("StaffListView: 'border' key missing from Configs.img")
+            border_media = None
+
+        if border_media is not None:
+            container_items.append(
+                discord.ui.MediaGallery(
+                    discord.MediaGalleryItem(media=border_media)
+                )
             )
-        )
 
         self.container = discord.ui.Container(*container_items)
         self.add_item(self.container)
 
     async def interaction_check(self, interaction: discord.Interaction):
         if interaction.user.id != self.owner_id:
-            await interaction.response.send_message(
-                "Only instigator has authority to access.",
-                ephemeral=True
-            )
+            try:
+                await interaction.response.send_message(
+                    "Only instigator has authority to access.",
+                    ephemeral=True
+                )
+            except discord.HTTPException:
+                logger.exception(
+                    "StaffListView.interaction_check: failed to send ownership rejection message (user_id=%s)",
+                    interaction.user.id,
+                )
             return False
         return True
 
     async def left_paginator_callback(self, interaction: discord.Interaction):
-        view = StaffListView(
-            interaction,
-            self.role_data,
-            self.role_id,
-            page=self.page - 1
-        )
-        await interaction.response.edit_message(view=view)
+        try:
+            view = StaffListView(
+                interaction,
+                self.role_data,
+                self.role_id,
+                page=self.page - 1
+            )
+            await interaction.response.edit_message(view=view)
+        except discord.HTTPException:
+            logger.exception(
+                "StaffListView.left_paginator_callback: failed to edit message (role_id=%s, page=%s)",
+                self.role_id, self.page - 1,
+            )
+        except Exception:
+            logger.exception(
+                "StaffListView.left_paginator_callback: unexpected error (role_id=%s, page=%s)",
+                self.role_id, self.page - 1,
+            )
 
     async def right_paginator_callback(self, interaction: discord.Interaction):
-        view = StaffListView(
-            interaction,
-            self.role_data,
-            self.role_id,
-            page=self.page + 1
-        )
-        await interaction.response.edit_message(view=view)
+        try:
+            view = StaffListView(
+                interaction,
+                self.role_data,
+                self.role_id,
+                page=self.page + 1
+            )
+            await interaction.response.edit_message(view=view)
+        except discord.HTTPException:
+            logger.exception(
+                "StaffListView.right_paginator_callback: failed to edit message (role_id=%s, page=%s)",
+                self.role_id, self.page + 1,
+            )
+        except Exception:
+            logger.exception(
+                "StaffListView.right_paginator_callback: unexpected error (role_id=%s, page=%s)",
+                self.role_id, self.page + 1,
+            )
+
 
 class LOAStaffsView(discord.ui.LayoutView):
-    def __init__(self, interaction: discord.Interaction ,staff_datas: List[Dict[str, Any]]):
+    def __init__(self, interaction: discord.Interaction, staff_datas: List[Dict[str, Any]]):
         super().__init__()
 
         self.staff_datas = staff_datas
@@ -136,16 +175,17 @@ class LOAStaffsView(discord.ui.LayoutView):
         if not self.staff_ids:
             self.staff_ids = "No Staffs Returned"
 
+        assert interaction.guild is not None
         self.container = discord.ui.Container(
             discord.ui.Section(
                 discord.ui.TextDisplay(content="## LOA Staffs"),
                 discord.ui.TextDisplay(content="- List all the staffs who are on leave"),
                 accessory=discord.ui.Thumbnail(
-                media = (
-                    self.interaction.guild.icon.url
-                    if self.interaction.guild.icon
-                    else self.interaction.client.user.avatar.url
-                    )                
+                    media=(
+                        self.interaction.guild.icon.url
+                        if self.interaction.guild.icon
+                        else self.interaction.guild.me.display_avatar.url
+                    )
                 ),
             ),
             discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
@@ -155,8 +195,9 @@ class LOAStaffsView(discord.ui.LayoutView):
 
         self.add_item(self.container)
 
+
 class StaffsView(discord.ui.LayoutView):
-    def __init__(self, interaction: discord.Interaction, db: BotGlobalsDatabaseAccess ,overall_details: Dict, role_users_map):
+    def __init__(self, interaction: discord.Interaction, db: BotGlobalsDatabaseAccess, overall_details: Dict, role_users_map):
         super().__init__(timeout=500)
 
         self.message: Optional[discord.Message] = None
@@ -182,10 +223,9 @@ class StaffsView(discord.ui.LayoutView):
         )
 
         self.loa_staffs_btn = discord.ui.Button(
-                style=discord.ButtonStyle.secondary,
-                label="List LOA Staffs",
-            )
-
+            style=discord.ButtonStyle.secondary,
+            label="List LOA Staffs",
+        )
 
         self.roles_selector.callback = self.role_selector_callback
         self.loa_staffs_btn.callback = self.loa_staffs_callback
@@ -205,16 +245,16 @@ class StaffsView(discord.ui.LayoutView):
             discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
             discord.ui.TextDisplay(content="### Server Staff Team\n- List of Role Category who has **Moderation/Administration/Management** Authority"),
             discord.ui.TextDisplay(content=f"### __Overall Details__\n"
-                        f"- **ON LOA** - `{overall_details.get("staff").get('loa')}`\n"
-                        f"- **Active Staffs** - `{overall_details.get("staff").get('active')}`\n"
-                        f"- **Total Staffs** - `{overall_details.get("staff").get('total')}`"),
+                        f"- **ON LOA** - `{overall_details.get('staff').get('loa')}`\n"
+                        f"- **Active Staffs** - `{overall_details.get('staff').get('active')}`\n"
+                        f"- **Total Staffs** - `{overall_details.get('staff').get('total')}`"),
             discord.ui.ActionRow(self.roles_selector),
             discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
             discord.ui.Section(
-                    discord.ui.TextDisplay(content="### LOA Staffs"),
-                    discord.ui.TextDisplay(content="- Displays All Staffs who are on leave"),
-                    accessory=self.loa_staffs_btn
-                ),
+                discord.ui.TextDisplay(content="### LOA Staffs"),
+                discord.ui.TextDisplay(content="- Displays All Staffs who are on leave"),
+                accessory=self.loa_staffs_btn
+            ),
             discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
             accent_colour=discord.Colour(16777215),
         )
@@ -222,21 +262,54 @@ class StaffsView(discord.ui.LayoutView):
         self.add_item(self.container_1)
 
     async def role_selector_callback(self, interaction: discord.Interaction):
-        selected_role_id = int(self.roles_selector.values[0])
-        role_data = self.role_users_map[selected_role_id]
+        try:
+            selected_role_id = int(self.roles_selector.values[0])
+            role_data = self.role_users_map[selected_role_id]
 
-        view = StaffListView(interaction, role_data, selected_role_id)
+            view = StaffListView(interaction, role_data, selected_role_id)
 
-        await interaction.response.send_message(
-            view=view,
-            ephemeral=True
-        )
+            await interaction.response.send_message(
+                view=view,
+                ephemeral=True
+            )
+        except KeyError:
+            logger.exception(
+                "StaffsView.role_selector_callback: role_id not found in role_users_map (value=%s)",
+                self.roles_selector.values[0] if self.roles_selector.values else None,
+            )
+            await self._safe_error_response(interaction, "That role could not be found.")
+        except discord.HTTPException:
+            logger.exception("StaffsView.role_selector_callback: failed to send staff list view")
+        except Exception:
+            logger.exception("StaffsView.role_selector_callback: unexpected error")
+            await self._safe_error_response(interaction, "Something went wrong while loading that role's staff list.")
 
     async def loa_staffs_callback(self, interaction: discord.Interaction):
         assert isinstance(interaction.guild, discord.Guild)
-        staff_datas: List[Dict[str, Any]] = await self.db.fetch_loa_staffs(interaction.guild.id, "staff")
-        view = LOAStaffsView(interaction, staff_datas)
-        await interaction.response.send_message(view=view, ephemeral=True)
+        try:
+            staff_datas: List[Dict[str, Any]] = await self.db.fetch_loa_staffs(interaction.guild.id, "staff")
+            view = LOAStaffsView(interaction, staff_datas)
+            await interaction.response.send_message(view=view, ephemeral=True)
+        except discord.HTTPException:
+            logger.exception(
+                "StaffsView.loa_staffs_callback: failed to send LOA staffs view (guild_id=%s)",
+                interaction.guild.id,
+            )
+        except Exception:
+            logger.exception(
+                "StaffsView.loa_staffs_callback: failed to fetch/display LOA staffs (guild_id=%s)",
+                interaction.guild.id,
+            )
+            await self._safe_error_response(interaction, "Couldn't load the LOA staff list right now.")
+
+    async def _safe_error_response(self, interaction: discord.Interaction, message: str):
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(embed=simple_embed(message, 'cross'), ephemeral=True)
+            else:
+                await interaction.response.send_message(embed=simple_embed(message, 'cross'), ephemeral=True)
+        except discord.HTTPException:
+            logger.exception("StaffsView._safe_error_response: failed to notify user of error")
 
     async def on_timeout(self):
         self.roles_selector.disabled = True
@@ -246,10 +319,14 @@ class StaffsView(discord.ui.LayoutView):
         try:
             await self.message.edit(view=self)
         except discord.HTTPException:
-            pass
+            logger.exception(
+                "StaffsView.on_timeout: failed to edit message on timeout (message_id=%s)",
+                self.message.id,
+            )
+
 
 class LOARequestView(discord.ui.LayoutView):
-    def __init__(self, bot_db: BotGlobalsDatabaseAccess, staff_id: int, guild_id: int ,staff_pfp: str ,reason: str, days: str) -> None:
+    def __init__(self, bot_db: BotGlobalsDatabaseAccess, staff_id: int, guild_id: int, staff_pfp: str, reason: str, days: str) -> None:
         super().__init__(timeout=None)
 
         self.staff_id = staff_id
@@ -258,17 +335,17 @@ class LOARequestView(discord.ui.LayoutView):
         self.bot_db = bot_db
 
         self.accept_button = discord.ui.Button(
-                                style=discord.ButtonStyle.primary,
-                                label="Accept",
-                                custom_id=f"loa-accept{staff_id}{guild_id}",
-                            )
-        
+            style=discord.ButtonStyle.primary,
+            label="Accept",
+            custom_id=f"loa-accept{staff_id}{guild_id}",
+        )
+
         self.reject_button = discord.ui.Button(
-                                style=discord.ButtonStyle.danger,
-                                label="Reject",
-                                custom_id=f"loa-reject{staff_id}{guild_id}"
-                            )
-        
+            style=discord.ButtonStyle.danger,
+            label="Reject",
+            custom_id=f"loa-reject{staff_id}{guild_id}"
+        )
+
         self.accept_button.callback = self.accept_button_callback
         self.reject_button.callback = self.reject_button_callback
         self.status_display = discord.ui.TextDisplay(content="Status: Pending")
@@ -285,8 +362,8 @@ class LOARequestView(discord.ui.LayoutView):
             self.status_display,
             discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
             discord.ui.ActionRow(
-                    self.accept_button,
-                    self.reject_button
+                self.accept_button,
+                self.reject_button
             ),
         )
 
@@ -295,23 +372,49 @@ class LOARequestView(discord.ui.LayoutView):
     async def accept_button_callback(self, interaction: discord.Interaction):
         assert isinstance(interaction.guild, discord.Guild)
 
-        if self.staff_id ==  interaction.user.id:
-            return await interaction.response.send_message(embed=simple_embed("You cannot accept your LOA", 'cross'), ephemeral=True)
- 
+        if self.staff_id == interaction.user.id:
+            try:
+                return await interaction.response.send_message(embed=simple_embed("You cannot accept your LOA", 'cross'), ephemeral=True)
+            except discord.HTTPException:
+                logger.exception(
+                    "LOARequestView.accept_button_callback: failed to send self-accept rejection (staff_id=%s)",
+                    self.staff_id,
+                )
+                return
 
-        await interaction.response.defer()
+        try:
+            await interaction.response.defer()
+        except discord.HTTPException:
+            logger.exception(
+                "LOARequestView.accept_button_callback: failed to defer interaction (staff_id=%s)",
+                self.staff_id,
+            )
+            return
 
-        result = await self.bot_db.add_loa(
-            interaction.guild.id,
-            self.staff_id,
-            self.reason,
-            interaction.user.id
-        )
+        try:
+            result = await self.bot_db.add_loa(
+                interaction.guild.id,
+                self.staff_id,
+                self.reason,
+                interaction.user.id
+            )
+        except Exception:
+            logger.exception(
+                "LOARequestView.accept_button_callback: add_loa DB call failed (guild_id=%s, staff_id=%s)",
+                interaction.guild.id, self.staff_id,
+            )
+            await self._safe_followup(interaction, "Failed to add LOA due to an internal error.")
+            return
 
         if result.get("success"):
             """ Removing the pending from LOA """
-            await self.bot_db.delete_loa_pending(self.staff_id, interaction.guild.id)
-
+            try:
+                await self.bot_db.delete_loa_pending(self.staff_id, interaction.guild.id)
+            except Exception:
+                logger.exception(
+                    "LOARequestView.accept_button_callback: delete_loa_pending failed (staff_id=%s, guild_id=%s)",
+                    self.staff_id, interaction.guild.id,
+                )
 
             roles_to_remove = set(result.get("roles_to_remove", ()))
             roles_to_add = set(result.get("roles_to_add", ()))
@@ -320,13 +423,23 @@ class LOARequestView(discord.ui.LayoutView):
             if staff_member is None:
                 try:
                     staff_member = await interaction.guild.fetch_member(self.staff_id)
-                except Exception:
-                    await interaction.followup.send(embed=simple_embed("Failed to fetch the staff member", 'cross'), ephemeral=True)
+                except discord.HTTPException:
+                    logger.exception(
+                        "LOARequestView.accept_button_callback: failed to fetch staff member (staff_id=%s, guild_id=%s)",
+                        self.staff_id, interaction.guild.id,
+                    )
+                    await self._safe_followup(interaction, "Failed to fetch the staff member")
                     return
-                
+                except Exception:
+                    logger.exception(
+                        "LOARequestView.accept_button_callback: unexpected error fetching staff member (staff_id=%s)",
+                        self.staff_id,
+                    )
+                    await self._safe_followup(interaction, "Failed to fetch the staff member")
+                    return
+
             current_roles = set(staff_member.roles)
 
-                
             remove_roles = {
                 interaction.guild.get_role(rid)
                 for rid in roles_to_remove
@@ -341,27 +454,55 @@ class LOARequestView(discord.ui.LayoutView):
 
             new_roles = (current_roles - remove_roles) | add_roles
 
-            await staff_member.edit(
-                roles=list(new_roles),
-                reason="LOA assigned"
-            )
+            try:
+                await staff_member.edit(
+                    roles=list(new_roles),
+                    reason="LOA assigned"
+                )
+            except discord.HTTPException:
+                logger.exception(
+                    "LOARequestView.accept_button_callback: failed to edit staff member roles (staff_id=%s, guild_id=%s)",
+                    self.staff_id, interaction.guild.id,
+                )
+                await self._safe_followup(interaction, "LOA was recorded, but I couldn't update the staff member's roles. Please update them manually.")
+                return
 
-            await staff_member.send(
-                embed=loa_accept_embed(interaction.user.id, interaction.guild.name)
-            )
+            try:
+                await staff_member.send(
+                    embed=loa_accept_embed(interaction.user.id, interaction.guild.name)
+                )
+            except discord.HTTPException:
+                logger.exception(
+                    "LOARequestView.accept_button_callback: failed to DM staff member acceptance notice (staff_id=%s)",
+                    self.staff_id,
+                )
+
             await self.disable_buttons(interaction, "accept")
-            await interaction.followup.send(embed=simple_embed(f"{result.get('message')}"), ephemeral=True)
+            await self._safe_followup(interaction, f"{result.get('message')}")
 
         else:
-            await interaction.followup.send(embed=simple_embed(f"Failed to add LOA due to internal error {result.get('message')}", 'cross'), ephemeral=True)
+            await self._safe_followup(interaction, f"Failed to add LOA due to internal error {result.get('message')}", is_error=True)
 
     async def reject_button_callback(self, interaction: discord.Interaction):
         assert isinstance(interaction.guild, discord.Guild)
 
-        if self.staff_id ==  interaction.user.id:
-            return await interaction.response.send_message(embed=simple_embed("You cannot reject your LOA", 'cross'), ephemeral=True)
- 
-        await interaction.response.send_modal(LOARejectModal(self.bot_db, interaction, self, self.staff_id))
+        if self.staff_id == interaction.user.id:
+            try:
+                return await interaction.response.send_message(embed=simple_embed("You cannot reject your LOA", 'cross'), ephemeral=True)
+            except discord.HTTPException:
+                logger.exception(
+                    "LOARequestView.reject_button_callback: failed to send self-reject rejection (staff_id=%s)",
+                    self.staff_id,
+                )
+                return
+
+        try:
+            await interaction.response.send_modal(LOARejectModal(self.bot_db, interaction, self, self.staff_id))
+        except discord.HTTPException:
+            logger.exception(
+                "LOARequestView.reject_button_callback: failed to open rejection modal (staff_id=%s)",
+                self.staff_id,
+            )
 
     async def disable_buttons(self, interaction: discord.Interaction, action: str):
         self.accept_button.disabled = True
@@ -369,8 +510,26 @@ class LOARequestView(discord.ui.LayoutView):
         actor = interaction.user.mention
         self.status_display.content = f"{'Accepted' if action == 'accept' else 'Rejected'} by {actor}"
 
+        try:
+            await interaction.edit_original_response(view=self)
+        except discord.HTTPException:
+            logger.exception(
+                "LOARequestView.disable_buttons: failed to edit original response (staff_id=%s, action=%s)",
+                self.staff_id, action,
+            )
 
-        await interaction.edit_original_response(view=self)
+    async def _safe_followup(self, interaction: discord.Interaction, message: str, is_error: bool = False):
+        try:
+            await interaction.followup.send(
+                embed=simple_embed(message, 'cross') if is_error else simple_embed(message),
+                ephemeral=True,
+            )
+        except discord.HTTPException:
+            logger.exception(
+                "LOARequestView._safe_followup: failed to send followup (staff_id=%s)",
+                self.staff_id,
+            )
+
 
 class LOARejectModal(discord.ui.Modal):
     reason = discord.ui.Label(
@@ -390,29 +549,73 @@ class LOARejectModal(discord.ui.Modal):
         self.view_interaction: discord.Interaction = view_interaction
         self.request_view = request_view
         self.staff_id = staff_id
-    
+
     async def on_submit(self, interaction: discord.Interaction) -> None:
         assert isinstance(interaction.guild, discord.Guild)
         assert isinstance(self.reason.component, discord.ui.TextInput)
 
-        await interaction.response.defer()
+        try:
+            await interaction.response.defer()
+        except discord.HTTPException:
+            logger.exception(
+                "LOARejectModal.on_submit: failed to defer interaction (staff_id=%s)",
+                self.staff_id,
+            )
+            return
 
         staff_member: Optional[discord.Member] = interaction.guild.get_member(self.staff_id)
         if staff_member is None:
             try:
                 staff_member = await interaction.guild.fetch_member(self.staff_id)
-            except Exception:
-                await interaction.followup.send(embed=simple_embed("Failed to fetch the staff member", 'cross'), ephemeral=True)
+            except discord.HTTPException:
+                logger.exception(
+                    "LOARejectModal.on_submit: failed to fetch staff member (staff_id=%s, guild_id=%s)",
+                    self.staff_id, interaction.guild.id,
+                )
+                await self._safe_followup(interaction, "Failed to fetch the staff member", is_error=True)
                 return
+            except Exception:
+                logger.exception(
+                    "LOARejectModal.on_submit: unexpected error fetching staff member (staff_id=%s)",
+                    self.staff_id,
+                )
+                await self._safe_followup(interaction, "Failed to fetch the staff member", is_error=True)
+                return
+
         """ Delete the pending entry from the database """
-        await self.bot_db.delete_loa_pending(self.staff_id, interaction.guild.id)
+        try:
+            await self.bot_db.delete_loa_pending(self.staff_id, interaction.guild.id)
+        except Exception:
+            logger.exception(
+                "LOARejectModal.on_submit: delete_loa_pending failed (staff_id=%s, guild_id=%s)",
+                self.staff_id, interaction.guild.id,
+            )
 
-        await staff_member.send(
-            embed=loa_reject_embed(interaction.user.id, interaction.guild.name, self.reason.component.value)
-        )
+        try:
+            await staff_member.send(
+                embed=loa_reject_embed(interaction.user.id, interaction.guild.name, self.reason.component.value)
+            )
+        except discord.HTTPException:
+            logger.exception(
+                "LOARejectModal.on_submit: failed to DM staff member rejection notice (staff_id=%s)",
+                self.staff_id,
+            )
 
-        await interaction.followup.send(embed=simple_embed("Successfully rejected LOA!"), ephemeral=True)
+        await self._safe_followup(interaction, "Successfully rejected LOA!")
         await self.request_view.disable_buttons(self.view_interaction, "reject")
+
+    async def _safe_followup(self, interaction: discord.Interaction, message: str, is_error: bool = False):
+        try:
+            await interaction.followup.send(
+                embed=simple_embed(message, 'cross') if is_error else simple_embed(message),
+                ephemeral=True,
+            )
+        except discord.HTTPException:
+            logger.exception(
+                "LOARejectModal._safe_followup: failed to send followup (staff_id=%s)",
+                self.staff_id,
+            )
+
 
 class LOARequestModal(discord.ui.Modal):
     dummy = discord.ui.TextDisplay("During your LOA All of your staff roles will be stripped of. You will recieve a DM if your LOA got accepted or rejected.")
@@ -437,7 +640,6 @@ class LOARequestModal(discord.ui.Modal):
         )
     )
 
-
     def __init__(self, bot_db: BotGlobalsDatabaseAccess) -> None:
         super().__init__(title="LOA Request")
 
@@ -450,39 +652,106 @@ class LOARequestModal(discord.ui.Modal):
         assert isinstance(self.reason.component, discord.ui.TextInput)
         assert isinstance(interaction.guild, discord.Guild)
 
-        await interaction.response.defer()
+        try:
+            await interaction.response.defer()
+        except discord.HTTPException:
+            logger.exception(
+                "LOARequestModal.on_submit: failed to defer interaction (user_id=%s)",
+                interaction.user.id,
+            )
+            return
 
         """ Check if the user already has an LOA requested.   """
-        requested, reason, loa_id = await self.bot_db.has_loa_pending(interaction.user.id, interaction.guild.id)
+        try:
+            requested, reason, loa_id = await self.bot_db.has_loa_pending(interaction.user.id, interaction.guild.id)
+        except Exception:
+            logger.exception(
+                "LOARequestModal.on_submit: has_loa_pending DB call failed (user_id=%s, guild_id=%s)",
+                interaction.user.id, interaction.guild.id,
+            )
+            await self._safe_followup(interaction, "Something went wrong while checking your existing LOA status.", is_error=True)
+            return
+
         if requested:
-            return await interaction.followup.send(embed=simple_embed(f"You already have requested an LOA with reason {reason}", 'cross'), ephemeral=True)
- 
+            return await self._safe_followup(interaction, f"You already have requested an LOA with reason {reason}", is_error=True)
 
         """ Send the message to the LOA channel """
-        loa_channel_id = self.bot_db.get_channel(interaction.guild.id, "loa_request")
+        try:
+            loa_channel_id = self.bot_db.get_channel(interaction.guild.id, "loa_request")
+        except Exception:
+            logger.exception(
+                "LOARequestModal.on_submit: get_channel lookup failed (guild_id=%s)",
+                interaction.guild.id,
+            )
+            await self._safe_followup(interaction, "Couldn't look up the LOA requests channel configuration.", is_error=True)
+            return
+
         if loa_channel_id is None:
-            return await interaction.followup.send(embed=simple_embed("LOA requests channel has not been configured on this server!", 'cross'), ephemeral=True)
+            return await self._safe_followup(interaction, "LOA requests channel has not been configured on this server!", is_error=True)
 
         loa_channel = interaction.guild.get_channel(loa_channel_id)
         if loa_channel is None:
-            return await interaction.followup.send(embed=simple_embed("I cannot fetch LOA requests channel", 'cross'), ephemeral=True)
+            try:
+                loa_channel = await interaction.guild.fetch_channel(loa_channel_id)
+            except discord.HTTPException:
+                logger.exception(
+                    "LOARequestModal.on_submit: failed to fetch LOA requests channel (channel_id=%s, guild_id=%s)",
+                    loa_channel_id, interaction.guild.id,
+                )
+                return await self._safe_followup(interaction, "I cannot fetch LOA requests channel", is_error=True)
 
+        if not isinstance(loa_channel, discord.TextChannel):
+            return await self._safe_followup(interaction, "LOA Channel configured must be a text channel", is_error=True)
 
-        if isinstance(loa_channel, discord.TextChannel):
-            message = await loa_channel.send(view=LOARequestView(self.bot_db, interaction.user.id, interaction.guild.id ,interaction.user.display_avatar.url, self.reason.component.value, self.days.component.value))
-        else:
-            return await interaction.followup.send(embed=simple_embed("LOA Channel configured must be a text channel", 'cross'), ephemeral=True)
+        try:
+            message = await loa_channel.send(
+                view=LOARequestView(
+                    self.bot_db,
+                    interaction.user.id,
+                    interaction.guild.id,
+                    interaction.user.display_avatar.url,
+                    self.reason.component.value,
+                    self.days.component.value,
+                )
+            )
+        except discord.HTTPException:
+            logger.exception(
+                "LOARequestModal.on_submit: failed to send LOA request view to channel (channel_id=%s, user_id=%s)",
+                loa_channel.id, interaction.user.id,
+            )
+            await self._safe_followup(interaction, "Failed to post your LOA request. Please try again later.", is_error=True)
+            return
 
+        try:
+            await self.bot_db.add_loa_pending(
+                interaction.user.id,
+                interaction.guild.id,
+                message.id,
+                self.reason.component.value,
+                self.days.component.value
+            )
+        except Exception:
+            logger.exception(
+                "LOARequestModal.on_submit: add_loa_pending DB call failed (user_id=%s, guild_id=%s, message_id=%s)",
+                interaction.user.id, interaction.guild.id, message.id,
+            )
+            await self._safe_followup(interaction, "Your LOA request was posted, but saving it failed. Please contact staff.", is_error=True)
+            return
 
-        await self.bot_db.add_loa_pending(
-            interaction.user.id,
-            interaction.guild.id,
-            message.id,
-            self.reason.component.value,
-            self.days.component.value
-        )
+        await self._safe_followup(interaction, "Successfully requested LOA for you!")
 
-        await interaction.followup.send(embed=simple_embed("Successfully requested LOA for you!"), ephemeral=True)
+    async def _safe_followup(self, interaction: discord.Interaction, message: str, is_error: bool = False):
+        try:
+            await interaction.followup.send(
+                embed=simple_embed(message, 'cross') if is_error else simple_embed(message),
+                ephemeral=True,
+            )
+        except discord.HTTPException:
+            logger.exception(
+                "LOARequestModal._safe_followup: failed to send followup (user_id=%s)",
+                interaction.user.id,
+            )
+
 
 class InfractionModal(discord.ui.Modal):
     reason = discord.ui.Label(
@@ -558,7 +827,6 @@ class InfractionModal(discord.ui.Modal):
         )
     )
 
-
     def __init__(self, bot_db: BotGlobalsDatabaseAccess, staff: discord.Member) -> None:
         super().__init__(title="Infraction Details")
         self.bot_db = bot_db
@@ -572,7 +840,14 @@ class InfractionModal(discord.ui.Modal):
         assert isinstance(self.notify.component, discord.ui.RadioGroup)
         assert isinstance(self.proofs.component, discord.ui.FileUpload)
 
-        await interaction.response.defer()
+        try:
+            await interaction.response.defer()
+        except discord.HTTPException:
+            logger.exception(
+                "InfractionModal.on_submit: failed to defer interaction (staff_id=%s)",
+                self.staff.id,
+            )
+            return
 
         payload = {
             "staff_id": self.staff.id,
@@ -583,37 +858,65 @@ class InfractionModal(discord.ui.Modal):
             "expiry_date": self.expiry_date.component.value.lower()
         }
 
-        response = await self.bot_db.strike_staff(**payload)
-        if not response.get("success"):
-            await interaction.followup.send(embed=simple_embed(response.get("message") or "An unknown object has been returned and failed", "cross"))
+        try:
+            response = await self.bot_db.strike_staff(**payload)
+        except Exception:
+            logger.exception(
+                "InfractionModal.on_submit: strike_staff DB call failed (staff_id=%s, guild_id=%s)",
+                self.staff.id, interaction.guild.id,
+            )
+            await self._safe_followup(interaction, "An unknown error occurred while recording the infraction.", is_error=True)
             return
-        
+
+        if not response.get("success"):
+            await self._safe_followup(interaction, response.get("message") or "An unknown object has been returned and failed", is_error=True)
+            return
+
         message = response.get("message")
         issued_by = response.get("issued_by")
         strike_reason = response.get("reason")
 
+        try:
+            channel_id = self.bot_db.get_channel(interaction.guild.id, "staff_updates")
+        except Exception:
+            logger.exception(
+                "InfractionModal.on_submit: get_channel lookup failed (guild_id=%s)",
+                interaction.guild.id,
+            )
+            channel_id = None
 
-        channel_id = self.bot_db.get_channel(interaction.guild.id, "staff_updates")
         assert isinstance(interaction.user, discord.Member)
 
         if self.notify.component.value == "yes":
-            await self.staff.send(embed=infraction_embed(interaction.user, self.reason.component.value, interaction.guild.name, self.infraction_type.component.values[0]))
+            try:
+                await self.staff.send(embed=infraction_embed(interaction.user, self.reason.component.value, interaction.guild.name, self.infraction_type.component.values[0]))
+            except discord.HTTPException:
+                logger.exception(
+                    "InfractionModal.on_submit: failed to DM staff member infraction notice (staff_id=%s)",
+                    self.staff.id,
+                )
 
-
-        await interaction.followup.send(embed=simple_embed(message or "An unknown object has been returned, but It's an success!"))
+        await self._safe_followup(interaction, message or "An unknown object has been returned, but It's an success!")
 
         if not self.infraction_type.component.values[0] == "strike":
             return
-        
+
         """ Build an embed so that we can post it on the staff updates channel"""
-        
+
+        try:
+            border_media = Configs.img['border']
+        except KeyError:
+            logger.exception("InfractionModal.on_submit: 'border' key missing from Configs.img")
+            border_media = None
+
         embed = discord.Embed(
             color=16777215,
             title="Infraction Information",
             description=f"### {self.staff.mention} has been issued with a {self.infraction_type.component.values[0].title()}"
         )
         embed.set_thumbnail(url=self.staff.display_avatar.url)
-        embed.set_image(url=Configs.img['border'])
+        if border_media is not None:
+            embed.set_image(url=border_media)
 
         """
         embed.add_field(
@@ -631,8 +934,7 @@ class InfractionModal(discord.ui.Modal):
 
         """ Try fetching the staff updates channel """
 
-        
-        staff_updates_channel: discord.TextChannel | None = None
+        staff_updates_channel: Optional[discord.TextChannel] = None
 
         if channel_id is not None:
             channel = interaction.guild.get_channel(channel_id)
@@ -640,20 +942,40 @@ class InfractionModal(discord.ui.Modal):
             if channel is None:
                 try:
                     channel = await interaction.guild.fetch_channel(channel_id)
-                except Exception:
+                except discord.HTTPException:
+                    logger.exception(
+                        "InfractionModal.on_submit: failed to fetch staff updates channel (channel_id=%s, guild_id=%s)",
+                        channel_id, interaction.guild.id,
+                    )
                     channel = None
 
             if isinstance(channel, discord.TextChannel):
                 staff_updates_channel = channel
 
-
-
         """ Finally send the embed """
         if staff_updates_channel:
-            await staff_updates_channel.send(
-                content=self.staff.mention,
-                embed=embed
+            try:
+                await staff_updates_channel.send(
+                    content=self.staff.mention,
+                    embed=embed
+                )
+            except discord.HTTPException:
+                logger.exception(
+                    "InfractionModal.on_submit: failed to post infraction embed to staff updates channel (channel_id=%s, staff_id=%s)",
+                    staff_updates_channel.id, self.staff.id,
+                )
+
+    async def _safe_followup(self, interaction: discord.Interaction, message: str, is_error: bool = False):
+        try:
+            await interaction.followup.send(
+                embed=simple_embed(message, 'cross') if is_error else simple_embed(message),
             )
+        except discord.HTTPException:
+            logger.exception(
+                "InfractionModal._safe_followup: failed to send followup (staff_id=%s)",
+                self.staff.id,
+            )
+
 
 class RankConfigureModal(discord.ui.Modal):
 
@@ -705,11 +1027,14 @@ class RankConfigureModal(discord.ui.Modal):
         self,
         interaction: discord.Interaction
     ) -> None:
-        
+
         if interaction.guild is None:
-            await interaction.response.send_message("This command can only be executed inside an guild", ephemeral=True)
+            try:
+                await interaction.response.send_message("This command can only be executed inside an guild", ephemeral=True)
+            except discord.HTTPException:
+                logger.exception("RankConfigureModal.on_submit: failed to send guild-only rejection message")
             return
-        
+
         assert isinstance(self.rank_roles.component, discord.ui.RoleSelect)
 
         ranks = {
@@ -717,11 +1042,30 @@ class RankConfigureModal(discord.ui.Modal):
             for role in self.rank_roles.component.values
         }
 
-        await self.bot_db.rank_setup(
-            guild_id=interaction.guild.id,
-            role_id=ranks
-        )
+        try:
+            await self.bot_db.rank_setup(
+                guild_id=interaction.guild.id,
+                role_id=ranks
+            )
+        except Exception:
+            logger.exception(
+                "RankConfigureModal.on_submit: rank_setup DB call failed (guild_id=%s, ranks=%s)",
+                interaction.guild.id, ranks,
+            )
+            try:
+                await interaction.response.send_message(
+                    embed=simple_embed("Failed to save rank configuration due to an internal error.", 'cross')
+                )
+            except discord.HTTPException:
+                logger.exception("RankConfigureModal.on_submit: failed to send failure notice")
+            return
 
-        await interaction.response.send_message(
-            embed=simple_embed(f"Configured {len(ranks)} staff ranks.")
-        )
+        try:
+            await interaction.response.send_message(
+                embed=simple_embed(f"Configured {len(ranks)} staff ranks.")
+            )
+        except discord.HTTPException:
+            logger.exception(
+                "RankConfigureModal.on_submit: failed to send success message (guild_id=%s)",
+                interaction.guild.id,
+            )
