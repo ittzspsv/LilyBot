@@ -803,13 +803,23 @@ class AppealModal(discord.ui.Modal):
             name="Pending",
         )
 
-        thread, message = await appeal_forum.create_thread(
-            name=f"{interaction.user.display_name}'s {self.case['mod_type'].title()} Appeal",
-            file=avatar,
-            applied_tags=[tag] if tag else [],
-            embeds=[appeal_embed, case_info_embed],
-            content=f"<@{self.case['moderator_id']}>"
-        )
+        try:
+            thread, message = await appeal_forum.create_thread(
+                name=f"{interaction.user.display_name}'s {self.case['mod_type'].title()} Appeal",
+                file=avatar,
+                applied_tags=[tag] if tag else [],
+                embeds=[appeal_embed, case_info_embed],
+                content=f"<@{self.case['moderator_id']}>"
+            )
+
+        except discord.Forbidden:
+            # Most likely we can assume that it might be an image permission, 
+            thread, message = await appeal_forum.create_thread(
+                name=f"{interaction.user.display_name}'s {self.case['mod_type'].title()} Appeal",
+                applied_tags=[tag] if tag else [],
+                embeds=[appeal_embed, case_info_embed],
+                content=f"<@{self.case['moderator_id']}>"
+            )
 
         assert interaction.client.user is not None
         await thread.send(
@@ -849,10 +859,17 @@ class AppealModal(discord.ui.Modal):
                             attachments.append(await attachment.to_file())
 
         if len(case_proofs) > 0:
-            await thread.send(
-                content=f"### Case Proofs",
-                files=attachments
-            )
+            try:
+                await thread.send(
+                    content=f"### Case Proofs",
+                    files=attachments
+                )
+            except discord.Forbidden as e:
+                await thread.send(
+                    f"Cannot attach the file due to server restrictions.\n"
+                    f"Error: {e}"
+                )
+
 
         await interaction.followup.send(
             embed=simple_embed(
