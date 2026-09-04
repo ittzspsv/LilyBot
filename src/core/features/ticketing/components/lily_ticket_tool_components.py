@@ -1656,47 +1656,34 @@ class TicketList(discord.ui.LayoutView):
             )
             return
 
-        embed = discord.Embed(
-            title="Ticket Information",
-            description=f"Showing ticket information for #{ticket_id}",
-            color=discord.Color.from_rgb(255, 255, 255),
-        )
-
-        embed.add_field(
-            name="Opened By",
-            value=f"<@{result['opened_user_id']}>",
-            inline=False,
-        )
-        embed.add_field(
-            name="Staff Handled",
-            value=f"<@{result['staff_handled']}>" if result["staff_handled"] else "*Unassigned*",
-            inline=False,
-        )
-        embed.add_field(
-            name="Ticket Type",
-            value=result["ticket_type"].replace("_", " ").title(),
-            inline=False,
-        )
-        embed.add_field(
-            name="Timestamp",
-            value=f"<t:{int(datetime.fromisoformat(result['timestamp']).timestamp())}:f>",
-            inline=False,
-        )
-        embed.add_field(
-            name="Reason",
-            value=result["reason"] or "*No reason provided*",
-            inline=False,
-        )
-
-        if result["transcripts_reference"] is not None:
-            embed.add_field(
-                name="Transcript Reference",
-                value=str(result["transcripts_reference"]),
-                inline=False,
+        view = discord.ui.LayoutView().add_item(
+                discord.ui.Container(
+                    discord.ui.Section(
+                        discord.ui.TextDisplay(content="## Ticket Information"),
+                        discord.ui.TextDisplay(content=f"- Showing ticket information for #{ticket_id}"),
+                        accessory=discord.ui.Thumbnail(
+                            media=interaction.guild.icon.url if interaction.guild.icon else interaction.guild.me.display_avatar.url,
+                        ),
+                    ),
+                    discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+                    discord.ui.TextDisplay(content=f"### Opened By\n- <@{result['opened_user_id']}>"),
+                    discord.ui.TextDisplay(content=f"### Staff Handled\n- <@{result['staff_handled']}>" if result["staff_handled"] else "*Unassigned*"),
+                    discord.ui.TextDisplay(content=f"### Ticket Type\n- {result["ticket_type"].replace("_", " ").title()}"),
+                    discord.ui.TextDisplay(content=f"### Timestamp\n- <t:{int(datetime.fromisoformat(result['timestamp']).timestamp())}:f>"),
+                    discord.ui.TextDisplay(content=f"### Reason\n- {result["reason"] or "*No reason provided*"}"),
+                    discord.ui.Section(
+                        discord.ui.TextDisplay(content="### Transcript Reference"),
+                        accessory=discord.ui.Button(
+                            url=f"https://discord.com/channels/{interaction.guild.id}/{result["logs_channel_id"]}/{result["transcripts_reference"]}",
+                            style=discord.ButtonStyle.link,
+                            label="Transcript"
+                        ),
+                    ),
             )
+        )
 
         try:
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.response.send_message(view=view, ephemeral=True)
         except discord.HTTPException:
             logger.exception(
                 "TicketList.retrieve_ticket_callback: failed to send ticket info for ticket %s",
