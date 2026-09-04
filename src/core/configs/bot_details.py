@@ -134,7 +134,9 @@ emoji = {
     "WestDragon": "<:WestDragon:1541880754676572333>",
     "YellowLightning": "<:YellowLightning:1541880762939220111>",
     "Yeti": "<:Yeti:1541880771659440190>",
-    "Magnet": "<:Magnet:1543549153689346048>"
+    "Magnet": "<:Magnet:1543549153689346048>",
+    "trash": "<:trash:1545408260406776001>",
+    "refresh": "<:refresh:1545408459082698862>"
 }
     
 
