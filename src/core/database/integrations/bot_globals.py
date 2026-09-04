@@ -1271,6 +1271,7 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         reason: str | None,
         ticket_type: str,
         transcripts_reference: int | None,
+        transcript_channel: int
     ) -> int | None:
         
         """ Let's just prefer supplementary guild for now """
@@ -1285,9 +1286,9 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
             """
             INSERT INTO ticket_logs (
                 guild_id, opened_user_id, staff_handled, reason,
-                ticket_type, timestamp, transcripts_reference
+                ticket_type, timestamp, transcripts_reference, logs_channel_id
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 _guild_id,
@@ -1297,6 +1298,7 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
                 ticket_type,
                 datetime.now(UTC).isoformat(),
                 transcripts_reference,
+                transcript_channel
             ),
         )
         return row_id
@@ -1304,8 +1306,7 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
     async def get_ticket_log(self, id: int, guild_id: int) -> dict[str, Any] | None:
         row = await self.fetch_one(
             """
-            SELECT opened_user_id, staff_handled, reason, ticket_type,
-                   timestamp, transcripts_reference
+            SELECT *
             FROM ticket_logs
             WHERE id = ? AND guild_id = ?
             """,
@@ -1313,14 +1314,7 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         )
         if row is None:
             return None
-        return {
-            "opened_user_id": row["opened_user_id"],
-            "staff_handled": row["staff_handled"],
-            "reason": row["reason"],
-            "ticket_type": row["ticket_type"],
-            "timestamp": row["timestamp"],
-            "transcripts_reference": row["transcripts_reference"],
-        }
+        return dict(row)
 
     async def get_ticket_logs(
         self,

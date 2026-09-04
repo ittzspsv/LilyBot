@@ -547,7 +547,8 @@ async def ticket_close(interaction: discord.Interaction, reason: str="No reason 
                 claimer_user_id if claimer_user_id is not None else interaction.user.id,
                 reason,
                 ticket_type,
-                proofs_reference
+                proofs_reference,
+                logs_channel.id if logs_channel else 0
             )
 
             """ Send DM'S to the ticket opener """
