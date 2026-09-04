@@ -258,8 +258,31 @@ def build_ms_embed(
 
     return embeds
 
+class Confirm(discord.ui.View):
+    def __init__(self):
+        super().__init__()
+        self.value = None
+
+    @discord.ui.button(label='Confirm', style=discord.ButtonStyle.secondary)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            await interaction.response.defer()
+            self.value = True
+            self.stop()
+        except Exception:
+            logger.exception("Failed to handle Confirm button press")
+
+    @discord.ui.button(label='Cancel', style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            await interaction.response.defer()
+            self.value = False
+            self.stop()
+        except Exception:
+            logger.exception("Failed to handle Cancel button press")
+
 class EditCaseModal(discord.ui.Modal):
-    def __init__(self,case_id: int, reason: str, _interaction: discord.Interaction) -> None:
+    def __init__(self,case_id: int, reason: str, _interaction: discord.Interaction, case_list_view: CaseListView) -> None:
         super().__init__(title="Edit Reason")
         self.reason = discord.ui.Label(
             text="Reason",
@@ -274,6 +297,7 @@ class EditCaseModal(discord.ui.Modal):
         self.add_item(self.reason)
         self.case_id = case_id
         self._interaction = _interaction
+        self.case_list_view = case_list_view
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         try:
@@ -300,12 +324,14 @@ class EditCaseModal(discord.ui.Modal):
                 await interaction.response.send_message(embed=simple_embed(result["message"]), ephemeral=True)
                 return
 
-            new_view = CaseView(self.case_id, updated_case_data)
+            new_view = CaseView(self.case_id, updated_case_data, self.case_list_view)
 
             if self._interaction.message is not None:
                 await self._interaction.edit_original_response(view=new_view)
+                new_view.message = await self._interaction.original_response()
 
             await interaction.response.send_message(embed=simple_embed(result["message"]), ephemeral=True)
+            await self.case_list_view.refresh()
         except Exception:
             logger.exception("Failed to submit case edit for case_id=%s by user_id=%s", self.case_id, interaction.user.id)
             if not interaction.response.is_done():
@@ -314,7 +340,7 @@ class EditCaseModal(discord.ui.Modal):
                 await interaction.followup.send(embed=simple_embed("Something went wrong while editing the case.", 'cross'), ephemeral=True)
 
 class CaseView(discord.ui.LayoutView):
-    def __init__(self, case_id: int, case_data: Dict[str, Any]) -> None:
+    def __init__(self, case_id: int, case_data: Dict[str, Any], case_list_view: CaseListView) -> None:
         super().__init__(timeout=None)
 
         self.case_id = case_id
@@ -325,6 +351,10 @@ class CaseView(discord.ui.LayoutView):
         self.reason = case_data["reason"]
         timestamp = case_data["timestamp"]
         self.channel = None
+
+        self.message: discord.Message | None = None
+
+        self.case_list_view = case_list_view
 
         try:
             dt = datetime.fromisoformat(timestamp)
@@ -357,16 +387,25 @@ class CaseView(discord.ui.LayoutView):
 
         self.edit_case = discord.ui.Button(
             style=discord.ButtonStyle.secondary,
+            label="Edit",
             emoji=emoji["pencil"]
         )
 
         self.get_proofs = discord.ui.Button(
             style=discord.ButtonStyle.secondary,
+            label="Proofs",
             emoji=emoji["paper_clip"]
+        )
+
+        self.delete_case = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label="Delete",
+            emoji=emoji["trash"]
         )
 
         self.edit_case.callback = self.edit_case_callback
         self.get_proofs.callback = self.proofs_button_callback
+        self.delete_case.callback = self.delete_case_callback
 
         case_overview = discord.ui.Container(
             discord.ui.TextDisplay(
@@ -375,27 +414,25 @@ class CaseView(discord.ui.LayoutView):
             discord.ui.TextDisplay(
                 content=(
                     f"> {Config.emoji['staff']} Moderator: <@{moderator_id}>\n"
-                    f"> {Config.emoji['clock']} Time: <t:{ts_unix}:f>"
+                    f"> {Config.emoji['clock']} Time: <t:{ts_unix}:f>\n"
+                    f"> {Config.emoji['pencil']} Reason: {self.reason}\n"
                 )
-            ),
-            discord.ui.Section(
-                discord.ui.TextDisplay(content=f"> {Config.emoji['pencil']} Reason: {self.reason}\n"),
-                accessory=self.edit_case
             ),
             discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
             discord.ui.TextDisplay(content=f"### Metadata\n{metadata_lines}"),
             discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
-            discord.ui.Section(
-                discord.ui.TextDisplay(content=f"> {Config.emoji['logs']} Proofs\n"),
-                accessory=self.get_proofs
-            ),
+            discord.ui.ActionRow(
+                self.edit_case,
+                self.get_proofs,
+                self.delete_case
+            )
         )
         self.add_item(case_overview)
 
     async def edit_case_callback(self, interaction: discord.Interaction):
         try:
             if has_app_permission(interaction, command_name="case_edit"):
-                await interaction.response.send_modal(EditCaseModal(self.case_id, self.reason, interaction))
+                await interaction.response.send_modal(EditCaseModal(self.case_id, self.reason, interaction, self.case_list_view))
             else:
                 await interaction.response.send_message(embed=simple_embed("Access denied!", 'cross'), ephemeral=True)
                 return
@@ -537,6 +574,52 @@ class CaseView(discord.ui.LayoutView):
             else:
                 await interaction.followup.send(embed=simple_embed("Something went wrong while fetching proofs.", 'cross'), ephemeral=True)
 
+    
+    async def delete_case_callback(self, interaction: discord.Interaction) -> None:
+        try:
+            bot_db = cast("Lily", interaction.client).db
+            assert bot_db is not None
+
+            view = Confirm()
+            await interaction.response.send_message(embed=simple_embed("Are you sure", 'warn'), view=view, ephemeral=True)
+            await view.wait()
+
+            if view.value is None:
+                await interaction.edit_original_response(embed=simple_embed("Confirmation timed out.", 'cross'), view=None)
+                return
+
+            if not view.value:
+                await interaction.edit_original_response(embed=simple_embed('Process has been cancelled.', 'cross'), view=None)
+                return
+
+            await bot_db.delete_case(self.case_id)
+
+            if self.message is not None:
+                try:
+                    view = discord.ui.LayoutView(timeout=10).add_item(
+                        discord.ui.Container(
+                            discord.ui.TextDisplay(content=f"Case {self.case_id} has been deleted.")
+                        )
+                    )
+                    await self.message.edit(view=view)
+                except (discord.NotFound, discord.HTTPException):
+                    logger.exception(
+                        "Failed to edit CaseView message after delete for case_id=%s — likely expired",
+                        self.case_id,
+                    )
+
+            await self.case_list_view.refresh()
+
+            await interaction.edit_original_response(
+                embed=simple_embed(f"Successfully Deleted Case {self.case_id}"), view=None
+            )
+        except Exception:
+            logger.exception("Failed to delete case_id=%s", self.case_id)
+            if not interaction.response.is_done():
+                await interaction.response.send_message(embed=simple_embed("Something went wrong deleting the case.", 'cross'), ephemeral=True)
+            else:
+                await interaction.followup.send(embed=simple_embed("Something went wrong deleting the case.", 'cross'), ephemeral=True)
+
 class CaseListView(discord.ui.LayoutView):
     def __init__(
         self,
@@ -547,7 +630,7 @@ class CaseListView(discord.ui.LayoutView):
         guild_id: int,
         target_user_id: int,
         moderator_id: int | None = None,
-        mod_type: str = "all",
+        mod_type: str = "all"
     ) -> None:
         super().__init__(timeout=300)
 
@@ -561,6 +644,7 @@ class CaseListView(discord.ui.LayoutView):
         self.mod_type = mod_type
 
         self.channel = None
+        self.message: discord.Message | None = None
 
         self.page = case_list_data["page"]
         self.max_page = case_list_data["max_page"]
@@ -674,8 +758,9 @@ class CaseListView(discord.ui.LayoutView):
                 guild_id=self.guild_id,
                 target_user_id=self.target_user_id,
                 moderator_id=self.moderator_id,
-                mod_type=self.mod_type,
+                mod_type=self.mod_type
             )
+            new_view.message = self.message
             await interaction.response.edit_message(view=new_view, allowed_mentions=discord.AllowedMentions.none())
         except Exception:
             logger.exception(
@@ -688,6 +773,39 @@ class CaseListView(discord.ui.LayoutView):
                 await interaction.response.send_message(embed=simple_embed("Something went wrong while changing pages.", 'cross'), ephemeral=True)
             else:
                 await interaction.followup.send(embed=simple_embed("Something went wrong while changing pages.", 'cross'), ephemeral=True)
+
+    async def refresh(self) -> None:
+        if self.message is None:
+            logger.warning("CaseListView.refresh called with no stored message (guild_id=%s)", self.guild_id)
+            return
+
+        try:
+            result = await self.db.fetch_mod_logs(
+                guild_id=self.guild_id,
+                target_user_id=self.target_user_id,
+                moderator_id=self.moderator_id,
+                mod_type=self.mod_type,
+                page=self.page,
+            )
+
+            new_view = CaseListView(
+                self.user,
+                result,
+                self.db,
+                guild_id=self.guild_id,
+                target_user_id=self.target_user_id,
+                moderator_id=self.moderator_id,
+                mod_type=self.mod_type,
+            )
+            new_view.message = self.message
+
+            await self.message.edit(view=new_view, allowed_mentions=discord.AllowedMentions.none())
+        except (discord.NotFound, discord.HTTPException):
+            logger.exception(
+                "Failed to refresh case list (guild_id=%s target_user_id=%s) — message likely expired",
+                self.guild_id,
+                self.target_user_id,
+            )
 
     async def previous_button_callback(self, interaction: discord.Interaction) -> None:
         await self._refresh_page(interaction, self.page - 1)
@@ -712,9 +830,9 @@ class CaseListView(discord.ui.LayoutView):
                 await interaction.response.send_message(embed=simple_embed("Case not found", 'cross'), ephemeral=True)
                 return
 
-            view = CaseView(case_id, case_data)
-
+            view = CaseView(case_id, case_data, self)
             await interaction.response.send_message(view=view, ephemeral=True)
+            view.message = await interaction.original_response()
         except Exception:
             logger.exception("Failed to open case info for custom_id=%s", getattr(interaction, "custom_id", None))
             if not interaction.response.is_done():
@@ -1256,28 +1374,6 @@ class PermissionConfigureModal(discord.ui.Modal):
             if not interaction.response.is_done():
                 await interaction.response.send_message(embed=simple_embed("Something went wrong while assigning permissions.", 'cross'), ephemeral=True)
 
-class Confirm(discord.ui.View):
-    def __init__(self):
-        super().__init__()
-        self.value = None
-
-    @discord.ui.button(label='Confirm', style=discord.ButtonStyle.secondary)
-    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            await interaction.response.defer()
-            self.value = True
-            self.stop()
-        except Exception:
-            logger.exception("Failed to handle Confirm button press")
-
-    @discord.ui.button(label='Cancel', style=discord.ButtonStyle.secondary)
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            await interaction.response.defer()
-            self.value = False
-            self.stop()
-        except Exception:
-            logger.exception("Failed to handle Cancel button press")
 
 """ Moderation Dashboard """
 class ModerationDashboard(discord.ui.LayoutView):

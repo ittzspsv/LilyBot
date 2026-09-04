@@ -724,6 +724,7 @@ async def mod_logs(
             mod_type=mod_type,
         )
         await interaction.response.send_message(view=view, allowed_mentions=discord.AllowedMentions.none())
+        view.message = await interaction.original_response()
     except Exception:
         logger.exception("Failed to build/send mod logs view for user %s in guild %s", user.id, interaction.guild.id)
         await interaction.response.send_message(embed=simple_embed("An unexpected error occurred while displaying moderation logs.", 'cross'))
