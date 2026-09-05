@@ -12,7 +12,8 @@ import matplotlib.pyplot as plt
 from ..components.staff_management_components import (
     StaffsView,
     LOARequestModal,
-    InfractionModal
+    InfractionModal,
+    StrikesListView
 )
 
 import discord
@@ -408,33 +409,30 @@ async def remove_strike_staff(interaction: discord.Interaction, strike_id: int):
 
 async def list_strikes(interaction: discord.Interaction, staff: discord.Member):
     if interaction.guild is None:
-        embed = discord.Embed(
-            title=f"{emoji['cross']} Error",
-            description="Cannot execute this command without a guild object",
-            colour=0xf50000
-        )
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embed=simple_embed("Cannot execute this command without a guild object", 'cross'), ephemeral=True)
         return
 
     try:
         bot_db = cast("Lily", interaction.client).db
         assert bot_db is not None
-        result = await bot_db.fetch_staff_strikes(
+        strikes_list_data = await bot_db.fetch_staff_strikes(
             staff_id=staff.id,
             guild_id=interaction.guild.id
         )
 
-        if not result["success"] and not result["data"]:
-            embed = build_no_strikes_embed(staff)
-            await interaction.response.send_message(embed=embed)
-            return
+        view = StrikesListView(
+            (interaction.user.display_name, interaction.user.display_avatar.url),
+            strikes_list_data=strikes_list_data,
+            db=bot_db,
+            guild_id=interaction.guild.id,
+            staff_id=staff.id
+        )
 
-        strikes = result.get("data")
-        if not isinstance(strikes, list):
-            strikes = []
-
-        embed = build_strikes_list_embed(staff, strikes)
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(
+            view=view,
+            ephemeral=True
+        )
+        
     except Exception:
         logger.exception(f"[ListStrikes] Failed to fetch strikes for staff_id={staff.id} in guild_id={interaction.guild.id}")
         await interaction.response.send_message(embed=simple_embed("Failed to fetch strikes.", "cross"))

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 import discord
 import src.core.configs.bot_details as Configs
@@ -7,7 +9,7 @@ from src.core.utils.embeds.sLilyEmbed import simple_embed
 from ..embeds.staff_management_embed import loa_accept_embed, loa_reject_embed, infraction_embed
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
 
-from typing import List, Any
+from typing import List, Any, Tuple
 
 logger = logging.getLogger("lily")
 
@@ -182,9 +184,9 @@ class LOAStaffsView(discord.ui.LayoutView):
                 discord.ui.TextDisplay(content="- List all the staffs who are on leave"),
                 accessory=discord.ui.Thumbnail(
                     media=(
-                        self.interaction.guild.icon.url
-                        if self.interaction.guild.icon
-                        else self.interaction.guild.me.display_avatar.url
+                        interaction.guild.icon.url
+                        if interaction.guild.icon
+                        else interaction.guild.me.display_avatar.url
                     )
                 ),
             ),
@@ -194,7 +196,6 @@ class LOAStaffsView(discord.ui.LayoutView):
         )
 
         self.add_item(self.container)
-
 
 class StaffsView(discord.ui.LayoutView):
     def __init__(self, interaction: discord.Interaction, db: BotGlobalsDatabaseAccess, overall_details: Dict, role_users_map):
@@ -240,7 +241,7 @@ class StaffsView(discord.ui.LayoutView):
                         "- Lily's Staff Management System.\n\n"
                     )
                 ),
-                accessory=discord.ui.Thumbnail(media=interaction.guild.icon.url)
+                accessory=discord.ui.Thumbnail(media=interaction.guild.icon.url if interaction.guild.icon else interaction.guild.me.display_avatar.url)
             ),
             discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
             discord.ui.TextDisplay(content="### Server Staff Team\n- List of Role Category who has **Moderation/Administration/Management** Authority"),
@@ -324,7 +325,6 @@ class StaffsView(discord.ui.LayoutView):
                 self.message.id,
             )
 
-
 class LOARequestView(discord.ui.LayoutView):
     def __init__(self, bot_db: BotGlobalsDatabaseAccess, staff_id: int, guild_id: int, staff_pfp: str, reason: str, days: str) -> None:
         super().__init__(timeout=None)
@@ -335,14 +335,14 @@ class LOARequestView(discord.ui.LayoutView):
         self.bot_db = bot_db
 
         self.accept_button = discord.ui.Button(
-            style=discord.ButtonStyle.primary,
-            label="Accept",
+            style=discord.ButtonStyle.secondary,
+            emoji=Configs.emoji["checked"],
             custom_id=f"loa-accept{staff_id}{guild_id}",
         )
 
         self.reject_button = discord.ui.Button(
-            style=discord.ButtonStyle.danger,
-            label="Reject",
+            style=discord.ButtonStyle.secondary,
+            emoji=Configs.emoji["cross"],
             custom_id=f"loa-reject{staff_id}{guild_id}"
         )
 
@@ -530,7 +530,6 @@ class LOARequestView(discord.ui.LayoutView):
                 self.staff_id,
             )
 
-
 class LOARejectModal(discord.ui.Modal):
     reason = discord.ui.Label(
         text="Reason",
@@ -615,7 +614,6 @@ class LOARejectModal(discord.ui.Modal):
                 "LOARejectModal._safe_followup: failed to send followup (staff_id=%s)",
                 self.staff_id,
             )
-
 
 class LOARequestModal(discord.ui.Modal):
     dummy = discord.ui.TextDisplay("During your LOA All of your staff roles will be stripped of. You will recieve a DM if your LOA got accepted or rejected.")
@@ -752,7 +750,6 @@ class LOARequestModal(discord.ui.Modal):
                 interaction.user.id,
             )
 
-
 class InfractionModal(discord.ui.Modal):
     reason = discord.ui.Label(
         text="Reason",
@@ -817,16 +814,6 @@ class InfractionModal(discord.ui.Modal):
         )
     )
 
-    proofs = discord.ui.Label(
-        text="Proofs",
-        description="Upload supporting evidence for this infraction. (It's DUMMY AND IT WON'T WORK)",
-        component=discord.ui.FileUpload(
-            required=False,
-            min_values=1,
-            max_values=10
-        )
-    )
-
     def __init__(self, bot_db: BotGlobalsDatabaseAccess, staff: discord.Member) -> None:
         super().__init__(title="Infraction Details")
         self.bot_db = bot_db
@@ -838,7 +825,6 @@ class InfractionModal(discord.ui.Modal):
         assert isinstance(self.infraction_type.component, discord.ui.Select)
         assert isinstance(interaction.guild, discord.Guild)
         assert isinstance(self.notify.component, discord.ui.RadioGroup)
-        assert isinstance(self.proofs.component, discord.ui.FileUpload)
 
         try:
             await interaction.response.defer()
@@ -976,7 +962,6 @@ class InfractionModal(discord.ui.Modal):
                 self.staff.id,
             )
 
-
 class RankConfigureModal(discord.ui.Modal):
 
     def __init__(
@@ -1069,3 +1054,174 @@ class RankConfigureModal(discord.ui.Modal):
                 "RankConfigureModal.on_submit: failed to send success message (guild_id=%s)",
                 interaction.guild.id,
             )
+
+
+class StrikesListView(discord.ui.LayoutView):
+    def __init__(
+        self,
+        user: Tuple[str, str],
+        strikes_list_data: Dict[str, Any],
+        db: BotGlobalsDatabaseAccess,
+        *,
+        guild_id: int,
+        staff_id: int,
+    ) -> None:
+        super().__init__(timeout=None)
+
+        self.user = user
+        self.strikes_list_data = strikes_list_data
+        self.db = db
+
+        self.guild_id = guild_id
+        self.staff_id = staff_id
+
+        self.channel = None
+        self.message: discord.Message | None = None
+
+        self.page = strikes_list_data["page"]
+        self.max_page = strikes_list_data["max_page"]
+        self.total_count = strikes_list_data["total_count"]
+        page_strikes = strikes_list_data["results"]
+
+        strike_info = discord.ui.Container(
+            discord.ui.Section(
+                discord.ui.TextDisplay(content=f"# {user[0]}'s Strike List"),
+                discord.ui.TextDisplay(content=f"### Total Strikes\n- {self.total_count}"),
+                accessory=discord.ui.Thumbnail(
+                    media=user[1],
+                ),
+            ),
+        )
+
+        strikes: List[discord.ui.Item] = []
+
+        for strike in page_strikes:
+            strike_id = strike.get("strike_id")
+
+            info_button: discord.ui.Button = discord.ui.Button(
+                style=discord.ButtonStyle.secondary,
+                emoji=Configs.emoji["paper_clip"],
+                custom_id=str(strike_id),
+            )
+            info_button.callback = self.strike_info_callback
+
+            strikes.append(
+                discord.ui.Section(
+                    discord.ui.TextDisplay(
+                        content=(
+                            f"### {Configs.emoji["pin"]} Strike #{strike_id}\n"
+                            f"> {Configs.emoji['shield']} Moderator: <@{strike['manager']}>\n"
+                            f"> {Configs.emoji['pencil']} Reason: {strike['reason']}"
+                        )
+                    ),
+                    accessory=info_button,
+                )
+            )
+
+        strikes_list = discord.ui.Container(
+            discord.ui.TextDisplay(content="# Strike's Overview"),
+            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+            *strikes,
+        )
+
+        self.add_item(strike_info)
+        self.add_item(strikes_list)
+        self.add_item(self.pagination())
+
+    def pagination(self) -> discord.ui.ActionRow:
+        row = discord.ui.ActionRow()
+
+        prev_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            emoji=Configs.emoji["left"],
+            disabled=not self.strikes_list_data["has_prev"],
+        )
+        prev_button.callback = self.previous_button_callback
+        row.add_item(prev_button)
+
+        page_indicator: discord.ui.Button = discord.ui.Button(
+            label=f"Page {self.page}/{self.max_page}",
+            style=discord.ButtonStyle.secondary,
+            disabled=True,
+        )
+        row.add_item(page_indicator)
+
+        next_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            emoji=Configs.emoji["right"],
+            disabled=not self.strikes_list_data["has_next"],
+        )
+        next_button.callback = self.next_button_callback
+        row.add_item(next_button)
+
+        return row
+
+    async def _refresh_page(self, interaction: discord.Interaction, new_page: int) -> None:
+        try:
+            result = await self.db.fetch_staff_strikes(
+                staff_id=self.staff_id,
+                guild_id=self.guild_id,
+                page=new_page,
+            )
+
+            new_view = StrikesListView(
+                self.user,
+                result,
+                self.db,
+                guild_id=self.guild_id,
+                staff_id=self.staff_id,
+            )
+            new_view.message = self.message
+            await interaction.response.edit_message(view=new_view, allowed_mentions=discord.AllowedMentions.none())
+        except Exception:
+            logger.exception(
+                "Failed to refresh strikes list page=%s for guild_id=%s staff_id=%s",
+                new_page,
+                self.guild_id,
+                self.staff_id,
+            )
+            if not interaction.response.is_done():
+                await interaction.response.send_message(embed=simple_embed("Something went wrong while changing pages.", 'cross'), ephemeral=True)
+            else:
+                await interaction.followup.send(embed=simple_embed("Something went wrong while changing pages.", 'cross'), ephemeral=True)
+
+    async def refresh(self) -> None:
+        if self.message is None:
+            logger.warning("StrikesListView.refresh called with no stored message (guild_id=%s)", self.guild_id)
+            return
+
+        try:
+            result = await self.db.fetch_staff_strikes(
+                staff_id=self.staff_id,
+                guild_id=self.guild_id,
+                page=self.page,
+            )
+
+            new_view = StrikesListView(
+                self.user,
+                result,
+                self.db,
+                guild_id=self.guild_id,
+                staff_id=self.staff_id,
+            )
+            new_view.message = self.message
+
+            await self.message.edit(view=new_view, allowed_mentions=discord.AllowedMentions.none())
+        except (discord.NotFound, discord.HTTPException):
+            logger.exception(
+                "Failed to refresh strikes list (guild_id=%s staff_id=%s) — message likely expired",
+                self.guild_id,
+                self.staff_id,
+            )
+
+    async def previous_button_callback(self, interaction: discord.Interaction) -> None:
+        await self._refresh_page(interaction, self.page - 1)
+
+    async def next_button_callback(self, interaction: discord.Interaction) -> None:
+        await self._refresh_page(interaction, self.page + 1)
+
+    async def strike_info_callback(self, interaction: discord.Interaction) -> None:
+        custom_id = interaction.custom_id
+        if custom_id is None:
+            return
+        print(custom_id)
