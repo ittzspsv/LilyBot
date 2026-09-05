@@ -4,7 +4,7 @@ import logging
 import discord
 import src.core.configs.bot_details as Configs
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Optional
 from src.core.utils.embeds.sLilyEmbed import simple_embed
 from ..embeds.staff_management_embed import loa_accept_embed, loa_reject_embed, infraction_embed
@@ -1099,19 +1099,27 @@ class StrikesListView(discord.ui.LayoutView):
 
         for strike in page_strikes:
             strike_id = strike.get("strike_id")
+            expired = strike.get("expired", False)
+            type: str = strike.get("type", "Unknown")
 
             info_button: discord.ui.Button = discord.ui.Button(
-                style=discord.ButtonStyle.secondary,
+                style=discord.ButtonStyle.danger if expired else discord.ButtonStyle.secondary,
                 emoji=Configs.emoji["paper_clip"],
                 custom_id=str(strike_id),
             )
             info_button.callback = self.strike_info_callback
 
+            status_marker = f"{Configs.emoji['clock']} Expired\n" if expired else ""
+            heading = f"### {Configs.emoji['pin']} {type.title()} #{strike_id}"
+            if expired:
+                heading = f"### ~~{Configs.emoji['pin']} {type.title()} #{strike_id}~~"
+
             strikes.append(
                 discord.ui.Section(
                     discord.ui.TextDisplay(
                         content=(
-                            f"### {Configs.emoji["pin"]} Strike #{strike_id}\n"
+                            f"{heading}\n"
+                            f"{status_marker}"
                             f"> {Configs.emoji['shield']} Moderator: <@{strike['manager']}>\n"
                             f"> {Configs.emoji['pencil']} Reason: {strike['reason']}"
                         )
@@ -1237,18 +1245,30 @@ class StrikesListView(discord.ui.LayoutView):
         date_raw = strike_info["date"]
         date = f"<t:{int(datetime.fromisoformat(date_raw).timestamp())}:R>" if date_raw else "Unknown"
         expiry_raw = strike_info["expiry_date"]
-        expiry = f"<t:{int(datetime.fromisoformat(expiry_raw).timestamp())}:R>" if expiry_raw else "Never"
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        is_expired = expiry_raw is not None and expiry_raw <= now_iso
+
+        if expiry_raw is None:
+            expiry = "Never"
+        elif is_expired:
+            expiry = f"<t:{int(datetime.fromisoformat(expiry_raw).timestamp())}:R> (Expired)"
+        else:
+            expiry = f"<t:{int(datetime.fromisoformat(expiry_raw).timestamp())}:R>"
+
         strike_type = strike_info["type"] or "Standard"
+        title_prefix = "~~" if is_expired else ""
+        title_suffix = "~~ (Expired)" if is_expired else ""
 
         view = discord.ui.LayoutView(timeout=None).add_item(
             discord.ui.Container(
-                discord.ui.TextDisplay(f"### {strike_type} | {strike_info['strike_id']}"),
+                discord.ui.TextDisplay(f"## {title_prefix}{Configs.emoji['pin']} {strike_type.title()} | {strike_info['strike_id']}{title_suffix}"),
                 discord.ui.Separator(),
                 discord.ui.TextDisplay(
-                    f"**Issued by:** {issued_by}\n"
-                    f"**Date:** {date}\n"
-                    f"**Expires:** {expiry}\n"
-                    f"**Reason:** {reason}"
+                    f"> {Configs.emoji['staff']} Issued by: {issued_by}\n"
+                    f"> {Configs.emoji['calender']} Issued On: {date}\n"
+                    f"> {Configs.emoji['clock']} Expires: {expiry}\n"
+                    f"> {Configs.emoji['pencil']} Reason: {reason}"
                 )
             )
         )

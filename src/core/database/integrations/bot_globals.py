@@ -2052,74 +2052,77 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         return dict(row)
 
     async def fetch_staff_strikes(
-        self,
-        staff_id: int,
-        guild_id: int,
-        *,
-        page: int = 1,
-        page_size: int = 3,
-    ) -> Dict[str, Any]:
-        if page < 1:
-            raise ValueError("page must be >= 1")
-        if page_size < 1:
-            raise ValueError("page_size must be >= 1")
+            self,
+            staff_id: int,
+            guild_id: int,
+            *,
+            page: int = 1,
+            page_size: int = 3,
+        ) -> Dict[str, Any]:
+            if page < 1:
+                raise ValueError("page must be >= 1")
+            if page_size < 1:
+                raise ValueError("page_size must be >= 1")
 
-        conditions = ["issued_to_id = ?", "guild_id = ?"]
-        params: list[Any] = [staff_id, guild_id]
-        where_clause = " AND ".join(conditions)
+            now_iso = datetime.now(timezone.utc).isoformat()
 
-        count_row = await self.fetch_one(
-            f"SELECT COUNT(*) AS total FROM strikes WHERE {where_clause}",
-            tuple(params),
-        )
-        total_count = count_row["total"] if count_row is not None else 0
+            conditions = ["issued_to_id = ?", "guild_id = ?"]
+            params: list[Any] = [staff_id, guild_id]
+            where_clause = " AND ".join(conditions)
 
-        if not total_count:
-            return {
-                "success": False,
-                "message": "No strikes found",
-                "results": [],
-                "page": page,
-                "has_prev": False,
-                "has_next": False,
-                "total_count": 0,
-                "max_page": 1,
-            }
+            count_row = await self.fetch_one(
+                f"SELECT COUNT(*) AS total FROM strikes WHERE {where_clause}",
+                tuple(params),
+            )
+            total_count = count_row["total"] if count_row is not None else 0
 
-        max_page = max(1, -(-total_count // page_size))
-        offset = (page - 1) * page_size
-
-        query = f"""
-            SELECT strike_id, reason, date, issued_by_id, type, expiry_date
-            FROM strikes
-            WHERE {where_clause}
-            ORDER BY strike_id DESC
-            LIMIT ? OFFSET ?
-        """
-        rows = await self.fetch_all(query, tuple(params) + (page_size + 1, offset))
-
-        has_next = len(rows) > page_size
-        rows = rows[:page_size]
-
-        return {
-            "success": True,
-            "results": [
-                {
-                    "strike_id": row["strike_id"],
-                    "reason": row["reason"],
-                    "date": row["date"],
-                    "manager": row["issued_by_id"],
-                    "type": row["type"],
-                    "expiry_date": row["expiry_date"],
+            if not total_count:
+                return {
+                    "success": False,
+                    "message": "No strikes found",
+                    "results": [],
+                    "page": page,
+                    "has_prev": False,
+                    "has_next": False,
+                    "total_count": 0,
+                    "max_page": 1,
                 }
-                for row in rows
-            ],
-            "page": page,
-            "has_prev": page > 1,
-            "has_next": has_next,
-            "total_count": total_count,
-            "max_page": max_page,
-        }
+
+            max_page = max(1, -(-total_count // page_size))
+            offset = (page - 1) * page_size
+
+            query = f"""
+                SELECT strike_id, reason, date, issued_by_id, type, expiry_date
+                FROM strikes
+                WHERE {where_clause}
+                ORDER BY strike_id DESC
+                LIMIT ? OFFSET ?
+            """
+            rows = await self.fetch_all(query, tuple(params) + (page_size + 1, offset))
+
+            has_next = len(rows) > page_size
+            rows = rows[:page_size]
+
+            return {
+                "success": True,
+                "results": [
+                    {
+                        "strike_id": row["strike_id"],
+                        "reason": row["reason"],
+                        "date": row["date"],
+                        "manager": row["issued_by_id"],
+                        "type": row["type"],
+                        "expiry_date": row["expiry_date"],
+                        "expired": row["expiry_date"] is not None and row["expiry_date"] <= now_iso,
+                    }
+                    for row in rows
+                ],
+                "page": page,
+                "has_prev": page > 1,
+                "has_next": has_next,
+                "total_count": total_count,
+                "max_page": max_page,
+            }
 
     async def add_loa(
         self,
