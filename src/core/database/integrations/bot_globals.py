@@ -2039,6 +2039,18 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
             "message": f"Strike `{strike_id}` edited successfully!",
         }
 
+    async def get_strike(
+        self,
+        strike_id: int,
+        guild_id: int
+    ) -> Dict[str, Any]:
+        row = await self.fetch_one(
+            "SELECT * FROM strikes WHERE strike_id = ? AND guild_id = ?",
+            (strike_id, guild_id)
+        )
+
+        return dict(row)
+
     async def fetch_staff_strikes(
         self,
         staff_id: int,

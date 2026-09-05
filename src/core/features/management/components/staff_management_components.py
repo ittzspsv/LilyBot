@@ -4,10 +4,12 @@ import logging
 import discord
 import src.core.configs.bot_details as Configs
 
+from datetime import datetime
 from typing import Dict, Optional
 from src.core.utils.embeds.sLilyEmbed import simple_embed
 from ..embeds.staff_management_embed import loa_accept_embed, loa_reject_embed, infraction_embed
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
+
 
 from typing import List, Any, Tuple
 
@@ -1221,7 +1223,38 @@ class StrikesListView(discord.ui.LayoutView):
         await self._refresh_page(interaction, self.page + 1)
 
     async def strike_info_callback(self, interaction: discord.Interaction) -> None:
-        custom_id = interaction.custom_id
-        if custom_id is None:
+        strike_id = interaction.custom_id
+        if strike_id is None:
             return
-        print(custom_id)
+        assert interaction.guild is not None
+        strike_info = await self.db.get_strike(int(strike_id), interaction.guild.id)
+        if strike_info is None:
+            await interaction.response.send_message(embed=simple_embed("Strike not found.", 'cross'), ephemeral=True)
+            return
+
+        issued_by = f"<@{strike_info['issued_by_id']}>"
+        reason = strike_info["reason"] or "No reason provided"
+        date_raw = strike_info["date"]
+        date = f"<t:{int(datetime.fromisoformat(date_raw).timestamp())}:R>" if date_raw else "Unknown"
+        expiry_raw = strike_info["expiry_date"]
+        expiry = f"<t:{int(datetime.fromisoformat(expiry_raw).timestamp())}:R>" if expiry_raw else "Never"
+        strike_type = strike_info["type"] or "Standard"
+
+        view = discord.ui.LayoutView(timeout=None).add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(f"### {strike_type} | {strike_info['strike_id']}"),
+                discord.ui.Separator(),
+                discord.ui.TextDisplay(
+                    f"**Issued by:** {issued_by}\n"
+                    f"**Date:** {date}\n"
+                    f"**Expires:** {expiry}\n"
+                    f"**Reason:** {reason}"
+                )
+            )
+        )
+
+        await interaction.response.send_message(
+            view=view,
+            ephemeral=True
+        )
+        
