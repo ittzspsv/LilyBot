@@ -689,7 +689,8 @@ async def mod_logs(
             embed=simple_embed(
                 "Command requires guild object in order to execute",
                 "cross"
-            )
+            ),
+            ephemeral=True
         )
         return
 
@@ -706,11 +707,11 @@ async def mod_logs(
         )
     except Exception:
         logger.exception("Failed to fetch mod logs for user %s in guild %s", user.id, interaction.guild.id)
-        await interaction.response.send_message(embed=simple_embed("An unexpected error occurred while fetching moderation logs.", 'cross'))
+        await interaction.response.send_message(embed=simple_embed("An unexpected error occurred while fetching moderation logs.", 'cross'), ephemeral=True)
         return
 
     if not result["success"]:
-        await interaction.response.send_message(embed=simple_embed("No cases found.", 'cross'))
+        await interaction.response.send_message(embed=simple_embed("No cases found.", 'cross'), ephemeral=True)
         return
 
     try:
@@ -723,11 +724,11 @@ async def mod_logs(
             moderator_id=moderator.id if moderator else None,
             mod_type=mod_type,
         )
-        await interaction.response.send_message(view=view, allowed_mentions=discord.AllowedMentions.none())
+        await interaction.response.send_message(view=view, allowed_mentions=discord.AllowedMentions.none(), ephemeral=True)
         view.message = await interaction.original_response()
     except Exception:
         logger.exception("Failed to build/send mod logs view for user %s in guild %s", user.id, interaction.guild.id)
-        await interaction.response.send_message(embed=simple_embed("An unexpected error occurred while displaying moderation logs.", 'cross'))
+        await interaction.response.send_message(embed=simple_embed("An unexpected error occurred while displaying moderation logs.", 'cross'), ephemeral=True)
 
 async def moderation_insights(
     interaction: discord.Interaction
@@ -899,6 +900,11 @@ async def setup_mod_appeal(
             reason=f"Moderation appeal forum created by {interaction.user}",
         )
 
+        await bot_db.remove_channel(
+            interaction.guild.id,
+            channel_type="moderation_appeal"
+        )
+
         await bot_db.set_channel(
             interaction.guild.id,
             forum.id,
@@ -924,6 +930,7 @@ async def setup_mod_appeal(
         webhook = await forum.create_webhook(
             name="Lily Webhook"
         )
+        
 
         await bot_db.set_webhook(
             interaction.guild.id,
