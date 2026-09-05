@@ -17,3 +17,5 @@ numpy
 httpx
 jishaku
 jinja2
+pilmoji
+unidecode
