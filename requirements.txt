@@ -8,10 +8,12 @@ python-dotenv
 aiohttp
 aiofiles
 lavalink
-python-dotenv
 asqlite
 apscheduler
 boto3
 matplotlib
 scipy
 numpy
+httpx
+jishaku
+jinja2
