@@ -105,7 +105,7 @@ emoji = {
     "Portal": "<:Portal:1541880623117897788>",
     "PurpleLightning": "<:PurpleLightning:1541880630248480838>",
     "Quake": "<:Quake:1541880635394887841>",
-    "RabidSkin": "<:RabidSkin:1541880646039769183>",
+    "RabidBlade": "<:RabidSkin:1541880646039769183>",
     "RedLightning": "<:RedLightning:1541880651152752800>",
     "RequiemEagle": "<:RequiemEagle:1541880654709530725>",
     "Rocket": "<:Rocket:1541880658165760031>",
@@ -137,7 +137,10 @@ emoji = {
     "Magnet": "<:Magnet:1543549153689346048>",
     "trash": "<:trash:1545408260406776001>",
     "refresh": "<:refresh:1545408459082698862>",
-    "link": "<:link:1545425614234853486>"
+    "link": "<:link:1545425614234853486>",
+    "StarlightGravity": "<:StarlightGravity:1545814668302487632>",
+    "RunicYeti": "<:RunicYeti:1545814659494445126>",
+    "ArcSteelMagnet": "<:ArcSteelMagnet:1545814649453158470>"
 }
     
 
