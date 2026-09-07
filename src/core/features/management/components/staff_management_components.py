@@ -5,35 +5,44 @@ import discord
 import src.core.configs.bot_details as Configs
 
 from datetime import datetime, timezone
-from typing import Dict, Optional
 from src.core.utils.embeds.sLilyEmbed import simple_embed
 from ..embeds.staff_management_embed import loa_accept_embed, loa_reject_embed, infraction_embed
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
 
 
-from typing import List, Any, Tuple
+from typing import List, Any, Tuple, Dict, Optional, cast, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.lily import Lily
 
 logger = logging.getLogger("lily")
 
 
 class StaffListView(discord.ui.LayoutView):
-    def __init__(self, interaction: discord.Interaction, role_data: dict, role_id: int, page: int = 0, per_page: int = 6):
-        super().__init__()
+    def __init__(
+        self,
+        interaction: discord.Interaction,
+        role_id: int,
+        staff_list_data: Dict[str, Any],
+        db: BotGlobalsDatabaseAccess,
+        *,
+        guild_id: int,
+        per_page: int = 6,
+    ):
+        super().__init__(timeout=None)
 
-        self.owner_id = interaction.user.id
-        self.role_data = role_data
         self.role_id = role_id
+        self.staff_list_data = staff_list_data
+        self.db = db
+        self.guild_id = guild_id
         self.per_page = per_page
 
-        staffs_complete = role_data.get("staff", [])
-        self.total_staff = len(staffs_complete)
+        self.message: discord.Message | None = None
 
-        max_page = max((self.total_staff - 1) // per_page, 0)
-        self.page = max(0, min(page, max_page))
-
-        start = self.page * per_page
-        end = start + per_page
-        staffs = staffs_complete[start:end]
+        self.page = staff_list_data["page"]
+        self.max_page = staff_list_data["max_page"]
+        self.total_staff = staff_list_data["total_count"]
+        staffs = staff_list_data["results"]
 
         assert isinstance(interaction.guild, discord.Guild)
 
@@ -65,9 +74,9 @@ class StaffListView(discord.ui.LayoutView):
 
         role_section = discord.ui.Section(
             discord.ui.TextDisplay(
-                content=f"## {role_data.get('role_name','Unknown')}\n"
+                content=f"## {role.name if role else 'Unknown'}\n"
                         f"- Total Staff: `{self.total_staff}`\n"
-                        f"- Page: `{self.page+1}/{max_page+1}`"
+                        f"- Page: `{self.page}/{self.max_page}`"
             ),
             accessory=discord.ui.Thumbnail(media=role_icon_url)
         )
@@ -75,23 +84,9 @@ class StaffListView(discord.ui.LayoutView):
         container_items = [
             role_section,
             discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
-            *staff_sections
+            *staff_sections,
+            self.pagination(),
         ]
-
-        buttons = discord.ui.ActionRow()
-
-        if self.page > 0:
-            left = discord.ui.Button(style=discord.ButtonStyle.secondary, emoji="⏪")
-            left.callback = self.left_paginator_callback
-            buttons.add_item(left)
-
-        if end < self.total_staff:
-            right = discord.ui.Button(style=discord.ButtonStyle.secondary, emoji="⏩")
-            right.callback = self.right_paginator_callback
-            buttons.add_item(right)
-
-        if buttons.children:
-            container_items.append(buttons)
 
         try:
             border_media = Configs.img['border']
@@ -109,61 +104,69 @@ class StaffListView(discord.ui.LayoutView):
         self.container = discord.ui.Container(*container_items)
         self.add_item(self.container)
 
-    async def interaction_check(self, interaction: discord.Interaction):
-        if interaction.user.id != self.owner_id:
-            try:
-                await interaction.response.send_message(
-                    "Only instigator has authority to access.",
-                    ephemeral=True
-                )
-            except discord.HTTPException:
-                logger.exception(
-                    "StaffListView.interaction_check: failed to send ownership rejection message (user_id=%s)",
-                    interaction.user.id,
-                )
-            return False
-        return True
+    def pagination(self) -> discord.ui.ActionRow:
+        row = discord.ui.ActionRow()
 
-    async def left_paginator_callback(self, interaction: discord.Interaction):
+        left = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            emoji=Configs.emoji["left"],
+            disabled=not self.staff_list_data["has_prev"],
+        )
+        left.callback = self.left_paginator_callback
+        row.add_item(left)
+
+        page_indicator = discord.ui.Button(
+            label=f"Page {self.page}/{self.max_page}",
+            style=discord.ButtonStyle.secondary,
+            disabled=True,
+        )
+        row.add_item(page_indicator)
+
+        right = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            emoji=Configs.emoji["right"],
+            disabled=not self.staff_list_data["has_next"],
+        )
+        right.callback = self.right_paginator_callback
+        row.add_item(right)
+
+        return row
+
+    async def _refresh_page(self, interaction: discord.Interaction, new_page: int) -> None:
         try:
-            view = StaffListView(
-                interaction,
-                self.role_data,
-                self.role_id,
-                page=self.page - 1
+            result = await self.db.fetch_staffs_from_rank(
+                guild_id=self.guild_id,
+                role_id=self.role_id,
+                page_size=self.per_page,
+                page=new_page,
             )
-            await interaction.response.edit_message(view=view)
+
+            new_view = StaffListView(
+                interaction,
+                self.role_id,
+                result,
+                self.db,
+                guild_id=self.guild_id,
+                per_page=self.per_page,
+            )
+            new_view.message = self.message
+            await interaction.response.edit_message(view=new_view)
         except discord.HTTPException:
             logger.exception(
-                "StaffListView.left_paginator_callback: failed to edit message (role_id=%s, page=%s)",
-                self.role_id, self.page - 1,
+                "StaffListView._refresh_page: failed to edit message (role_id=%s, page=%s)",
+                self.role_id, new_page,
             )
         except Exception:
             logger.exception(
-                "StaffListView.left_paginator_callback: unexpected error (role_id=%s, page=%s)",
-                self.role_id, self.page - 1,
+                "StaffListView._refresh_page: unexpected error (role_id=%s, page=%s)",
+                self.role_id, new_page,
             )
 
-    async def right_paginator_callback(self, interaction: discord.Interaction):
-        try:
-            view = StaffListView(
-                interaction,
-                self.role_data,
-                self.role_id,
-                page=self.page + 1
-            )
-            await interaction.response.edit_message(view=view)
-        except discord.HTTPException:
-            logger.exception(
-                "StaffListView.right_paginator_callback: failed to edit message (role_id=%s, page=%s)",
-                self.role_id, self.page + 1,
-            )
-        except Exception:
-            logger.exception(
-                "StaffListView.right_paginator_callback: unexpected error (role_id=%s, page=%s)",
-                self.role_id, self.page + 1,
-            )
+    async def left_paginator_callback(self, interaction: discord.Interaction) -> None:
+        await self._refresh_page(interaction, self.page - 1)
 
+    async def right_paginator_callback(self, interaction: discord.Interaction) -> None:
+        await self._refresh_page(interaction, self.page + 1)
 
 class LOAStaffsView(discord.ui.LayoutView):
     def __init__(self, interaction: discord.Interaction, staff_datas: List[Dict[str, Any]]):
@@ -200,23 +203,20 @@ class LOAStaffsView(discord.ui.LayoutView):
         self.add_item(self.container)
 
 class StaffsView(discord.ui.LayoutView):
-    def __init__(self, interaction: discord.Interaction, db: BotGlobalsDatabaseAccess, overall_details: Dict, role_users_map):
-        super().__init__(timeout=500)
+    def __init__(self, interaction: discord.Interaction, ranks: List[int], overall_details: Dict[str, Dict[str, int]]):
+        super().__init__(timeout=None)
+
+        assert interaction.guild is not None
 
         self.message: Optional[discord.Message] = None
-        self.db: BotGlobalsDatabaseAccess = db
-        self.role_users_map = role_users_map
+        self.roles: List[discord.Role | None] = [interaction.guild.get_role(r) for r in ranks]
 
         role_select_options = [
             discord.SelectOption(
-                label=data["role_name"],
-                value=str(role_id),
+                label=role.name if role is not None else "Unknown",
+                value=str(role.id if role is not None else 0),
             )
-            for role_id, data in sorted(
-                role_users_map.items(),
-                key=lambda item: item[1]["priority"],
-            )
-            if data["role_type"] == "staff"
+            for role in self.roles
         ]
 
         self.roles_selector = discord.ui.Select(
@@ -248,9 +248,9 @@ class StaffsView(discord.ui.LayoutView):
             discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
             discord.ui.TextDisplay(content="### Server Staff Team\n- List of Role Category who has **Moderation/Administration/Management** Authority"),
             discord.ui.TextDisplay(content=f"### __Overall Details__\n"
-                        f"- **ON LOA** - `{overall_details.get('staff').get('loa')}`\n"
-                        f"- **Active Staffs** - `{overall_details.get('staff').get('active')}`\n"
-                        f"- **Total Staffs** - `{overall_details.get('staff').get('total')}`"),
+                        f"- **ON LOA** - `{overall_details['staff']['loa']}`\n"
+                        f"- **Active Staffs** - `{overall_details['staff']['active']}`\n"
+                        f"- **Total Staffs** - `{overall_details['staff']['total']}`"),
             discord.ui.ActionRow(self.roles_selector),
             discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
             discord.ui.Section(
@@ -266,15 +266,25 @@ class StaffsView(discord.ui.LayoutView):
 
     async def role_selector_callback(self, interaction: discord.Interaction):
         try:
+            bot_db = cast("Lily", interaction.client).db
+            assert bot_db is not None
+            assert interaction.guild is not None
+
             selected_role_id = int(self.roles_selector.values[0])
-            role_data = self.role_users_map[selected_role_id]
-
-            view = StaffListView(interaction, role_data, selected_role_id)
-
-            await interaction.response.send_message(
-                view=view,
-                ephemeral=True
+            result = await bot_db.fetch_staffs_from_rank(
+                guild_id=interaction.guild.id,
+                role_id=selected_role_id,
+                page_size=6,
+                page=1,
             )
+            view = StaffListView(
+                interaction=interaction,
+                role_id=selected_role_id,
+                staff_list_data=result,
+                db=bot_db,
+                guild_id=interaction.guild.id,
+            )
+            await interaction.response.send_message(view=view, ephemeral=True)
         except KeyError:
             logger.exception(
                 "StaffsView.role_selector_callback: role_id not found in role_users_map (value=%s)",
@@ -290,7 +300,9 @@ class StaffsView(discord.ui.LayoutView):
     async def loa_staffs_callback(self, interaction: discord.Interaction):
         assert isinstance(interaction.guild, discord.Guild)
         try:
-            staff_datas: List[Dict[str, Any]] = await self.db.fetch_loa_staffs(interaction.guild.id, "staff")
+            bot_db = cast("Lily", interaction.client).db
+            assert bot_db is not None
+            staff_datas: List[Dict[str, Any]] = await bot_db.fetch_loa_staffs(interaction.guild.id, "staff")
             view = LOAStaffsView(interaction, staff_datas)
             await interaction.response.send_message(view=view, ephemeral=True)
         except discord.HTTPException:
@@ -314,18 +326,6 @@ class StaffsView(discord.ui.LayoutView):
         except discord.HTTPException:
             logger.exception("StaffsView._safe_error_response: failed to notify user of error")
 
-    async def on_timeout(self):
-        self.roles_selector.disabled = True
-        self.loa_staffs_btn.disabled = True
-        if self.message is None:
-            return
-        try:
-            await self.message.edit(view=self)
-        except discord.HTTPException:
-            logger.exception(
-                "StaffsView.on_timeout: failed to edit message on timeout (message_id=%s)",
-                self.message.id,
-            )
 
 class LOARequestView(discord.ui.LayoutView):
     def __init__(self, bot_db: BotGlobalsDatabaseAccess, staff_id: int, guild_id: int, staff_pfp: str, reason: str, days: str) -> None:
@@ -1041,7 +1041,8 @@ class RankConfigureModal(discord.ui.Modal):
             )
             try:
                 await interaction.response.send_message(
-                    embed=simple_embed("Failed to save rank configuration due to an internal error.", 'cross')
+                    embed=simple_embed("Failed to save rank configuration due to an internal error.", 'cross'),
+                    ephemeral=True
                 )
             except discord.HTTPException:
                 logger.exception("RankConfigureModal.on_submit: failed to send failure notice")
@@ -1049,14 +1050,14 @@ class RankConfigureModal(discord.ui.Modal):
 
         try:
             await interaction.response.send_message(
-                embed=simple_embed(f"Configured {len(ranks)} staff ranks.")
+                embed=simple_embed(f"Configured {len(ranks)} staff ranks."),
+                ephemeral=True
             )
         except discord.HTTPException:
             logger.exception(
                 "RankConfigureModal.on_submit: failed to send success message (guild_id=%s)",
                 interaction.guild.id,
             )
-
 
 class StrikesListView(discord.ui.LayoutView):
     def __init__(
