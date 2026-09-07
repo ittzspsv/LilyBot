@@ -7,7 +7,7 @@ from enum import Enum
 
 from src.core.utils.components.sLIlyGlobalComponents import CommandInfo
 from src.core.utils.embeds.sLilyEmbed import simple_embed
-from src.core.features.moderation.components.lily_moderation_components import AppealForumCustomize, AppealMessageView
+from src.core.features.moderation.components.lily_moderation_components import AppealForumCustomize, AppealMessageView, ModerationDashboard
 from src.core.features.permissions.lily_permissions import permission, app_permission
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
 from src.core.logging.lily_logging import LilyLoggingController
@@ -446,10 +446,10 @@ class LilyModeration(commands.Cog):
      
     @appeal.command(name="setup", description="Setup Moderation Appeal for this server")
     @app_permission(command_name = "mod_appeal_management")
-    async def setup_appeal(self, interaction: discord.Interaction):
+    async def setup_appeal(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
-            return await interaction.response.send_message(embed=simple_embed("This command can only be executed inside an guild", 'cross'))
-        
+            await interaction.response.send_message(embed=simple_embed("This command can only be executed inside an guild", 'cross'))
+            return
         await setup_mod_appeal(interaction)
 
     @appeal.command(
@@ -483,6 +483,17 @@ class LilyModeration(commands.Cog):
     async def reject_appeal(self, interaction: discord.Interaction, reason: str):
         await reject_appeal_fn(interaction, reason)
 
+    @mod.command(name="dashboard", description="Spawn in the dashboard")
+    @app_permission(command_name="dashboard", restrict=True)
+    async def dashboard(self, interaction: discord.Interaction):
+        view = ModerationDashboard({
+            "setup_mod_appeal": setup_mod_appeal
+        })
+
+        await interaction.response.send_message(
+            view=view,
+            ephemeral=True
+        )
 
 async def setup(bot):
     cog = LilyModeration(bot)
