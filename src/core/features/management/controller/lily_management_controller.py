@@ -72,25 +72,16 @@ async def fetch_all_staffs(interaction: discord.Interaction) -> None:
     bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
     try:
-        data = await bot_db.fetch_all_staffs(interaction.guild.id)
+        data = await bot_db.fetch_staff_summary(interaction.guild.id)
+        ranks = await bot_db.get_staff_ranks(interaction.guild.id)
 
-        overall_details = data["overall"]
-        role_user_map = data["roles"]
-
-        view = StaffsView(interaction, bot_db, overall_details, role_user_map)
-        await interaction.response.send_message(view=view)
-        view.message = await interaction.original_response()
+        view = StaffsView(interaction, ranks ,data)
+        await interaction.response.send_message(view=view, ephemeral=True)
 
     except Exception:
         logger.exception(f"[FetchAllStaffs] Failed to fetch staff list for guild_id={interaction.guild.id}")
 
-        embed = discord.Embed(
-            title=f"{emoji['cross']} Error",
-            description="Failed to fetch staff data. Please check the database.",
-            colour=0xf50000
-        )
-
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embed=simple_embed("No staff data returned", 'cross'), ephemeral=True)
 
 async def update_all_staffs(interaction: discord.Interaction) -> None:
     if interaction.guild is None:
