@@ -938,11 +938,24 @@ async def setup_mod_appeal(
             webhook.url
         )
 
-        await interaction.response.send_message(
-            embed=simple_embed(
-                f"Successfully created Appeal forums {forum.mention}.  Appeals will be posted on that forums\nPlease do not delete the `Pending` Tag from the forum"
+        if interaction.response.is_done():
+            await interaction.followup.send(
+                embed=simple_embed(
+                    f"Successfully created Appeal forum {forum.mention}. "
+                    "Appeals will be posted on that forum.\n"
+                    "Please do not delete the `Pending` tag from the forum."
+                ),
+                ephemeral=True
             )
-        )
+        else:
+            await interaction.response.send_message(
+                embed=simple_embed(
+                    f"Successfully created Appeal forum {forum.mention}. "
+                    "Appeals will be posted on that forum.\n"
+                    "Please do not delete the `Pending` tag from the forum."
+                ),
+                ephemeral=True
+            )
 
     except discord.Forbidden:
         logger.exception("Missing permissions to create moderation appeal forum in guild %s", interaction.guild.id)
