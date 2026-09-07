@@ -153,13 +153,6 @@ async def spawn_ticket(ctx: commands.Context, json_data: dict) -> None:
     assert logging_controller is not None
 
     try:
-        content, embeds = ParseAdvancedEmbed(
-            json_data["EmbedConfigs"]["TicketPanelEmbed"]
-        )
-
-        if not isinstance(embeds, list):
-            embeds = [embeds]
-
         channel_id = json_data["BasicConfigurations"]["TicketPanelSpawnChannel"]
 
         channel_obj = (
