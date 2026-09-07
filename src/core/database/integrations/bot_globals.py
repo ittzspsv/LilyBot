@@ -371,29 +371,43 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         self,
         guild_id: int,
         role_id: int,
-        ban_limit: int,
-        ban_queue: int,
-        assignment_scope: str,
-        roles: Set[int],
-        role_type: str,
-        role_name: str
+        ban_limit: int = 45,
+        ban_queue: int = 0,
+        assignment_scope: str = "none",
+        roles: Set[int] = set(),
+        role_type: str = "staff",
+        role_name: str | None = None,
+        mode: int = 0
     ) -> Dict[str, str | bool]:
         try:
-            await self.execute(
-                """
-                INSERT INTO roles (
-                    guild_id, role_id, ban_limit, ban_queue, assignment_scope, role_type, role_name
+            if role_name is None:
+                role_name = f"role_{role_id}"
+            if mode == 0:
+                await self.execute(
+                    """
+                    INSERT INTO roles (
+                        guild_id, role_id, ban_limit, ban_queue, assignment_scope, role_type, role_name
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(guild_id, role_id) DO UPDATE SET
+                        ban_limit        = excluded.ban_limit,
+                        ban_queue        = excluded.ban_queue,
+                        assignment_scope = excluded.assignment_scope,
+                        role_type = excluded.role_type,
+                        role_name = excluded.role_name
+                    """,
+                    (guild_id, role_id, ban_limit, ban_queue, assignment_scope, role_type, role_name),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(guild_id, role_id) DO UPDATE SET
-                    ban_limit        = excluded.ban_limit,
-                    ban_queue        = excluded.ban_queue,
-                    assignment_scope = excluded.assignment_scope,
-                    role_type = excluded.role_type,
-                    role_name = excluded.role_name
-                """,
-                (guild_id, role_id, ban_limit, ban_queue, assignment_scope, role_type, role_name),
-            )
+            else:
+                await self.execute(
+                    """
+                    INSERT OR IGNORE INTO roles (
+                        guild_id, role_id, ban_limit, ban_queue, assignment_scope, role_type, role_name
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (guild_id, role_id, ban_limit, ban_queue, assignment_scope, role_type, role_name),
+                )
 
             await self.execute(
                 "DELETE FROM role_assignments WHERE guild_id = ? AND role_id = ?",
@@ -1686,6 +1700,154 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
                 )
 
         return {"overall": role_count_result, "roles": role_user_map}
+
+    async def fetch_staff_summary(self, guild_id: int) -> Dict[str, Any]:
+        row = await self.fetch_one(
+            """
+            SELECT
+                COUNT(
+                    DISTINCT CASE
+                        WHEN s.retired = 0
+                        THEN s.staff_id
+                    END
+                ) AS total_staffs,
+                COUNT(
+                    DISTINCT CASE
+                        WHEN s.on_loa = 1
+                        AND s.retired = 0
+                        THEN s.staff_id
+                    END
+                ) AS loa_staffs,
+                COUNT(
+                    DISTINCT CASE
+                        WHEN s.on_loa = 0
+                        AND s.retired = 0
+                        THEN s.staff_id
+                    END
+                ) AS active_staffs
+            FROM staff_ranks srk
+            JOIN roles r
+                ON r.guild_id = srk.guild_id
+            AND r.role_id = srk.role_id
+            LEFT JOIN staff_roles sr
+                ON sr.guild_id = srk.guild_id
+            AND sr.role_id = srk.role_id
+            LEFT JOIN staffs s
+                ON s.guild_id = sr.guild_id
+            AND s.staff_id = sr.staff_id
+            WHERE srk.guild_id = ?;
+            """,
+            (guild_id,),
+        )
+
+        return {
+            "staff": {
+                "total": row["total_staffs"] if row else 0,
+                "loa": row["loa_staffs"] if row else 0,
+                "active": row["active_staffs"] if row else 0,
+            }
+        }
+
+    async def fetch_staffs_from_rank(
+        self,
+        guild_id: int,
+        role_id: int,
+        page_size: int = 5,
+        page: int = 0,
+    ) -> Dict[str, Any]:
+        if page < 1:
+            raise ValueError("page must be >= 1")
+        if page_size < 1:
+            raise ValueError("page_size must be >= 1")
+
+        count_row = await self.fetch_one(
+            """
+            SELECT COUNT(*) AS total
+            FROM staff_roles sr
+            JOIN staffs s
+                ON s.staff_id = sr.staff_id
+            AND s.guild_id = sr.guild_id
+            WHERE sr.guild_id = ?
+            AND sr.role_id = ?
+            AND s.retired = 0;
+            """,
+            (guild_id, role_id),
+        )
+        total_count = count_row["total"] if count_row is not None else 0
+
+        if not total_count:
+            return {
+                "success": False,
+                "message": "No staffs found",
+                "results": [],
+                "page": page,
+                "has_prev": False,
+                "has_next": False,
+                "total_count": 0,
+                "max_page": 1,
+            }
+
+        max_page = max(1, -(-total_count // page_size))
+        offset = (page - 1) * page_size
+
+        rows = await self.fetch_all(
+            """
+            SELECT
+                s.staff_id,
+                s.name,
+                s.joined_on,
+                m.avatar_url,
+                m.timezone
+            FROM staff_roles sr
+            JOIN staffs s
+                ON s.staff_id = sr.staff_id
+            AND s.guild_id = sr.guild_id
+            LEFT JOIN members m
+                ON m.member_id = s.staff_id
+            AND m.guild_id = s.guild_id
+            WHERE sr.guild_id = ?
+            AND sr.role_id = ?
+            AND s.retired = 0
+            ORDER BY s.name
+            LIMIT ? OFFSET ?;
+            """,
+            (guild_id, role_id, page_size + 1, offset),
+        )
+
+        has_next = len(rows) > page_size
+        rows = rows[:page_size]
+
+        time_now = datetime.now(timezone.utc)
+
+        def parse_joined_on(joined_on: Optional[str]) -> int:
+            try:
+                dt = (
+                    datetime.strptime(joined_on, "%d/%m/%Y").replace(tzinfo=timezone.utc)
+                    if joined_on
+                    else time_now
+                )
+            except ValueError:
+                dt = time_now
+            return int(dt.timestamp())
+
+        return {
+            "success": True,
+            "results": [
+                {
+                    "name": row["name"],
+                    "id": row["staff_id"],
+                    "avatar_profile": row["avatar_url"] or "https://cdn3.emoji.gg/emojis/928205-membericon.png",
+                    "joined_on": parse_joined_on(row["joined_on"]),
+                    "timezone": row["timezone"] or "Default",
+                }
+                for row in rows
+            ],
+            "page": page,
+            "has_prev": page > 1,
+            "has_next": has_next,
+            "total_count": total_count,
+            "max_page": max_page,
+        }
 
     async def assert_staff_role_permission(
         self,
@@ -3102,6 +3264,15 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
             """,
             (guild_id,)
         )
+
+        for guild_id, role, _ in normalized:
+            await self.configure_role(
+                guild_id=guild_id,
+                role_id = role,
+                mode=1
+            )
+
+        """ Insert default values into roles if not exists """
 
         await self.executemany(
             """
