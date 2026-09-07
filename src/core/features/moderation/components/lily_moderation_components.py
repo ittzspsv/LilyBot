@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import discord
 from src.core.utils.embeds.sLilyEmbed import simple_embed
-from typing import Optional, cast, Any, TYPE_CHECKING, List, Dict, Tuple, Union
+from typing import Optional, cast, Any, TYPE_CHECKING, List, Dict, Tuple, Union, Callable
 from datetime import datetime
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
 from src.core.logging.components.logging_components import ProofsComponentCommandModal
@@ -1350,10 +1350,10 @@ class PermissionConfigureModal(discord.ui.Modal):
 
             assert db is not None
             assert interaction.guild is not None
-            assert isinstance(self.allowed_roles, discord.ui.RoleSelect)
+            assert isinstance(self.allowed_roles.component, discord.ui.RoleSelect)
 
 
-            for role in self.allowed_roles.values:
+            for role in self.allowed_roles.component.values:
                 await db.set_permission(
                     interaction.guild.id,
                     role.id,
@@ -1361,7 +1361,7 @@ class PermissionConfigureModal(discord.ui.Modal):
                 )
 
             await interaction.response.send_message(
-                content=f"Successfully Assigned {self.command_name.replace("_", " ").title()} Permission to {', '.join(role.mention for role in self.allowed_roles.values)}", 
+                content=f"Successfully Assigned {self.command_name.replace("_", " ").title()} Permission to {', '.join(role.mention for role in self.allowed_roles.component.values)}", 
                 ephemeral=True
             )
         except Exception:
@@ -1377,8 +1377,10 @@ class PermissionConfigureModal(discord.ui.Modal):
 
 """ Moderation Dashboard """
 class ModerationDashboard(discord.ui.LayoutView):
-    def __init__(self) -> None:
+    def __init__(self, functions: Dict[str, Callable]) -> None:
         super().__init__(timeout=None)
+
+        self.functions: Dict[str, Callable] = functions
         
         self.commands_select = discord.ui.Select(
             options=[
@@ -1500,8 +1502,7 @@ class ModerationDashboard(discord.ui.LayoutView):
                 return
 
             else:
-                pass
-                #await setup_mod_appeal(interaction)
+                await self.functions["setup_mod_appeal"](interaction)
         except Exception:
             logger.exception(
                 "Failed during appeal handling setup confirmation for guild_id=%s",
@@ -1523,13 +1524,18 @@ class ModerationDashboard(discord.ui.LayoutView):
             assert bot_db is not None
             assert interaction.guild is not None
 
+            await bot_db.remove_channel(
+                interaction.guild.id,
+                channel_type="logs_channel"
+            )
+
             await bot_db.set_channel(
                 interaction.guild.id,
                 self.moderation_logging.values[0].id,
                 channel_type="logs_channel"
             )
 
-            await interaction.response.send_message(embed=simple_embed(f"Successfully assigned logging channel to {self.moderation_logging.values[0].mention}"))
+            await interaction.response.send_message(embed=simple_embed(f"Successfully assigned logging channel to {self.moderation_logging.values[0].mention}"), ephemeral=True)
         except Exception:
             logger.exception(
                 "Failed to set moderation logging channel for guild_id=%s",
