@@ -181,7 +181,7 @@ async def update_all_staffs(interaction: discord.Interaction) -> None:
 
     await interaction.response.send_message(embed=simple_embed("Updated every staff role in the database!"))
 
-async def add_staff(interaction: discord.Interaction, staff: discord.Member) -> None:
+async def add_staff(interaction: discord.Interaction, staff: discord.Member, rank: discord.Role | None = None) -> None:
     if interaction.guild is None:
         embed = discord.Embed(
             title=f"{emoji['cross']} Error",
@@ -191,10 +191,22 @@ async def add_staff(interaction: discord.Interaction, staff: discord.Member) -> 
 
         await interaction.response.send_message(embed=embed)
         return
+
+    assert isinstance(interaction.user, discord.Member)
+
+    if rank is not None and interaction.user.top_role <= rank:
+        await interaction.response.send_message(
+            embed=simple_embed(
+                "You cannot assign a rank higher than or equal to your own.",
+                "cross",
+            )
+        )
+        return
+
     bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
     try:
-        response = await bot_db.add_staff(staff.id, interaction.guild.id, staff.display_name, staff.display_avatar.url)
+        response = await bot_db.add_staff(staff.id, interaction.guild.id, staff.display_name, staff.display_avatar.url, role_id=rank.id if rank else None)
 
         if not response.get("success"):
             await interaction.response.send_message(embed=simple_embed(response.get("message") or "Unknown Object Passed and Failed", "cross"))
@@ -678,7 +690,7 @@ async def get_all_staff_roles(interaction: discord.Interaction):
         logger.exception(f"[GetAllStaffRoles] Failed to fetch staff roles for guild_id={interaction.guild.id}")
         await interaction.response.send_message(embed=simple_embed("Error fetching staff roles", 'cross'))
 
-async def update_staff(interaction: discord.Interaction, staff: discord.Member, reason: str, update_type: str) -> None:
+async def update_staff(interaction: discord.Interaction, staff: discord.Member, reason: str, update_type: str, rank: discord.Role | None = None) -> None:
     if interaction.guild is None:
         embed = discord.Embed(
             title=f"{emoji['cross']} Error",
@@ -698,12 +710,21 @@ async def update_staff(interaction: discord.Interaction, staff: discord.Member, 
     try:
         bot_db = cast("Lily", interaction.client).db
         assert bot_db is not None
+        assert isinstance(interaction.user, discord.Member)
+
+        elevated = (
+            interaction.user.guild_permissions.administrator
+            or interaction.user == interaction.guild.owner
+        )
+
         result = await bot_db.update_staff(
             guild_id=interaction.guild.id,
             staff_id=staff.id,
             update_type=update_type,
             reason=reason,
-            updated_by=interaction.user.id
+            updated_by=interaction.user.id,
+            elevated=elevated,
+            rank_id=rank.id if rank else None
         )
 
         if not result.get("success"):
