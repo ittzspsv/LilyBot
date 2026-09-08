@@ -1470,6 +1470,7 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         )
 
     async def ensure_staff(self, staff_id: int, guild_id: int) -> None:
+        await self.ensure_member(member_id=staff_id, guild_id=guild_id)
         await self.execute(
             """
             INSERT OR IGNORE INTO staffs (staff_id, guild_id, name)
@@ -1903,15 +1904,22 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         return current_role_row["priority"] >= updater_row["priority"]
 
     async def add_staff(
-        self, staff_id: int, guild_id: int, name: str, avatar_url: str
+        self, staff_id: int, guild_id: int, name: str, avatar_url: str, role_id: int | None = None
     ) -> Dict[str, Any]:
+        await self.ensure_member(staff_id, guild_id)
         row = await self.fetch_one(
             "SELECT retired FROM staffs WHERE staff_id = ? AND guild_id = ?",
             (staff_id, guild_id),
         )
 
+        ranks = await self.get_staff_ranks(guild_id=guild_id)
+        if role_id is not None and role_id not in ranks:
+            return {
+                "success": False,
+                "message": "The given role is not a valid staff rank."
+            }
+
         if row:
-            await self.ensure_member(staff_id, guild_id)
             if row["retired"] == 1:
                 await self.execute(
                     """
@@ -1947,28 +1955,30 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
 
             base_roles = [row["role_id"] for row in configs]
         except Exception:
-            pass  # staff_configs may not exist in all deployments
+            pass  
 
-        initial_role_row = await self.fetch_one(
-            """
-            SELECT r.role_id
-            FROM roles r
-            JOIN staff_ranks srk
-                ON  srk.guild_id = r.guild_id
-                AND srk.role_id  = r.role_id
-            WHERE r.guild_id  = ?
-            AND   r.role_type = 'staff'
-            ORDER BY srk.priority DESC
-            LIMIT 1
-            """,
-            (guild_id,),
-        )
-        initial_role: Optional[int] = (
-            initial_role_row["role_id"] if initial_role_row else None
-        )
+        if role_id is not None:
+            initial_role: Optional[int] = role_id
+        else:
+            initial_role_row = await self.fetch_one(
+                """
+                SELECT r.role_id
+                FROM roles r
+                JOIN staff_ranks srk
+                    ON  srk.guild_id = r.guild_id
+                    AND srk.role_id  = r.role_id
+                WHERE r.guild_id  = ?
+                AND   r.role_type = 'staff'
+                ORDER BY srk.priority DESC
+                LIMIT 1
+                """,
+                (guild_id,),
+            )
+            initial_role = (
+                initial_role_row["role_id"] if initial_role_row else None
+            )
 
         if initial_role:
-
             await self.execute(
                 """
                 INSERT OR IGNORE INTO staff_roles (staff_id, guild_id, role_id)
@@ -2566,6 +2576,8 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         update_type: str,
         reason: str,
         updated_by: int,
+        elevated: bool = False,
+        rank_id: int | None = None
     ) -> Dict[str, Any]:
         if staff_id == updated_by:
             return {"success": False, "message": "You cannot update yourself."}
@@ -2596,36 +2608,67 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         current_role_id = current_role_row["role_id"]
         current_priority = current_role_row["priority"]
 
-        updater_row = await self.fetch_one(
-            """
-            SELECT srk.priority
-            FROM staff_roles sr
-            JOIN roles r
-                ON sr.role_id = r.role_id
-            AND sr.guild_id = r.guild_id
-            JOIN staff_ranks srk
-                ON srk.role_id = r.role_id
-            AND srk.guild_id = r.guild_id
-            WHERE sr.staff_id = ?
-            AND sr.guild_id = ?
-            AND r.role_type = 'staff'
-            ORDER BY srk.priority ASC
-            LIMIT 1
-            """,
-            (updated_by, guild_id),
-        )
-        if not updater_row:
-            return {"success": False, "message": "Updater has no staff role."}
+        updater_priority: Optional[int] = None
+        if not elevated:
+            updater_row = await self.fetch_one(
+                """
+                SELECT srk.priority
+                FROM staff_roles sr
+                JOIN roles r
+                    ON sr.role_id = r.role_id
+                AND sr.guild_id = r.guild_id
+                JOIN staff_ranks srk
+                    ON srk.role_id = r.role_id
+                AND srk.guild_id = r.guild_id
+                WHERE sr.staff_id = ?
+                AND sr.guild_id = ?
+                AND r.role_type = 'staff'
+                ORDER BY srk.priority ASC
+                LIMIT 1
+                """,
+                (updated_by, guild_id),
+            )
+            if not updater_row:
+                return {"success": False, "message": "Updater has no staff role."}
 
-        updater_priority = updater_row["priority"]
+            updater_priority = updater_row["priority"]
 
-        if current_priority <= updater_priority:
-            return {
-                "success": False,
-                "message": f"Action has been denied due to <@{staff_id}> having higher rank than you"
-            }
+            if current_priority <= updater_priority:
+                return {
+                    "success": False,
+                    "message": f"Action has been denied due to <@{staff_id}> having higher rank than you"
+                }
 
-        if update_type == "promotion":
+        if rank_id is not None:
+            next_row = await self.fetch_one(
+                """
+                SELECT r.role_id, srk.priority
+                FROM roles r
+                JOIN staff_ranks srk
+                    ON srk.role_id = r.role_id
+                AND srk.guild_id = r.guild_id
+                WHERE r.guild_id = ?
+                AND r.role_type = 'staff'
+                AND r.role_id = ?
+                LIMIT 1
+                """,
+                (guild_id, rank_id),
+            )
+            if not next_row:
+                return {"success": False, "message": "The given role is not a valid staff rank."}
+
+            candidate_priority = next_row["priority"]
+            if update_type == "promotion" and candidate_priority >= current_priority:
+                return {
+                    "success": False,
+                    "message": "That rank is not higher than the staff member's current rank.",
+                }
+            if update_type == "demotion" and candidate_priority <= current_priority:
+                return {
+                    "success": False,
+                    "message": "That rank is not lower than the staff member's current rank.",
+                }
+        elif update_type == "promotion":
             next_row = await self.fetch_one(
                 """
                 SELECT r.role_id, srk.priority
@@ -2665,11 +2708,14 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         new_role_id = next_row["role_id"]
         new_priority = next_row["priority"]
 
-        if new_priority < updater_priority:
+        if not elevated and new_priority < updater_priority:
             return {
                 "success": False,
                 "message": "You cannot update someone beyond your own role priority.",
             }
+
+        if new_role_id == current_role_id:
+            return {"success": False, "message": "Staff already holds that rank."}
 
         await self.execute(
             """
@@ -3490,7 +3536,6 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
             """,
             (guild_id, config),
         )
-
 
     async def get_appeal_forum_config(
         self,
