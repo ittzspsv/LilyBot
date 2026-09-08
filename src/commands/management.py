@@ -310,7 +310,7 @@ class LilyManagement(commands.Cog):
     @staff.command(name='add', description='Adds a member to staff_data')
     @app_permission(command_name="staff_add")
     @app_commands.guild_only()
-    async def add_staff(self, interaction: discord.Interaction, staff: discord.Member):
+    async def add_staff(self, interaction: discord.Interaction, staff: discord.Member, rank: discord.Role | None = None):
         await add_staff(interaction, staff)
 
     @staff.command(name='remove', description='Removes a member from staff_data')
@@ -366,14 +366,14 @@ class LilyManagement(commands.Cog):
     @rank.command(name='promote', description='Promotes a staff to upper rank')
     @app_permission(command_name="rank_promote")
     @app_commands.guild_only()
-    async def promote(self, interaction: discord.Interaction, staff: discord.Member, * ,reason: str):
-        await update_staff(interaction, staff, reason, "promotion")
+    async def promote(self, interaction: discord.Interaction, staff: discord.Member, * ,reason: str, rank: discord.Role | None = None):
+        await update_staff(interaction, staff, reason, "promotion", rank=rank)
     
     @rank.command(name='demote', description='Demotes a staff to lower rank')
     @app_permission(command_name="rank_demote")
     @app_commands.guild_only()
-    async def demote(self, interaction: discord.Interaction, staff: discord.Member, *, reason: str):
-        await update_staff(interaction, staff, reason, "demotion")
+    async def demote(self, interaction: discord.Interaction, staff: discord.Member, *, reason: str, rank: discord.Role | None = None):
+        await update_staff(interaction, staff, reason, "demotion", rank=rank)
 
     @quota.command(name="add", description="Adds a staff quota to check by")
     @app_permission(command_name="quota_add")
