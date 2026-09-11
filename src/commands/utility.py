@@ -216,9 +216,9 @@ class LilyUtility(commands.Cog):
 
         ):
         if amount <= 0:
-            await interaction.response.send_message(embed=simple_embed("Specify a valid amount", 'cross'))
+            await interaction.response.send_message(embed=simple_embed("Specify a valid amount", 'cross'), ephemeral=True)
         if amount > 1000:
-            await interaction.response.send_message(embed=simple_embed("You cannot purge more than 1000 messages!", 'cross'))
+            await interaction.response.send_message(embed=simple_embed("You cannot purge more than 1000 messages!", 'cross'), ephemeral=True)
             return
 
         def check(msg):
@@ -262,7 +262,7 @@ class LilyUtility(commands.Cog):
     @app_permission(command_name="role")
     async def role(self, interaction: discord.Interaction, user: discord.Member, role: discord.Role):
         if interaction.guild is None or isinstance(interaction.user, discord.User):
-            await interaction.response.send_message(embed=simple_embed("You can only use this command inside an guild"))
+            await interaction.response.send_message(embed=simple_embed("You can only use this command inside an guild"), ephemeral=True)
             return
         if user is None and role_input is None:
             await interaction.response.send_message(view=CI(interaction, "Role", ["role user role", f"role {interaction.guild.me.mention} Moderator", f"role {interaction.guild.me.mention} 1324893524184793130"]))
@@ -275,29 +275,29 @@ class LilyUtility(commands.Cog):
             and author != user
             and author.top_role <= user.top_role
         ):
-            return await interaction.response.send_message(embed=simple_embed("You cannot modify someone with equal or higher top role.", 'cross'))
+            return await interaction.response.send_message(embed=simple_embed("You cannot modify someone with equal or higher top role.", 'cross'), ephemeral=True)
 
         if role > author.top_role and author != interaction.guild.owner:
-            return await interaction.response.send_message(embed=simple_embed("You cannot assign a role that is higher than your top role.", 'cross'))
+            return await interaction.response.send_message(embed=simple_embed("You cannot assign a role that is higher than your top role.", 'cross'), ephemeral=True)
 
         if interaction.guild.me.top_role <= role:
-            return await interaction.response.send_message(embed=simple_embed("I cannot manage that role because it is above my top role.", 'cross'))
+            return await interaction.response.send_message(embed=simple_embed("I cannot manage that role because it is above my top role.", 'cross'), ephemeral=True)
 
         bot_db: BotGlobalsDatabaseAccess = self.bot.db
         author_role_ids = [r.id for r in author.roles]
         allowed = bot_db.can_assign_role(interaction.guild.id, author_role_ids, role.id)
 
         if not allowed:
-            return await interaction.response.send_message(embed=simple_embed("You are not allowed to assign this role.", 'cross'))
+            return await interaction.response.send_message(embed=simple_embed("You are not allowed to assign this role.", 'cross'), ephemeral=True)
 
         if role in user.roles:
             await user.remove_roles(role, reason=f"Role removed by {author}")
-            return await interaction.response.send_message(embed=simple_embed(f"Removed role **{role.name}** from **{user.name}**."))
+            return await interaction.response.send_message(embed=simple_embed(f"Removed role **{role.name}** from **{user.name}**."), ephemeral=True)
         else:
             await user.add_roles(role, reason=f"Role given by {author}")
-            return await interaction.response.send_message(embed=simple_embed(f"Added role **{role.name}** to **{user.name}**."))
+            return await interaction.response.send_message(embed=simple_embed(f"Added role **{role.name}** to **{user.name}**."), ephemeral=True)
 
-    @customize.command(name="role", description="Customize your role")
+    @customize.command(name="role", description="Customize your role")  
     @app_commands.checks.cooldown(1, 5.0)
     async def customize_role(
         self,
@@ -309,10 +309,10 @@ class LilyUtility(commands.Cog):
         icon: discord.Attachment | None = None
     ):
         if interaction.guild is None:
-            return await interaction.response.send_message(embed=simple_embed("You need to use this command inside a guild"))
+            return await interaction.response.send_message(embed=simple_embed("You need to use this command inside a guild"), ephemeral=True)
 
         if role >= interaction.guild.me.top_role:
-            return await interaction.response.send_message(embed=simple_embed("I can't edit a role that is above me", 'cross'))
+            return await interaction.response.send_message(embed=simple_embed("I can't edit a role that is above me", 'cross'), ephemeral=True)
 
         assert isinstance(interaction.user, discord.Member)
 
@@ -322,7 +322,7 @@ class LilyUtility(commands.Cog):
         valid_roles = await bot_db.get_role_mapping(interaction.user.id, interaction.guild.id)
 
         if role.id not in valid_roles:
-            return await interaction.followup.send(embed=simple_embed("You don't have any roles mapped that you can customize", 'cross'))
+            return await interaction.followup.send(embed=simple_embed("You don't have any roles mapped that you can customize", 'cross'), ephemeral=True)
 
         def parse_hex_color(hex_str: str) -> discord.Color:
             hex_str = hex_str.strip().lstrip('#')
@@ -342,23 +342,23 @@ class LilyUtility(commands.Cog):
             try:
                 parameters["color"] = parse_hex_color(primary_color)
             except ValueError:
-                return await interaction.followup.send(embed=simple_embed("Invalid color format.", 'cross'))
+                return await interaction.followup.send(embed=simple_embed("Invalid color format.", 'cross'), ephemeral=True)
 
         if secondary_color is not None:
             try:
                 parameters["secondary_color"] = parse_hex_color(secondary_color)
             except ValueError:
-                return await interaction.followup.send(embed=simple_embed("Invalid color format.", 'cross'))
+                return await interaction.followup.send(embed=simple_embed("Invalid color format.", 'cross'), ephemeral=True)
 
         try:
             await role.edit(**parameters, reason=f"Role customized by {interaction.user}")
-            await interaction.followup.send("Successfully updated role!")
+            await interaction.followup.send(embed=simple_embed("Successfully updated role!"), ephemeral=True)
         except discord.Forbidden:
-            await interaction.followup.send(embed=simple_embed("I don't have app_permission to edit roles", 'cross'))
+            await interaction.followup.send(embed=simple_embed("I don't have app_permission to edit roles", 'cross'), ephemeral=True)
         except ValueError as e:
-            await interaction.followup.send(embed=simple_embed(f"Invalid parameter value: {e}", 'cross'))
+            await interaction.followup.send(embed=simple_embed(f"Invalid parameter value: {e}", 'cross'), ephemeral=True)
         except discord.HTTPException as e:
-            await interaction.followup.send(embed=simple_embed(f"An Unknown error occured while editing a role", 'cross'))
+            await interaction.followup.send(embed=simple_embed(f"An Unknown error occured while editing a role", 'cross'), ephemeral=True)
 
     @app_permission(command_name="set_rolecustomize")
     @set.command(name="rolecustomize", description="Allows a person to customize a role without manage roles")
@@ -373,7 +373,7 @@ class LilyUtility(commands.Cog):
             role.id
         )
         
-        await interaction.response.send_message(embed=simple_embed(f"Successfully added customizable entry for {member.mention} with {role.mention}"))
+        await interaction.response.send_message(embed=simple_embed(f"Successfully added customizable entry for {member.mention} with {role.mention}"), ephemeral=True)
         await member.send(f"Hey, You can now customize {role.name} (dev_id: {role.id}) in {interaction.guild.name}.  Use `/customize role` to see what happens!")
 
     @app_permission(command_name="remove_rolecustomize")
@@ -388,7 +388,7 @@ class LilyUtility(commands.Cog):
             role.id
         )
 
-        await interaction.response.send_message(embed=simple_embed(f"Successfully removed customizable entry for {role.mention} assigned to {member.mention}"))
+        await interaction.response.send_message(embed=simple_embed(f"Successfully removed customizable entry for {role.mention} assigned to {member.mention}"), ephemeral=True)
         await member.send(f"Hey, You can no longer customize {role.name} (dev_id: {role.id}) in {interaction.guild.name}.")
 
     @customize.command(name='bot', description='Customize the bot for this server (visually)')
