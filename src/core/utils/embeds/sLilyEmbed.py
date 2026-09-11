@@ -58,8 +58,5 @@ def simple_embed(message: str, s_emoji: str='checked', bold: bool=True, expressi
         color=16777215,
         description=text_formatting,
     )
-
-    if expression:
-        embed.set_thumbnail(url=Configs.expression.get(expression) or 'neutral')
     return embed
 
