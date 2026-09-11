@@ -18,7 +18,6 @@ from src.core.logging.lily_logging import LilyLoggingController
 from zoneinfo import available_timezones, ZoneInfo, ZoneInfoNotFoundError
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
 from src.core.utils.components.sLIlyGlobalComponents import RoleCustomizationModal, Avatar
-from src.core.visuals.cards.level import create_level_card
 from src.core.visuals.cards.quote import make_quote_card
 from src.core.features.ticketing.transcript import transcript
 from discord.ext import commands
@@ -40,17 +39,11 @@ class LilyUtility(commands.Cog):
 
         self.bot.tree.add_command(self.ctx_menu)
 
-    @commands.Cog.listener()
-    async def on_message(self, message: discord.Message):
-        if message.author.bot:
-            return
-        
-        if message.guild is None:
-            return
+    async def quote_generator(self, message: discord.Message):
 
-        if not isinstance(message.author, discord.Member):
-            return
-        
+        assert message.guild is not None
+        assert isinstance(message.author, discord.Member)
+
         """ This only works for peoples with staff roles.  Nothing else, so we need to make sure staffs won't abuse this """
         bot_db: BotGlobalsDatabaseAccess = self.bot.db
         allowed_roles = bot_db.get_permission_roles(message.guild.id, "mute")
@@ -59,7 +52,7 @@ class LilyUtility(commands.Cog):
 
         if not any(role_id in author_role_ids for role_id in allowed_roles):
             return
-         
+            
         if message.content.startswith(f"<@{self.bot.user.id}>") or message.content.startswith(f"<@!{self.bot.user.id}>"):
             if message.reference is None:
                 return
@@ -97,6 +90,69 @@ class LilyUtility(commands.Cog):
             buffer.seek(0)
 
             await message.channel.send(file=discord.File(buffer, filename="quote.png"))
+
+    async def afk_evaluator(self, message: discord.Message):
+        if message.author.bot:
+            return
+
+        if message.guild is None:
+            return
+
+        bot_db: BotGlobalsDatabaseAccess = self.bot.db
+
+        afk_entries = await bot_db.get_afk_entries(message.guild.id)
+
+        if message.author.id in afk_entries:
+            cleared_row = await bot_db.afk_clear(message.author.id, message.guild.id)
+
+            if cleared_row is not None:
+                assert isinstance(message.author, discord.Member)
+
+                try:
+                    await message.author.edit(nick=cleared_row["display_name"])
+                except discord.Forbidden:
+                    pass
+                except discord.HTTPException:
+                    pass
+
+                afk_since = datetime.fromisoformat(cleared_row["timestamp"])
+                unix_ts = int(afk_since.timestamp())
+
+                await message.reply(
+                    embed=simple_embed(f"Welcome back, {message.author.mention}! I've removed your AFK status. You were AFK Since <t:{unix_ts}:R>", 'check')
+                )
+
+        afk_mentions = []
+
+        for user in message.mentions:
+            if user.bot:
+                continue
+
+            if user.id in afk_entries and user.id != message.author.id:
+                row = afk_entries[user.id]
+                afk_since = datetime.fromisoformat(row["timestamp"])
+                unix_ts = int(afk_since.timestamp())
+
+                afk_mentions.append(
+                    f"{user.mention} is AFK: {row['reason']} <t:{unix_ts}:R>"
+                )
+
+        if afk_mentions:
+            await message.reply("\n".join(afk_mentions), allowed_mentions=discord.AllowedMentions.none())
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        if message.author.bot:
+            return
+        
+        if message.guild is None:
+            return
+
+        if not isinstance(message.author, discord.Member):
+            return
+
+        await self.quote_generator(message)
+        await self.afk_evaluator(message)
     
     async def command_autocomplete(
         self,
@@ -129,6 +185,11 @@ class LilyUtility(commands.Cog):
     remove = app_commands.Group(
         name="remove",
         description="Utility removal commands"
+    )
+
+    afk = app_commands.Group(
+        name = "afk",
+        description="Afk Utilities"
     )
 
     timezone = app_commands.Group(
@@ -403,47 +464,6 @@ class LilyUtility(commands.Cog):
 
         await interaction.response.send_message(embed=embed)
     
-    @app_commands.command(name="embed_create", description="Creates an embed based on JSON config and sends it to a specific channel")
-    @app_commands.checks.cooldown(1, 80.0)
-    @app_permission(command_name="create_embed", restrict=True)
-    async def create_embed(self, interaction: discord.Interaction, channel_to_send: discord.TextChannel, * ,embed_json_config: str = "{}"):
-        if interaction.guild is None:
-            await interaction.response.send_message(embed=simple_embed("This command can only be executed inside an guild", 'cross'))
-            return
-
-        await interaction.response.defer()
-        try:
-            if embed_json_config.startswith("http://") or embed_json_config.startswith("https://"):
-                try:
-                    async with aiohttp.ClientSession() as session:
-                        async with session.get(embed_json_config) as resp:
-                            if resp.status != 200:
-                                await interaction.followup.send("Failed to fetch data from the provided link.")
-                                return
-                            embed_json_config = await resp.text()
-                except Exception as fetch_error:
-                    await interaction.followup.send(f"Fetch Failure {str(fetch_error)}")
-                    return
-
-            
-            try:
-                json_data = json.loads(embed_json_config)
-            except json.JSONDecodeError:
-                await interaction.followup.send("Invalid JSON Format")
-                return
-            
-            try:
-                logs_controller: LilyLoggingController = self.bot.logging_controller
-                content, embeds = ParseAdvancedEmbed(json_data)
-                await channel_to_send.send(content=content, embeds=embeds)
-                await interaction.followup.send(embed=simple_embed("Embed sent successfully."))
-                await logs_controller.write_log(interaction, interaction.user.id, f"Has Sent an Embed to <#{channel_to_send.id}>")
-            except Exception as embed_error:
-                await interaction.followup.send(f"Parser Failure: {str(embed_error)}")
-
-        except Exception as e:
-            await interaction.followup.send(f"Unhandled Exception: {str(e)}")
-
     @app_permission(command_name="set_channel")
     @set.command(name="channel", description="Creates an embed based on JSON config and sends it to a specific channel")
     async def assign_channel(self, interaction: discord.Interaction, type: ChannelEnum, channel: discord.TextChannel):
@@ -747,32 +767,6 @@ class LilyUtility(commands.Cog):
             ephemeral=True
         )
 
-
-    @app_commands.command(name="transcript_generate", description="Test")
-    async def generate_transcript(self, interaction: discord.Interaction):
-        try:
-            await interaction.response.defer()
-
-            html_bytes = await transcript(interaction)
-
-            if html_bytes is None:
-                await interaction.followup.send(
-                    "Couldn't generate a transcript for this channel."
-                )
-                return
-
-            file = discord.File(
-                BytesIO(html_bytes),
-                filename="transcript.html",
-            )
-            await interaction.followup.send(
-                content="Here's the transcript.",
-                file=file,
-            )
-        except Exception as e:
-            print(e)
-            await interaction.followup.send("Failed!")
-
     @timezone.command(name="get", description="Get a timezone of a user")
     async def get_timezone(
         self,
@@ -935,6 +929,71 @@ class LilyUtility(commands.Cog):
                     f"Successfully assigned prefix `{prefix}` for you!"
                 )
             )
+
+    @permission(command_name="afk_set")
+    @commands.command(name="afk", description="Set an afk status")
+    async def setafk(self, ctx: commands.Context, *, reason: str):
+        try:
+            bot_db: BotGlobalsDatabaseAccess = self.bot.db
+
+            if ctx.guild is None:
+                await ctx.reply(embed=simple_embed("This command can only be used inside a guild", 'cross'))
+                return
+
+            assert isinstance(ctx.author, discord.Member)
+
+            await bot_db.afk_set(
+                ctx.author.id,
+                ctx.guild.id,
+                reason,
+                ctx.author.display_name
+            )
+
+            if not ctx.author.display_name.startswith("[AFK] "):
+                new_nick = f"[AFK] {ctx.author.display_name}"
+
+                if len(new_nick) > 32:
+                    new_nick = new_nick[:32]
+
+                try:
+                    await ctx.author.edit(nick=new_nick)
+                except discord.Forbidden:
+                    pass
+                except discord.HTTPException:
+                    pass
+
+            await ctx.reply(embed=simple_embed(f"You are now AFK: {reason}"))
+        except Exception as e:
+            print(e)
+
+    @app_permission(command_name = "afk clear")
+    @afk.command(name = "clear", description="Clear an AFK for an user")
+    async def clear_afk(self, interaction: discord.Interaction, member: discord.Member):
+        bot_db: BotGlobalsDatabaseAccess = self.bot.db
+
+        if interaction.guild is None:
+            await interaction.response.send_message(embed=simple_embed("This command can only be used inside a guild", 'cross'))
+            return
+
+        cleared_row = await bot_db.afk_clear(member.id, interaction.guild.id)
+
+        if cleared_row is None:
+            await interaction.response.send_message(
+                embed=simple_embed(f"{member.display_name} is not currently AFK", 'cross')
+            )
+            return
+
+        try:
+            await member.edit(nick=cleared_row["display_name"])
+        except discord.Forbidden:
+            pass
+        except discord.HTTPException:
+            pass
+
+        await interaction.response.send_message(
+            embed=simple_embed(f"Cleared AFK status for {member.display_name}")
+        )
+
 
 async def setup(bot):
     await bot.add_cog(LilyUtility(bot))
