@@ -318,7 +318,7 @@ class EditCaseModal(discord.ui.Modal):
                 return
 
             assert interaction.guild is not None
-            updated_case_data = await bot_db.get_case(self.case_id)
+            updated_case_data = await bot_db.get_case(self.case_id, interaction.guild.id)
 
             if updated_case_data is None:
                 await interaction.response.send_message(embed=simple_embed(result["message"]), ephemeral=True)
@@ -592,7 +592,9 @@ class CaseView(discord.ui.LayoutView):
                 await interaction.edit_original_response(embed=simple_embed('Process has been cancelled.', 'cross'), view=None)
                 return
 
-            await bot_db.delete_case(self.case_id)
+            assert interaction.guild is not None
+
+            await bot_db.delete_case(self.case_id, interaction.guild.id)
 
             if self.message is not None:
                 try:
@@ -824,7 +826,7 @@ class CaseListView(discord.ui.LayoutView):
             assert bot_db is not None
 
             case_id = int(custom_id)
-            case_data = await bot_db.get_case(case_id)
+            case_data = await bot_db.get_case(case_id, interaction.guild.id)
 
             if case_data is None:
                 await interaction.response.send_message(embed=simple_embed("Case not found", 'cross'), ephemeral=True)
@@ -1170,7 +1172,8 @@ class AppealButton(discord.ui.DynamicItem[discord.ui.Button], template=r'button:
             assert self.case_id is not None
 
             """ Check the validity of the case first """
-            _case = await db.get_case(self.case_id)
+            assert interaction.guild is not None
+            _case = await db.get_case(self.case_id, interaction.guild.id)
             if _case is None:
                 await interaction.response.send_message(
                     embed=simple_embed(

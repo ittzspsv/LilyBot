@@ -618,7 +618,8 @@ async def case_delete(
     bot_db = bot.db
 
     try:
-        response = await bot_db.delete_case(case_id)
+        assert interaction.guild is not None
+        response = await bot_db.delete_case(case_id, interaction.guild.id)
     except Exception:
         logger.exception("Failed to delete case %s", case_id)
         await interaction.response.send_message(embed=simple_embed("An unexpected error occurred while deleting this case.", 'cross'))
@@ -1024,7 +1025,7 @@ async def accept_appeal(
         return
 
     try:
-        case = await bot_db.get_case(appeal["case_id"])
+        case = await bot_db.get_case(appeal["case_id"], interaction.guild.id)
     except Exception:
         logger.exception("Failed to fetch case %s for appeal on thread %s", appeal["case_id"], interaction.channel.id)
         await interaction.response.send_message(embed=simple_embed("An unexpected error occurred while fetching the related case.", 'cross'))
@@ -1131,7 +1132,7 @@ async def reject_appeal(
         )
 
     try:
-        case = await bot_db.get_case(appeal["case_id"])
+        case = await bot_db.get_case(appeal["case_id"], interaction.guild.id)
     except Exception:
         logger.exception("Failed to fetch case %s for appeal on thread %s", appeal["case_id"], interaction.channel.id)
         await interaction.response.send_message(embed=simple_embed("An unexpected error occurred while fetching the related case.", 'cross'))

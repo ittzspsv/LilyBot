@@ -1164,15 +1164,16 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
     async def get_case(
         self,
         case_id: int,
+        guild_id: int
     ) -> Optional[Dict[str, Any]]:
         row = await self.fetch_one(
             """
             SELECT
                 *
             FROM modlogs
-            WHERE id = ?
+            WHERE id = ? AND guild_id = ?
             """,
-            (case_id,),
+            (case_id, guild_id),
         )
 
         if row is None:
@@ -1180,7 +1181,7 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
 
         return dict(row)
 
-    async def delete_case(self, case_id: int) -> Dict[str, Any]:
+    async def delete_case(self, case_id: int, guild_id: int) -> Dict[str, Any]:
         if not case_id:
             return {
                 "success": False,
@@ -1188,7 +1189,7 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
                 "case_id": case_id,
             }
         try:
-            await self.execute("UPDATE modlogs SET deleted = 1 WHERE id = ?", (case_id,))
+            await self.execute("UPDATE modlogs SET deleted = 1 WHERE id = ? AND guild_id = ?", (case_id, guild_id))
             return {
                 "success": True,
                 "message": "Case deleted successfully.",
