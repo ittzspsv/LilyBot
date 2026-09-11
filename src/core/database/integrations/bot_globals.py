@@ -3726,7 +3726,6 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
 
         return row["timezone"] if row else None
 
-
     async def set_timezone(
         self,
         member_id: int,
@@ -3744,3 +3743,57 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         )
 
         return True
+
+    
+    async def afk_set(
+        self,
+        member_id: int,
+        guild_id: int,
+        reason: str,
+        display_name: str,
+    ):
+        await self.execute(
+            """
+            INSERT INTO afk (member_id, guild_id, timestamp, display_name, reason)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT (member_id, guild_id)
+            DO UPDATE SET timestamp = excluded.timestamp,
+                        display_name = excluded.display_name,
+                        reason = excluded.reason
+            """,
+            (member_id, guild_id,
+            datetime.now(timezone.utc).isoformat(),
+            display_name,
+            reason)
+        )
+
+    async def afk_clear(
+        self,
+        member_id: int,
+        guild_id: int
+    ):
+        row = await self.fetch_one(
+            "SELECT * FROM afk WHERE member_id = ? AND guild_id = ?",
+            (member_id, guild_id),
+        )
+
+        if row is None:
+            return None
+
+        await self.execute(
+            "DELETE FROM afk WHERE member_id = ? AND guild_id = ?",
+            (member_id, guild_id),
+        )
+
+        return row
+
+    async def get_afk_entries(
+        self,
+        guild_id: int
+    ) -> Dict[int, dict]:
+        rows = await self.fetch_all(
+            "SELECT * FROM afk WHERE guild_id = ?",
+            (guild_id,),
+        )
+
+        return {row["member_id"]: dict(row) for row in rows}
