@@ -170,7 +170,8 @@ async def spawn_ticket(ctx: commands.Context, json_data: dict) -> None:
 
 
         message_obj = await channel_obj.send(
-            view=selector_view
+            view=selector_view,
+            allowed_mentions=discord.AllowedMentions.none()
         )
 
         await bot_db.save_ticket_view(
