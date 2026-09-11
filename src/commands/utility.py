@@ -208,8 +208,13 @@ class LilyUtility(commands.Cog):
     @app_commands.command(name='purge',description='Purge Message with specified amount')
     @app_commands.checks.cooldown(1, 10.0)
     @app_permission(command_name="purge")
-    async def purge(self, interaction: discord.Interaction, amount: int=0, member: discord.Member | None = None):
+    async def purge(self, 
+                    interaction: discord.Interaction, 
+                    amount: int=0, 
+                    member: discord.Member | None = None,
+                    oldest_first: bool = False,
 
+        ):
         if amount <= 0:
             await interaction.response.send_message(embed=simple_embed("Specify a valid amount", 'cross'))
         if amount > 1000:
@@ -224,7 +229,13 @@ class LilyUtility(commands.Cog):
             if not isinstance(interaction.channel, discord.TextChannel):
                 await interaction.followup.send(embed=simple_embed("Failed to purge", 'cross'))
                 return
-            deleted = await interaction.channel.purge(limit=amount, check=check, bulk=True)
+            deleted = await interaction.channel.purge(
+                limit=amount, 
+                check=check, 
+                bulk=True, 
+                oldest_first=oldest_first, 
+                reason=f"Purged by {interaction.user.mention}"
+            )
             await interaction.followup.send(embed=simple_embed(f"Deleted {len(deleted)} message(s)."))
         except discord.Forbidden:
             await interaction.followup.send(embed=simple_embed("I do not have app_permission to delete messages.", 'cross'))
