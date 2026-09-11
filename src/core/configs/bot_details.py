@@ -140,7 +140,9 @@ emoji = {
     "link": "<:link:1545425614234853486>",
     "StarlightGravity": "<:StarlightGravity:1545814668302487632>",
     "RunicYeti": "<:RunicYeti:1545814659494445126>",
-    "ArcSteelMagnet": "<:ArcSteelMagnet:1545814649453158470>"
+    "ArcSteelMagnet": "<:ArcSteelMagnet:1545814649453158470>",
+    "LimeBlade": "<:LimeBlade:1547969537519910983>",
+    "ScarletGhost": "<:ScarletGhost:1547969540841930814>"
 }
     
 
