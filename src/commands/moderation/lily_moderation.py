@@ -1,17 +1,16 @@
-import discord, discord.app_commands as app_commands
+import discord
 from discord.ext import commands
-from typing import Optional, Any, Dict
+from typing import Any, Dict
 import re
 import random
-from enum import Enum
 
 from src.core.utils.components.sLIlyGlobalComponents import CommandInfo
 from src.core.utils.embeds.sLilyEmbed import simple_embed
-from src.core.features.moderation.components.lily_moderation_components import AppealForumCustomize, AppealMessageView, ModerationDashboard
-from src.core.features.permissions.lily_permissions import permission, app_permission
+from src.core.features.permissions.lily_permissions import permission
+from src.core.features.permissions.lily_permissions import has_permission
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
 from src.core.logging.lily_logging import LilyLoggingController
-from src.core.features.permissions.lily_permissions import has_permission
+from src.core.features.moderation.components.lily_moderation_components import AppealMessageView
 
 from src.core.features.moderation.controller.lily_moderation_controller import (
     ban_user,
@@ -21,31 +20,19 @@ from src.core.features.moderation.controller.lily_moderation_controller import (
     unban as unban_fn,
     release as release_fn,
     warn as warn_fn,
-    case_edit as case_edit_fn,
-    case_delete as case_delete_fn,
-    ms as ms_fn,
-    mod_logs,
-    moderation_insights as moderation_insights_fn,
-    setup_mod_appeal,
-    accept_appeal as accept_appeal_fn,
-    reject_appeal as reject_appeal_fn,
 )
 
+from .groups import *
 
-class ModType(str, Enum):
-        All = "all"
-        Ban = "ban"
-        Warn = "warn"
-        Mute = "mute"
-        Quarantine = "quarantine"
-        Unmute = "unmute"
-        QuarantineRelease = "quarantine_release"
-        Unban = "unban"
 
 class LilyModeration(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.cached_members: Dict[int, discord.Member] = {}
+
+        self.mod_group = ModCommands()
+        self.case_group = CaseCommands()
+        self.appeal_group = AppealCommands()
 
     @property
     def bot_db(self) -> BotGlobalsDatabaseAccess:
@@ -54,6 +41,16 @@ class LilyModeration(commands.Cog):
     @property
     def logging_controller(self) -> LilyLoggingController:
         return self.bot.logging_controller
+
+    async def cog_load(self) -> None:
+        self.bot.tree.add_command(self.mod_group)
+        self.bot.tree.add_command(self.case_group)
+        self.bot.tree.add_command(self.appeal_group)
+
+    async def cog_unload(self) -> None:
+        self.bot.tree.remove_command(self.mod_group.name)
+        self.bot.tree.remove_command(self.case_group.name)
+        self.bot.tree.remove_command(self.appeal_group.name)
 
     def strip_mention(self, content: str, bot_user_id: int) -> str:
         return re.sub(rf"<@!?{bot_user_id}>", "", content).strip()
@@ -77,7 +74,6 @@ class LilyModeration(commands.Cog):
 
         if not isinstance(message.author, discord.Member):
             return
-
 
         if message.author.top_role >= message.guild.me.top_role:
             return
@@ -104,13 +100,13 @@ class LilyModeration(commands.Cog):
     async def on_message(self, message: discord.Message):
         if message.author.bot:
             return
-        
+
         await self.evaluate_quarantine_bypass(message)
         bot_db: BotGlobalsDatabaseAccess = self.bot.db
         if message.guild is not None:
             if not isinstance(message.channel, discord.Thread):
                 return
-            
+
             is_mention = self.bot.user in message.mentions
             is_reply_to_bot = await self._reply(message, self.bot)
 
@@ -126,16 +122,16 @@ class LilyModeration(commands.Cog):
             if appeal["moderator_id"] != message.author.id and has_permission(ctx, "mod_appeal_management") is False:
                 await message.add_reaction("❌")
                 return
-            
+
             member: discord.Member | None = self.cached_members.get(appeal["target_user_id"])
             if member is None:
                 try:
                     member = await message.guild.fetch_member(appeal["target_user_id"])
                     self.cached_members[member.id] = member
                 except discord.NotFound:
-                    member = None 
+                    member = None
                 except discord.Forbidden:
-                    member = None 
+                    member = None
                 except discord.HTTPException:
                     member = None
 
@@ -158,7 +154,7 @@ class LilyModeration(commands.Cog):
             except discord.Forbidden:
                 await message.add_reaction("❌")
                 await message.reply("This member is no longer in the server. The appeal can be safely rejected.")
-            
+
         else:
             appeal = await bot_db.get_current_active_appeal(message.author.id)
             if appeal is None:
@@ -192,21 +188,6 @@ class LilyModeration(commands.Cog):
 
             await webhook.send(**kwargs)
 
-    mod = app_commands.Group(
-        name = "mod",
-        description = "Moderation Command Hierarchy"
-    )
-
-    case = app_commands.Group(
-        name="case",
-        description="Case management commands"
-    )
-
-    appeal = app_commands.Group(
-        name="appeal",
-        description="Moderation appeal commands"
-    )
-
     @commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
     @commands.command(name='ban', description='Ban a user from the server', aliases=['b'])
     @permission(command_name="ban")
@@ -215,7 +196,7 @@ class LilyModeration(commands.Cog):
             return await ctx.reply(
                 view=CommandInfo(ctx, "Ban", ["ban user reason", f"ban {ctx.me.mention} Toxicity!", f"b {ctx.me.mention} Not obeying rules!"])
             )
-        
+
         return await ctx.reply(
             embed=simple_embed("This command doesn't works, Try again later", 'cross')
         )
@@ -255,7 +236,6 @@ class LilyModeration(commands.Cog):
 
         await quarantine_user(ctx, member, reason, proofs)
 
-
     @commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
     @commands.command(name='unban', description='Unban a Particular User', aliases=['ub'])
     @permission(command_name="unban")
@@ -263,7 +243,7 @@ class LilyModeration(commands.Cog):
         if user is None:
             await ctx.reply(view=CommandInfo(ctx, "Unban", ["unban user", f"unban {ctx.me.mention} Appealed", f"ub {ctx.me.mention} Appealed"]))
             return
-        
+
         await unban_fn(ctx, user, reason)
 
     @commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
@@ -273,7 +253,7 @@ class LilyModeration(commands.Cog):
         if user is None:
             await ctx.reply(view=CommandInfo(ctx, "Release", ["release user reason", f"release {ctx.me.mention} Appealed", f"qr {ctx.me.mention} Appealed", f'r {ctx.me.mention} Appealed!']))
             return
-        
+
         await release_fn(ctx, user, reason)
 
     @commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
@@ -312,188 +292,6 @@ class LilyModeration(commands.Cog):
         await ctx.defer()
         await unmute_fn(ctx, member, reason)
 
-    @mod.command(name='stats', description='checks stats for a particular moderator or yourself')
-    @app_permission(command_name="ms")
-    async def ms(self, interaction: discord.Interaction, member: discord.Member | discord.User | None = None, page_start: int = 0, page_end: int = 0):
-        user = member or interaction.user
-
-        await ms_fn(
-            interaction=interaction,
-            moderator=user,
-            page_start=page_start,
-            page_end=page_end
-        )
-
-
-    @case.command(name='list', description='Checks case logs for a particular user')
-    @app_permission(command_name="modlogs")
-    async def modlogs(
-        self,
-        interaction: discord.Interaction,
-        member: discord.User | discord.Member | None = None,
-        mod_type: ModType = ModType.All,
-        moderator: discord.User | discord.Member | None = None
-    ):
-        target_id = member.id if member else interaction.user.id
-
-        try:
-            user = await self.bot.fetch_user(target_id)
-        except Exception:
-            return
-
-        try:
-            await mod_logs(
-                interaction,
-                user=user,
-                moderator=moderator,
-                mod_type=mod_type.value
-            )
-
-        except Exception as e:
-            print(f"Exception [ModLogs] : {e}")
-
-    @mod.command(name='insights', description='Get detailed moderation insights')
-    @app_permission(command_name="moderation_insights")
-    async def moderation_insights(self, interaction: discord.Interaction):
-        await moderation_insights_fn(interaction)
-
-    @case.command(name='edit', description='Edit a case')
-    @app_permission(command_name="case_edit")
-    async def case_edit(self, interaction: discord.Interaction, case_id: str, *, new_reason: str):
-        if case_id is None or new_reason is None:
-            return await interaction.response.send_message(
-                view=CommandInfo(interaction, "Case Edit", ["edit_case case_id new_reason"])
-            )
-
-        await case_edit_fn(interaction, int(case_id), new_reason, False)
-
-    @case.command(name='edit_absolute', description='Edit any case')
-    @app_permission(command_name="case_edit_absolute")
-    async def case_edit_absolute(self, interaction: discord.Interaction, case_id: int, *, new_reason: str):
-        await case_edit_fn(interaction, case_id, new_reason, True)
-
-    @case.command(name='delete', description='Delete a case')
-    @app_permission(command_name="case_delete")
-    async def case_delete(self, interaction: discord.Interaction, case_id: str):
-        await case_delete_fn(interaction, int(case_id))
-
-    @mod.command(name="acronym_add", description="Add an reason acronym")
-    @app_permission(command_name = "mod_acronym_add")
-    async def add_mod_acronym(self, interaction: discord.Interaction, key: str, * ,value: str):
-        
-        if interaction.guild is None:
-            return await interaction.response.send_message(embed=simple_embed("This command can only be executed inside an guild", 'cross'))
-        
-        bot_db: BotGlobalsDatabaseAccess = self.bot.db
-        await bot_db.add_moderation_acronym(interaction.user.id, interaction.guild.id, key, value)
-        await interaction.response.send_message(embed=simple_embed(f"Successfully Added Moderation Acronym"))
-
-    @mod.command(name="acronym_remove", description="Removes an reason acronym")
-    @app_permission(command_name = "mod_acronym_remove")
-    async def remove_mod_acronym(self, interaction: discord.Interaction, * ,key: str):
-        if interaction.guild is None:
-            return await interaction.response.send_message(embed=simple_embed("This command can only be executed inside an guild", 'cross'))
-        
-        bot_db: BotGlobalsDatabaseAccess = self.bot.db
-
-        await bot_db.remove_moderation_acronym(interaction.user.id, interaction.guild.id, key)
-        await interaction.response.send_message(embed=simple_embed(f"Successfully Removed Moderation Acronym"))
-
-    @mod.command(name="acronym_update", description="Updates an reason acronym")
-    @app_permission(command_name = "mod_acronym_update")
-    async def update_mod_acronym(self, interaction: discord.Interaction, key: str, * ,value: str):
-        if interaction.guild is None:
-            return await interaction.response.send_message(embed=simple_embed("This command can only be executed inside an guild", 'cross'))
-        
-        bot_db: BotGlobalsDatabaseAccess = self.bot.db
-        await bot_db.update_moderation_acronym(interaction.user.id, interaction.guild.id, key, value)
-
-        await interaction.response.send_message(embed=simple_embed(f"Successfully Updated Moderation Acronym"))
-
-    @mod.command(name="acronyms", description="Display all moderation acronyms")
-    @app_permission(command_name = "mod_acronyms")
-    async def get_mod_acronym(self, interaction: discord.Interaction, member: discord.Member | None = None):
-        if interaction.guild is None:
-            return await interaction.response.send_message(embed=simple_embed("This command can only be executed inside an guild", 'cross'))
-        
-        bot_db: BotGlobalsDatabaseAccess = self.bot.db
-        result: dict[str, str] = await bot_db.get_moderation_acronyms(member.id if member is not None else interaction.user.id, interaction.guild.id)
-
-        acronyms = ""
-        for key, value in result.items():
-            acronyms += f"- **{key}** : {value}\n"
-
-        embed = discord.Embed(
-            title=f"{interaction.user.display_name}'s Moderation Acronyms",
-            description=acronyms,
-            color=16777215
-        )
-        await interaction.response.send_message(embed=embed)
-
-    @mod.command(name="acronym_transfer", description="Transfer an acronym to a members at a role")
-    @app_permission(command_name = "mod_acronym_transfer")
-    async def transfer_mod_acronym(self, interaction: discord.Interaction, target: discord.Member):
-        if interaction.guild is None:
-            return await interaction.response.send_message(embed=simple_embed("This command can only be executed inside an guild", 'cross'))
-        
-        bot_db: BotGlobalsDatabaseAccess = self.bot.db
-        result: dict[str, str] = await bot_db.get_moderation_acronyms(interaction.user.id, interaction.guild.id)
-
-        for key, value in result.items():
-            await bot_db.add_moderation_acronym(target.id, interaction.guild.id, key, value)
-
-        await interaction.response.send_message(embed=simple_embed(f"Successfully transferred moderation acronym to {target.mention}"))
-     
-    @appeal.command(name="setup", description="Setup Moderation Appeal for this server")
-    @app_permission(command_name = "mod_appeal_management")
-    async def setup_appeal(self, interaction: discord.Interaction) -> None:
-        if interaction.guild is None:
-            await interaction.response.send_message(embed=simple_embed("This command can only be executed inside an guild", 'cross'))
-            return
-        await setup_mod_appeal(interaction)
-
-    @appeal.command(
-        name="forum",
-        description="Configure the appeal forum that users can fill out."
-    )
-    @app_permission(command_name="mod_appeal_management")
-    async def configure_appeal_forum(
-        self,
-        interaction: discord.Interaction,
-    ):
-        if interaction.guild is None:
-            return await interaction.response.send_message(
-                embed=simple_embed(
-                    "This command can only be used inside a guild.",
-                    "cross",
-                )
-            )
-
-        await interaction.response.send_modal(
-            AppealForumCustomize(self.bot.db)
-        )
-
-    @appeal.command(name="accept", description="Accept an appeal")
-    @app_permission(command_name = "mod_appeal_handlers")
-    async def accept_appeal(self, interaction: discord.Interaction):
-        await accept_appeal_fn(interaction)
-
-    @appeal.command(name="reject", description="Deny an appeal")
-    @app_permission(command_name = "mod_appeal_handlers")
-    async def reject_appeal(self, interaction: discord.Interaction, reason: str):
-        await reject_appeal_fn(interaction, reason)
-
-    @mod.command(name="dashboard", description="Spawn in the dashboard")
-    @app_permission(command_name="dashboard", restrict=True)
-    async def dashboard(self, interaction: discord.Interaction):
-        view = ModerationDashboard({
-            "setup_mod_appeal": setup_mod_appeal
-        })
-
-        await interaction.response.send_message(
-            view=view,
-            ephemeral=True
-        )
 
 async def setup(bot):
     cog = LilyModeration(bot)
