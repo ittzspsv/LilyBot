@@ -59,11 +59,11 @@ async def initialize_ticket_view(bot):
                 if not config:
                     continue
 
-                channel = bot.get_channel(channel_id)
+                channel = _bot.get_channel(channel_id)
 
                 if not channel:
                     try:
-                        channel = await bot.fetch_channel(channel_id)
+                        channel = await _bot.fetch_channel(channel_id)
                     except (discord.NotFound, discord.Forbidden):
                         logger.warning(
                             "[InitializeTicketView] Missing channel %s", channel_id
@@ -74,7 +74,10 @@ async def initialize_ticket_view(bot):
                 bot.add_view(selector_view)
 
                 try:
+                    if not isinstance(channel, discord.TextChannel):
+                        continue
                     if message_id:
+                        
                         message = await channel.fetch_message(message_id)
                         await message.edit(
                             content=None,
@@ -84,7 +87,8 @@ async def initialize_ticket_view(bot):
 
                     else:
                         message = await channel.send(
-                            view=selector_view
+                            view=selector_view,
+                            allowed_mentions = discord.AllowedMentions.none()
                         )
 
                         await bot_db.save_ticket_view(
@@ -189,7 +193,6 @@ async def spawn_ticket(ctx: commands.Context, json_data: dict) -> None:
             "Failed to spawn ticket panel due to an internal error."
         )
 
-
 async def c_ticket_log_action_channel(interaction: discord.Interaction,opened_user_id: int,ticket_type: str, logs_channel: discord.TextChannel, transcripts_file, transcript_file_name: str ,reason: str="No reason provided!") -> int:
     view = TicketLogComponent(
         opened_user_id,
@@ -213,7 +216,6 @@ async def c_ticket_log_action_channel(interaction: discord.Interaction,opened_us
             logs_channel.id,
         )
         return 0
-
 
 async def rename_ticket(interaction: discord.Interaction, name: str):
     if not isinstance(interaction.channel, discord.TextChannel):
@@ -250,7 +252,6 @@ async def rename_ticket(interaction: discord.Interaction, name: str):
         await interaction.response.send_message(
             embed=simple_embed("An internal error occurred while renaming the ticket.", "cross")
         )
-
 
 async def ticket_add_user(
     interaction: discord.Interaction,
@@ -333,7 +334,6 @@ async def ticket_add_user(
             )
         )
 
-
 async def ticket_remove_user(
     interaction: discord.Interaction,
     user: discord.Member
@@ -412,7 +412,6 @@ async def ticket_remove_user(
                 "cross"
             )
         )
-
 
 async def ticket_close(interaction: discord.Interaction, reason: str="No reason provided"):
     if interaction.guild is None:
@@ -617,7 +616,6 @@ async def ticket_close(interaction: discord.Interaction, reason: str="No reason 
                 "cross"
             )
         )
-
 
 async def ticket_stats(interaction: discord.Interaction, member: discord.Member):
 
