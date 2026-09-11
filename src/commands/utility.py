@@ -197,31 +197,6 @@ class LilyUtility(commands.Cog):
         description="Timezone utility commands"
     )
 
-    # SERVER UTILITY
-    @app_commands.command(name='list', description='lists the total number of users in the server')
-    @app_permission(command_name="list", restrict=True)
-    async def ServerList(self, interaction: discord.Interaction):
-        try:
-            await interaction.response.defer()
-            guilds = self.bot.guilds
-            chunk_size = 10
-
-            for i in range(0, len(guilds), chunk_size):
-                chunk = guilds[i:i+chunk_size]
-                description = ""
-                for guild in chunk:
-                    description += f"**{guild.name} - {guild.member_count}**\n"
-                
-                embed = discord.Embed(
-                    title=f"Server List (Page {i//chunk_size + 1}/{(len(guilds) + chunk_size - 1)//chunk_size})",
-                    description=description,
-                    color=discord.Color.blue()
-                )
-                await interaction.followup.send(embed=embed)
-                await asyncio.sleep(0.5)
-        except Exception as e:
-            print(f"Exception [SERVER LIST] {e}")
-
     #UID UTILITY
     @commands.command(name="id")
     async def id(self, ctx: commands.Context, user: discord.Member | None = None):
@@ -698,7 +673,7 @@ class LilyUtility(commands.Cog):
         if interaction.guild is not None and interaction.guild.me is not None:
             embed.set_thumbnail(url=interaction.guild.me.display_avatar.url)
         
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
         
     @permission(command_name="sync", restrict=True)
     @commands.command(name="sync")
