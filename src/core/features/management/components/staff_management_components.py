@@ -5,6 +5,7 @@ import discord
 import src.core.configs.bot_details as Configs
 
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from src.core.utils.embeds.sLilyEmbed import simple_embed
 from ..embeds.staff_management_embed import loa_accept_embed, loa_reject_embed, infraction_embed
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
@@ -17,6 +18,88 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("lily")
 
+
+class StaffDataView(discord.ui.LayoutView):
+    def __init__(self, member: discord.Member | discord.User, data: dict) -> None:
+        super().__init__(timeout=None)
+
+        name = member.display_name
+        role_name = data.get("role_name")
+        is_loa = data.get("is_loa")
+        strikes_count = data.get("strikes_count")
+        joined_on = data.get("joined_on")
+        timezone = data.get("timezone")
+        responsibility = data.get("responsibility")
+        retired = data.get("retired")
+
+        if is_loa == 1:
+            status_display = f"{Configs.emoji['dnd']} On Leave"
+        elif retired == 1:
+            status_display = f"{Configs.emoji['invisible']} Retired"
+        else:
+            status_display = f"{Configs.emoji['online']} Active"
+
+        if timezone is not None:
+            local_dt = datetime.now(tz=ZoneInfo(timezone))
+            current_time = (
+                local_dt.strftime("%-d %A %Y at %-I.%M%p")
+                .replace("AM", "am")
+                .replace("PM", "pm")
+            )
+        else:
+            current_time = "N/A"
+
+        avatar_url = member.avatar.url if member.avatar else member.default_avatar.url
+
+        container = discord.ui.Container()
+        self.add_item(container)
+
+        container.add_item(
+            discord.ui.Section(
+                discord.ui.TextDisplay(f"## {name}'s Profile"),
+                discord.ui.TextDisplay(
+                    "### Basic Information\n"
+                    f"{Configs.emoji['staff']} **Role:** {','.join(role_name or []) or 'N/A'}\n"
+                    f"{Configs.emoji['pencil']} **Responsibilities:** {responsibility or 'N/A'}\n"
+                    f"{Configs.emoji['calender']} **Join Date:** <t:{joined_on}:D>"
+                ),
+                accessory=discord.ui.Thumbnail(media=avatar_url),
+            )
+        )
+
+        container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+
+        container.add_item(
+            discord.ui.TextDisplay(
+                "### Timezone Information\n"
+                f"{Configs.emoji['clock']} **Timezone:** {timezone or 'N/A'}\n"
+                f"{Configs.emoji['clock']} **Current Time:** {current_time}"
+            )
+        )
+
+        container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+
+        container.add_item(
+            discord.ui.TextDisplay(
+                "### Experience Information\n"
+                f"{Configs.emoji['clock']} **Evaluated Experience:** <t:{joined_on}:R>"
+            )
+        )
+
+        container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+
+        container.add_item(
+            discord.ui.TextDisplay(
+                "### Strikes Information\n"
+                f"{Configs.emoji['warn']} **Strike Count:** **{strikes_count}**"
+            )
+        )
+
+        container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+
+        container.add_item(
+            discord.ui.TextDisplay(f"**Status**\n{status_display}")
+        )
 
 class StaffListView(discord.ui.LayoutView):
     def __init__(
@@ -325,7 +408,6 @@ class StaffsView(discord.ui.LayoutView):
                 await interaction.response.send_message(embed=simple_embed(message, 'cross'), ephemeral=True)
         except discord.HTTPException:
             logger.exception("StaffsView._safe_error_response: failed to notify user of error")
-
 
 class LOARequestView(discord.ui.LayoutView):
     def __init__(self, bot_db: BotGlobalsDatabaseAccess, staff_id: int, guild_id: int, staff_pfp: str, reason: str, days: str) -> None:

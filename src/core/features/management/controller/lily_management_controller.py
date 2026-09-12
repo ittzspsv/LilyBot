@@ -13,7 +13,8 @@ from ..components.staff_management_components import (
     StaffsView,
     LOARequestModal,
     InfractionModal,
-    StrikesListView
+    StrikesListView,
+    StaffDataView
 )
 
 import discord
@@ -46,18 +47,13 @@ async def fetch_staff_detail(interaction: discord.Interaction, staff: discord.Me
         if not data_dict:
             raise ValueError("Staff data not found in database.")
 
-        embed = build_staff_embed(staff, data_dict)
-        await interaction.response.send_message(embed=embed)
+        view = StaffDataView(staff, data_dict)
+        await interaction.response.send_message(view=view)
 
     except Exception:
         logger.exception(f"[FetchStaffDetail] Failed to fetch staff data for staff_id={staff.id}")
 
-        embed = discord.Embed(
-            color=0xFF0000,
-            description=f"{emoji['cross']} failed to fetch staff data. please check the database.",
-        )
-
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embed=simple_embed("No staff data found", 'cross'), ephemeral=True)
 
 async def fetch_all_staffs(interaction: discord.Interaction) -> None:
     if interaction.guild is None:
