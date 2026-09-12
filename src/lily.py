@@ -33,13 +33,13 @@ class Lily(commands.Bot):
 
 
         extensions = [
-            "src.commands.moderation",
+            "src.commands.moderation.lily_moderation",
             "src.commands.utility",
-            "src.commands.blox_fruits",
-            "src.commands.management",
-            "src.commands.ticket_tool",
-            "src.commands.applications",
-            "src.commands.leveling",
+            "src.commands.blox_fruits.lily_blox_fruits",
+            "src.commands.management.lily_management",
+            "src.commands.tickets.lily_ticket_tool",
+            "src.commands.applications.lily_applications",
+            "src.commands.leveling.lily_leveling",
             "jishaku"
         ]
 
