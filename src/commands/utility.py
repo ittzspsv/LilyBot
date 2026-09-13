@@ -17,7 +17,7 @@ from src.core.utils.types.types import ChannelEnum, NotifiersEnum
 from src.core.logging.lily_logging import LilyLoggingController
 from zoneinfo import available_timezones, ZoneInfo, ZoneInfoNotFoundError
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
-from src.core.utils.components.sLIlyGlobalComponents import RoleCustomizationModal, Avatar
+from src.core.utils.components.sLIlyGlobalComponents import RoleCustomizationModal, Avatar, LeaderboardView
 from src.core.visuals.cards.quote import make_quote_card
 from src.core.features.ticketing.transcript import transcript
 from discord.ext import commands
@@ -980,6 +980,87 @@ class LilyUtility(commands.Cog):
             embed=simple_embed(f"Cleared AFK status for {member.display_name}")
         )
 
+    @app_commands.command(name="profile", description="Display your profile")
+    async def profile(self, interaction: discord.Interaction, member: discord.Member | None = None):
+        ...
+
+    @app_commands.command(name="messages", description="View the number of messages sent by you or an user")
+    async def messages(self, interaction: discord.Interaction, member: discord.Member | discord.User | None = None):
+        db: BotGlobalsDatabaseAccess = self.bot.db
+
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                ephemeral=True,
+                embed=simple_embed("This command can only be executed inside a guild", 'cross')
+            )
+            return
+
+        target = member if member is not None else interaction.user
+
+        msg_stats = await db.get_messages(interaction.guild.id, target.id)
+
+        view = discord.ui.LayoutView().add_item(
+            discord.ui.Container(
+                discord.ui.Section(
+                    discord.ui.TextDisplay(content=f"## {target.display_name}'s Messages"),
+                    discord.ui.TextDisplay(
+                        content=(
+                            f"> **Today**:  {msg_stats['daily_messages']:,}\n"
+                            f"> **This Week**:  {msg_stats['weekly_messages']:,}\n"
+                            f"> **This Month**:  {msg_stats['monthly_messages']:,}\n"
+                            f"> **Total**:  {msg_stats['total_messages']:,}"
+                        )
+                    ),
+                    accessory=discord.ui.Thumbnail(
+                        media=target.display_avatar.url,
+                    ),
+                ),
+                discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+            )
+        )
+
+        await interaction.response.send_message(view=view)
+
+    @app_commands.command(name="leaderboard", description="View the message leaderboard")
+    @app_commands.describe(type="Which leaderboard to view")
+    @app_commands.choices(type=[
+        app_commands.Choice(name="Daily", value=0),
+        app_commands.Choice(name="Weekly", value=1),
+        app_commands.Choice(name="Monthly", value=2),
+        app_commands.Choice(name="Total", value=3),
+    ])
+    @app_commands.guild_only()
+    async def leaderboard(
+    self,
+    interaction: discord.Interaction,
+    type: app_commands.Choice[int],
+):
+        leaderboard_type = type.value
+        db: BotGlobalsDatabaseAccess = self.bot.db
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                ephemeral=True,
+                embed=simple_embed("This command can only be executed inside a guild", 'cross')
+            )
+            return
+
+        results = await db.leaderboard(
+            interaction.guild.id,
+            leaderboard_type,
+            interaction.user.id,
+            page=1,
+        )
+
+        view = LeaderboardView(
+            interaction.guild.name,
+            results,
+            db,
+            guild_id=interaction.guild.id,
+            leaderboard_type=leaderboard_type,
+            requester_id=interaction.user.id,
+        )
+        await interaction.response.send_message(view=view, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+        view.message = await interaction.original_response()
 
 async def setup(bot):
     await bot.add_cog(LilyUtility(bot))

@@ -1,12 +1,15 @@
 import discord
+import logging
 from discord.utils import MISSING
 import src.core.configs.bot_details as Config
+from src.core.configs.bot_details import emoji
 
 from discord.ext import commands
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
 from src.core.utils.embeds.sLilyEmbed import simple_embed
 
 
+logger = logging.getLogger("lily")
 
 from typing import List, Dict, Any
 
@@ -177,3 +180,180 @@ class RoleCustomizationModal(discord.ui.Modal):
             await interaction.followup.send(embed=simple_embed(str(response.get("message"))))
         else:
             await interaction.followup.send(embed=simple_embed(str(response.get("message")), 'cross'))
+
+class LeaderboardView(discord.ui.LayoutView):
+    def __init__(
+        self,
+        guild_name: str,
+        leaderboard_data: Dict[str, Any],
+        db: BotGlobalsDatabaseAccess,
+        *,
+        guild_id: int,
+        leaderboard_type: int,
+        requester_id: int,
+    ) -> None:
+        super().__init__(timeout=None)
+
+        self.guild_name = guild_name
+        self.leaderboard_data = leaderboard_data
+        self.db = db
+
+        self.guild_id = guild_id
+        self.leaderboard_type = leaderboard_type
+        self.requester_id = requester_id
+
+        self.message: discord.Message | None = None
+
+        self.page = leaderboard_data["page"]
+        self.total_pages = leaderboard_data["total_pages"]
+        self.total_count = leaderboard_data["total_count"]
+        entries = leaderboard_data["leaderboard"]
+        target_entry = leaderboard_data.get("target")
+
+        type_label = leaderboard_data["type"].title()
+
+        header = discord.ui.Container(
+            discord.ui.TextDisplay(content=f"# {guild_name} — {type_label} Leaderboard"),
+            discord.ui.TextDisplay(content=f"### Total Tracked\n- {self.total_count}"),
+        )
+
+        rows: List[discord.ui.Item] = []
+
+        for entry in entries:
+            rank = entry["rank"]
+            medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, f"#{rank}")
+
+            rows.append(
+                discord.ui.TextDisplay(
+                    content=(
+                        f"**{medal}** <@{entry['member_id']}> — "
+                        f"**{entry['messages']:,}** messages"
+                    )
+                )
+            )
+
+        board = discord.ui.Container(
+            discord.ui.TextDisplay(content="# Rankings"),
+            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+            *rows,
+        )
+
+        self.add_item(header)
+        self.add_item(board)
+
+        if target_entry is not None:
+            footer = discord.ui.Container(
+                discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+                discord.ui.TextDisplay(
+                    content=(
+                        f"Your rank: **#{target_entry['rank']}** "
+                        f"— {target_entry['messages']:,} messages"
+                    )
+                ),
+            )
+            self.add_item(footer)
+
+        self.add_item(self.pagination())
+
+    def pagination(self) -> discord.ui.ActionRow:
+        row = discord.ui.ActionRow()
+
+        prev_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            emoji=emoji["left"],
+            disabled=self.page <= 1,
+        )
+        prev_button.callback = self.previous_button_callback
+        row.add_item(prev_button)
+
+        page_indicator: discord.ui.Button = discord.ui.Button(
+            label=f"Page {self.page}/{self.total_pages}",
+            style=discord.ButtonStyle.secondary,
+            disabled=True,
+        )
+        row.add_item(page_indicator)
+
+        next_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            emoji=emoji["right"],
+            disabled=self.page >= self.total_pages,
+        )
+        next_button.callback = self.next_button_callback
+        row.add_item(next_button)
+
+        return row
+
+    async def _refresh_page(self, interaction: discord.Interaction, new_page: int) -> None:
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message(
+                embed=simple_embed("You can't control someone else's leaderboard view.", 'cross'),
+                ephemeral=True,
+            )
+            return
+
+        try:
+            result = await self.db.leaderboard(
+                self.guild_id,
+                self.leaderboard_type,
+                self.requester_id,
+                page=new_page,
+            )
+
+            new_view = LeaderboardView(
+                self.guild_name,
+                result,
+                self.db,
+                guild_id=self.guild_id,
+                leaderboard_type=self.leaderboard_type,
+                requester_id=self.requester_id,
+            )
+            new_view.message = self.message
+            await interaction.response.edit_message(view=new_view, allowed_mentions=discord.AllowedMentions.none())
+        except Exception:
+            logger.exception(
+                "Failed to refresh leaderboard page=%s for guild_id=%s type=%s",
+                new_page,
+                self.guild_id,
+                self.leaderboard_type,
+            )
+            if not interaction.response.is_done():
+                await interaction.response.send_message(embed=simple_embed("Something went wrong while changing pages.", 'cross'), ephemeral=True)
+            else:
+                await interaction.followup.send(embed=simple_embed("Something went wrong while changing pages.", 'cross'), ephemeral=True)
+
+    async def refresh(self) -> None:
+        if self.message is None:
+            logger.warning("LeaderboardView.refresh called with no stored message (guild_id=%s)", self.guild_id)
+            return
+
+        try:
+            result = await self.db.leaderboard(
+                self.guild_id,
+                self.leaderboard_type,
+                self.requester_id,
+                page=self.page,
+            )
+
+            new_view = LeaderboardView(
+                self.guild_name,
+                result,
+                self.db,
+                guild_id=self.guild_id,
+                leaderboard_type=self.leaderboard_type,
+                requester_id=self.requester_id,
+            )
+            new_view.message = self.message
+
+            await self.message.edit(view=new_view, allowed_mentions=discord.AllowedMentions.none())
+        except (discord.NotFound, discord.HTTPException):
+            logger.exception(
+                "Failed to refresh leaderboard (guild_id=%s type=%s) — message likely expired",
+                self.guild_id,
+                self.leaderboard_type,
+            )
+
+    async def previous_button_callback(self, interaction: discord.Interaction) -> None:
+        await self._refresh_page(interaction, self.page - 1)
+
+    async def next_button_callback(self, interaction: discord.Interaction) -> None:
+        await self._refresh_page(interaction, self.page + 1)

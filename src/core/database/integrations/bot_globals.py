@@ -6,6 +6,7 @@ from typing import List, Optional, Final, Set, Dict, Any, Tuple
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone, UTC
 from collections import defaultdict
+from math import ceil
 
 import json
 import pytz
@@ -3227,6 +3228,35 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
     async def reset_messages(self, type: str) -> None:
         await self.execute(f"UPDATE messages SET {type}_messages = 0")
 
+    async def get_messages(self, guild_id: int, member_id: int) -> Dict[str, int]:
+        row = await self.fetch_one(
+            """
+            SELECT
+                daily_messages,
+                weekly_messages,
+                monthly_messages,
+                total_messages
+            FROM messages
+            WHERE guild_id = ? AND member_id = ?
+            """,
+            (guild_id, member_id),
+        )
+
+        if row is None:
+            return {
+                "daily_messages": 0,
+                "weekly_messages": 0,
+                "monthly_messages": 0,
+                "total_messages": 0,
+            }
+
+        return {
+            "daily_messages": row["daily_messages"],
+            "weekly_messages": row["weekly_messages"],
+            "monthly_messages": row["monthly_messages"],
+            "total_messages": row["total_messages"],
+        }
+
     async def get_role_mapping(self, member_id: int, guild_id: int) -> List[int]:
         rows = await self.fetch_all(
             "SELECT role_id FROM roles_customize WHERE member_id = ? AND guild_id = ?",
@@ -3653,7 +3683,14 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
 
         return dict(row) if row else None
 
-    async def leaderboard(self, guild_id: int, leaderboard_type: int) -> Dict[str, Any]:
+    async def leaderboard(
+        self,
+        guild_id: int,
+        leaderboard_type: int,
+        target: int,
+        page: int = 1,
+        per_page: int = 10,
+    ) -> Dict[str, Any]:
         types = {
             0: "daily_messages",
             1: "weekly_messages",
@@ -3670,6 +3707,18 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
                 "leaderboard": []
             }
 
+        if page < 1:
+            page = 1
+
+        offset = (page - 1) * per_page
+
+        total_row = await self.fetch_one(
+            "SELECT COUNT(*) AS count FROM messages WHERE guild_id = ?",
+            (guild_id,),
+        )
+        total_count = total_row["count"] if total_row else 0
+        total_pages = max(1, ceil(total_count / per_page))
+
         query = f"""
             SELECT
                 m.member_id,
@@ -3682,14 +3731,13 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
                 AND m.guild_id = msg.guild_id
             WHERE msg.guild_id = ?
             ORDER BY msg.{column} DESC
-            LIMIT 100
+            LIMIT ? OFFSET ?
         """
 
-        rows= await self.fetch_all(query, (guild_id,))
+        rows = await self.fetch_all(query, (guild_id, per_page, offset))
 
         leaderboard = []
-
-        for index, row in enumerate(rows, start=1):
+        for index, row in enumerate(rows, start=offset + 1):
             leaderboard.append({
                 "rank": index,
                 "member_id": row["member_id"],
@@ -3698,12 +3746,46 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
                 "messages": row["messages"]
             })
 
+        target_query = f"""
+            SELECT member_id, name, avatar_url, messages, rank FROM (
+                SELECT
+                    m.member_id,
+                    m.name,
+                    m.avatar_url,
+                    msg.{column} AS messages,
+                    ROW_NUMBER() OVER (ORDER BY msg.{column} DESC) AS rank
+                FROM messages msg
+                INNER JOIN members m
+                    ON m.member_id = msg.member_id
+                    AND m.guild_id = msg.guild_id
+                WHERE msg.guild_id = ?
+            ) ranked
+            WHERE member_id = ?
+        """
+
+        target_row = await self.fetch_one(target_query, (guild_id, target))
+
+        target_entry = None
+        if target_row is not None:
+            target_entry = {
+                "rank": target_row["rank"],
+                "member_id": target_row["member_id"],
+                "name": target_row["name"],
+                "avatar_url": target_row["avatar_url"],
+                "messages": target_row["messages"],
+            }
+
         return {
             "success": True,
             "guild_id": guild_id,
             "type": column.replace("_messages", ""),
+            "page": page,
+            "per_page": per_page,
+            "total_pages": total_pages,
+            "total_count": total_count,
             "count": len(leaderboard),
-            "leaderboard": leaderboard
+            "leaderboard": leaderboard,
+            "target": target_entry,
         }
 
     async def get_timezone(
