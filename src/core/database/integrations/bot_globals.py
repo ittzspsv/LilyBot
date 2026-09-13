@@ -1164,22 +1164,17 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
     async def get_case(
         self,
         case_id: int,
-        guild_id: int
+        guild_id: int | None = None
     ) -> Optional[Dict[str, Any]]:
-        row = await self.fetch_one(
-            """
-            SELECT
-                *
-            FROM modlogs
-            WHERE id = ? AND guild_id = ?
-            """,
-            (case_id, guild_id),
-        )
+        if guild_id is None:
+            query = "SELECT * FROM modlogs WHERE id = ?"
+            params = (case_id,)
+        else:
+            query = "SELECT * FROM modlogs WHERE id = ? AND guild_id = ?"
+            params = (case_id, guild_id)
 
-        if row is None:
-            return None
-
-        return dict(row)
+        row = await self.fetch_one(query, params)
+        return dict(row) if row is not None else None
 
     async def delete_case(self, case_id: int, guild_id: int) -> Dict[str, Any]:
         if not case_id:

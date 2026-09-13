@@ -1172,8 +1172,7 @@ class AppealButton(discord.ui.DynamicItem[discord.ui.Button], template=r'button:
             assert self.case_id is not None
 
             """ Check the validity of the case first """
-            assert interaction.guild is not None
-            _case = await db.get_case(self.case_id, interaction.guild.id)
+            _case = await db.get_case(self.case_id)
             if _case is None:
                 await interaction.response.send_message(
                     embed=simple_embed(
