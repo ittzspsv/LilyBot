@@ -191,12 +191,14 @@ class LeaderboardView(discord.ui.LayoutView):
         guild_id: int,
         leaderboard_type: int,
         requester_id: int,
+        leaderboard_img_available: bool = False
     ) -> None:
         super().__init__(timeout=None)
 
         self.guild_name = guild_name
         self.leaderboard_data = leaderboard_data
         self.db = db
+        self.leaderboard_img_available = leaderboard_img_available
 
         self.guild_id = guild_id
         self.leaderboard_type = leaderboard_type
@@ -211,11 +213,6 @@ class LeaderboardView(discord.ui.LayoutView):
         target_entry = leaderboard_data.get("target")
 
         type_label = leaderboard_data["type"].title()
-
-        header = discord.ui.Container(
-            discord.ui.TextDisplay(content=f"# {guild_name} — {type_label} Leaderboard"),
-            discord.ui.TextDisplay(content=f"### Total Tracked\n- {self.total_count}"),
-        )
 
         rows: List[discord.ui.Item] = []
 
@@ -233,25 +230,42 @@ class LeaderboardView(discord.ui.LayoutView):
             )
 
         board = discord.ui.Container(
-            discord.ui.TextDisplay(content="# Rankings"),
-            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
-            *rows,
+            discord.ui.TextDisplay(content=f"# {type_label} Leaderboard"),
+            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small)
         )
 
-        self.add_item(header)
-        self.add_item(board)
+        if self.leaderboard_img_available:
+            board.add_item(
+                discord.ui.MediaGallery(
+                    discord.MediaGalleryItem(
+                            media="attachment://leaderboard.png",
+                        ),
+                    )
+            )
+
+            board.add_item(
+                discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small)
+            )
+        for row in rows:
+            board.add_item(
+                row
+            )
+
+        board.add_item(
+            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small)
+        )
 
         if target_entry is not None:
-            footer = discord.ui.Container(
-                discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+            board.add_item(
                 discord.ui.TextDisplay(
                     content=(
                         f"Your rank: **#{target_entry['rank']}** "
                         f"— {target_entry['messages']:,} messages"
                     )
-                ),
+                )
             )
-            self.add_item(footer)
+
+        self.add_item(board)
 
         self.add_item(self.pagination())
 
@@ -306,6 +320,7 @@ class LeaderboardView(discord.ui.LayoutView):
                 guild_id=self.guild_id,
                 leaderboard_type=self.leaderboard_type,
                 requester_id=self.requester_id,
+                leaderboard_img_available=self.leaderboard_img_available
             )
             new_view.message = self.message
             await interaction.response.edit_message(view=new_view, allowed_mentions=discord.AllowedMentions.none())
@@ -341,6 +356,7 @@ class LeaderboardView(discord.ui.LayoutView):
                 guild_id=self.guild_id,
                 leaderboard_type=self.leaderboard_type,
                 requester_id=self.requester_id,
+                leaderboard_img_available=self.leaderboard_img_available
             )
             new_view.message = self.message
 
