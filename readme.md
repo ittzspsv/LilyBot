@@ -1,5 +1,5 @@
 <div align="center" style="display: flex; align-items: center; justify-content: center; gap: 16px;">
-  <img src=".github/images/_Chiaki.png" width="80" />
+  <img src=".github/images/_Kaede.png" width="80" />
   <h1 style="margin: 0;">Lily V2</h1>
 </div>
 
