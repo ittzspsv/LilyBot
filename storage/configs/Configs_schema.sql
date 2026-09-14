@@ -94,6 +94,7 @@ CREATE TABLE IF NOT EXISTS "rank_updates" (
 
     FOREIGN KEY (staff_id, guild_id)
         REFERENCES staffs(staff_id, guild_id),
+
     FOREIGN KEY (updated_by, guild_id)
         REFERENCES staffs(staff_id, guild_id),
 
@@ -133,26 +134,6 @@ CREATE TABLE IF NOT EXISTS "messages" (
     FOREIGN KEY (guild_id)
         REFERENCES data(guild_id)
 );
-CREATE TABLE IF NOT EXISTS "ticket_logs" (
-    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-
-    guild_id             INTEGER NOT NULL
-                             REFERENCES data(guild_id),
-
-    opened_user_id       INTEGER NOT NULL,
-    staff_handled        INTEGER,
-
-    reason               TEXT,
-    ticket_type          TEXT,
-    timestamp            TEXT,
-    transcripts_reference INTEGER,
-
-    FOREIGN KEY (opened_user_id, guild_id)
-        REFERENCES members(member_id, guild_id),
-
-    FOREIGN KEY (staff_handled, guild_id)
-        REFERENCES staffs(staff_id, guild_id)
-);
 CREATE TABLE IF NOT EXISTS "staffs" (
     staff_id        INTEGER NOT NULL,
     guild_id        INTEGER NOT NULL,
@@ -167,33 +148,6 @@ CREATE TABLE IF NOT EXISTS "staffs" (
 
     FOREIGN KEY (staff_id, guild_id)
         REFERENCES members(member_id, guild_id)
-);
-CREATE TABLE IF NOT EXISTS "modlogs" (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    guild_id       INTEGER NOT NULL
-                       REFERENCES data(guild_id),
-    moderator_id   INTEGER NOT NULL,
-    target_user_id INTEGER NOT NULL,
-    mod_type       TEXT,
-    reason         TEXT,
-    timestamp      TEXT, deleted INTEGER DEFAULT 0,
-
-    FOREIGN KEY (moderator_id, guild_id)
-        REFERENCES staffs(staff_id, guild_id),
-
-    FOREIGN KEY (target_user_id, guild_id)
-        REFERENCES members(member_id, guild_id)
-);
-CREATE TABLE IF NOT EXISTS "proofs" (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    case_id         INTEGER NOT NULL
-                        REFERENCES modlogs(id),
-    proof_reference INTEGER,
-    author          INTEGER NOT NULL,
-    guild_id        INTEGER NOT NULL,
-
-    FOREIGN KEY (author, guild_id)
-        REFERENCES staffs(staff_id, guild_id)
 );
 CREATE TABLE IF NOT EXISTS "staff_ranks" (
     role_id INTEGER,
@@ -231,7 +185,7 @@ CREATE TABLE IF NOT EXISTS "tickets" (
     ticket_type TEXT,
 
     log_channel_id INTEGER,
-    message_id INTEGER,
+    message_id INTEGER, `ticket_details_message_id` INTEGER,
 
     FOREIGN KEY (opened_user_id, guild_id)
         REFERENCES members(member_id, guild_id),
@@ -377,3 +331,60 @@ CREATE TABLE IF NOT EXISTS "application" (
     );
 CREATE TABLE `mod_appeal` (`case_id` INTEGER REFERENCES `modlogs`(`id`), `status` TEXT, "thread_id" INTEGER);
 CREATE TABLE IF NOT EXISTS "mod_appeal_forum" (`guild_id` INTEGER UNIQUE REFERENCES `data`(`guild_id`), `config` TEXT);
+CREATE TABLE IF NOT EXISTS "modlogs" (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id       INTEGER NOT NULL
+                       REFERENCES data(guild_id),
+    moderator_id   INTEGER NOT NULL,
+    target_user_id INTEGER NOT NULL,
+    mod_type       TEXT,
+    reason         TEXT,
+    timestamp      TEXT, deleted INTEGER DEFAULT 0, `metadata` JSON DEFAULT '{}',
+
+    FOREIGN KEY (moderator_id, guild_id)
+        REFERENCES staffs(staff_id, guild_id),
+
+    FOREIGN KEY (target_user_id, guild_id)
+        REFERENCES members(member_id, guild_id)
+);
+CREATE TABLE IF NOT EXISTS "proofs" (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    case_id         INTEGER NOT NULL
+                        REFERENCES modlogs(id),
+    proof_reference INTEGER,
+    author          INTEGER NOT NULL,
+    guild_id        INTEGER NOT NULL,
+
+    FOREIGN KEY (author, guild_id)
+        REFERENCES staffs(staff_id, guild_id)
+);
+CREATE TABLE IF NOT EXISTS "ticket_logs" (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+
+    guild_id             INTEGER NOT NULL
+                             REFERENCES data(guild_id),
+
+    opened_user_id       INTEGER NOT NULL,
+    staff_handled        INTEGER,
+
+    reason               TEXT,
+    ticket_type          TEXT,
+    timestamp            TEXT,
+    transcripts_reference INTEGER, `logs_channel_id` INTEGER,
+
+    FOREIGN KEY (opened_user_id, guild_id)
+        REFERENCES members(member_id, guild_id),
+
+    FOREIGN KEY (staff_handled, guild_id)
+        REFERENCES staffs(staff_id, guild_id)
+);
+CREATE UNIQUE INDEX idx_guild_webhooks_guild_channel
+    ON guild_webhooks (guild_id, channel_type);
+CREATE TABLE IF NOT EXISTS "afk" (
+    `member_id` INTEGER REFERENCES `members`(`member_id`),
+    `guild_id` INTEGER REFERENCES `members`(`guild_id`),
+    `timestamp` TEXT,
+    `display_name` TEXT DEFAULT 'AFK',
+    reason TEXT,
+    PRIMARY KEY (`member_id`, `guild_id`)
+);
