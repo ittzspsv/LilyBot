@@ -19,6 +19,7 @@ from zoneinfo import available_timezones, ZoneInfo, ZoneInfoNotFoundError
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
 from src.core.utils.components.sLIlyGlobalComponents import RoleCustomizationModal, Avatar, LeaderboardView
 from src.core.visuals.cards.quote import make_quote_card
+from src.core.visuals.cards.leaderboard import leaderboard_img
 from src.core.features.ticketing.transcript import transcript
 from discord.ext import commands
 from discord import app_commands
@@ -1031,10 +1032,10 @@ class LilyUtility(commands.Cog):
     ])
     @app_commands.guild_only()
     async def leaderboard(
-    self,
-    interaction: discord.Interaction,
-    type: app_commands.Choice[int],
-):
+        self,
+        interaction: discord.Interaction,
+        type: app_commands.Choice[int],
+    ):
         leaderboard_type = type.value
         db: BotGlobalsDatabaseAccess = self.bot.db
         if interaction.guild is None:
@@ -1044,12 +1045,64 @@ class LilyUtility(commands.Cog):
             )
             return
 
-        results = await db.leaderboard(
-            interaction.guild.id,
-            leaderboard_type,
-            interaction.user.id,
-            page=1,
-        )
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            results = await db.leaderboard(
+                interaction.guild.id,
+                leaderboard_type,
+                interaction.user.id,
+                page=1,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to fetch leaderboard for guild_id=%s type=%s",
+                interaction.guild.id,
+                leaderboard_type,
+            )
+            await interaction.followup.send(
+                embed=simple_embed("Something went wrong while fetching the leaderboard.", 'cross'),
+                ephemeral=True,
+            )
+            return
+
+        top_three = results["leaderboard"][:3]
+
+        img_bytes = None
+        if len(top_three) == 3:
+            try:
+                podium_members = []
+                for m in top_three:
+                    member_id = m["member_id"]
+                    _member = interaction.guild.get_member(member_id) or await interaction.guild.fetch_member(member_id)
+
+                    podium_members.append({
+                        "display_name": m["name"],
+                        "avatar_url": _member.display_avatar.url,
+                        "avatar_deco_url": _member.avatar_decoration.url if _member.avatar_decoration else "",
+                        "messages": f"{m['messages']:,}",
+                    })
+
+                img_bytes = await leaderboard_img(tuple(podium_members))
+
+                if img_bytes is None:
+                    logger.warning(
+                        "leaderboard_img returned None for guild_id=%s type=%s (avatar/deco fetch likely failed)",
+                        interaction.guild.id,
+                        leaderboard_type,
+                    )
+            except discord.NotFound:
+                logger.warning(
+                    "Top-3 member lookup failed (member left guild?) for guild_id=%s type=%s",
+                    interaction.guild.id,
+                    leaderboard_type,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to build podium image for guild_id=%s type=%s",
+                    interaction.guild.id,
+                    leaderboard_type,
+                )
 
         view = LeaderboardView(
             interaction.guild.name,
@@ -1058,9 +1111,23 @@ class LilyUtility(commands.Cog):
             guild_id=interaction.guild.id,
             leaderboard_type=leaderboard_type,
             requester_id=interaction.user.id,
+            leaderboard_img_available=img_bytes is not None
         )
-        await interaction.response.send_message(view=view, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
-        view.message = await interaction.original_response()
+
+        try:
+            if img_bytes is not None:
+                file = discord.File(BytesIO(img_bytes), filename="leaderboard.png")
+                await interaction.followup.send(view=view, file=file, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+            else:
+                await interaction.followup.send(view=view, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+
+            view.message = await interaction.original_response()
+        except Exception:
+            logger.exception(
+                "Failed to send leaderboard message for guild_id=%s type=%s",
+                interaction.guild.id,
+                leaderboard_type,
+            )
 
 async def setup(bot):
     await bot.add_cog(LilyUtility(bot))
