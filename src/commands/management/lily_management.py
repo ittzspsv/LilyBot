@@ -8,6 +8,8 @@ from apscheduler.triggers.cron import CronTrigger
 
 from src.core.utils import lily_utility as LilyUtility
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
+from src.core.features.permissions.lily_permissions import permission
+from src.core.features.management.controller import lily_management_controller as controller
 from src.core.features.management.components.staff_management_components import LOARequestView
 from src.core.features.management.controller.lily_management_controller import (
     on_message,
@@ -206,6 +208,29 @@ class LilyManagement(commands.Cog):
             return
 
         await self.db.reset_messages("monthly")
+
+
+
+
+
+    """ Certain Commands exposed as prefix for convenience  """
+    @commands.group(name="staff", invoke_without_command=True, aliases=["stf", "st"])
+    async def staff(self, ctx: commands.Context):
+        pass
+
+    @staff.command(name="data")
+    @permission(command_name="staff_data")
+    async def staff_data(self, ctx: commands.Context, user: discord.Member | discord.User | None = None):
+        if not user:
+            user = ctx.author
+        await controller.fetch_staff_detail(ctx, user)
+
+
+    @staff.command(name="list")
+    @permission(command_name="staff_list")
+    async def staff_list(self, ctx: commands.Context):
+        await controller.fetch_all_staffs(ctx=ctx)
+
 
 
 async def setup(bot):

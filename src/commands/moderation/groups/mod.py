@@ -28,7 +28,7 @@ class ModCommands(app_commands.Group):
         user = member or interaction.user
 
         await ms_fn(
-            interaction=interaction,
+            ctx=interaction,
             moderator=user,
             page_start=page_start,
             page_end=page_end
