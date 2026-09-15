@@ -36,48 +36,77 @@ quota_conclusion_mapping: Final = {
 }
 
 
-async def fetch_staff_detail(interaction: discord.Interaction, staff: discord.Member | discord.User) -> None:
+async def fetch_staff_detail(ctx: discord.Interaction | commands.Context, staff: discord.Member | discord.User) -> None:
+    if ctx.guild is None:
+        embed = simple_embed("This command can only be used inside a guild", 'cross')
+        if isinstance(ctx, discord.Interaction):
+            await ctx.response.send_message(embed=embed, ephemeral=True)
+        else:
+            await ctx.reply(embed=embed, ephemeral=True)
+        return
+
     try:
-        bot_db = cast("Lily", interaction.client).db
+        client = ctx.client if isinstance(ctx, discord.Interaction) else ctx.bot
+        bot_db = cast("Lily", client).db
         assert bot_db is not None
 
-        assert isinstance(interaction.guild, discord.Guild)
-        data_dict = await bot_db.fetch_staff_detail(staff.id, interaction.guild.id)
+        data_dict = await bot_db.fetch_staff_detail(staff.id, ctx.guild.id)
 
         if not data_dict:
             raise ValueError("Staff data not found in database.")
 
         view = StaffDataView(staff, data_dict)
-        await interaction.response.send_message(view=view)
+
+        if isinstance(ctx, discord.Interaction):
+            await ctx.response.send_message(view=view)
+        else:
+            await ctx.reply(view=view)
 
     except Exception:
         logger.exception(f"[FetchStaffDetail] Failed to fetch staff data for staff_id={staff.id}")
 
-        await interaction.response.send_message(embed=simple_embed("No staff data found", 'cross'), ephemeral=True)
+        embed = simple_embed("No staff data found", 'cross')
+        if isinstance(ctx, discord.Interaction):
+            await ctx.response.send_message(embed=embed, ephemeral=True)
+        else:
+            await ctx.reply(embed=embed, ephemeral=True)
 
-async def fetch_all_staffs(interaction: discord.Interaction) -> None:
-    if interaction.guild is None:
+async def fetch_all_staffs(ctx: discord.Interaction | commands.Context) -> None:
+    if ctx.guild is None:
         embed = discord.Embed(
             title=f"{emoji['cross']} Error",
             description="Cannot execute this command without an guild object",
             colour=0xf50000
         )
-
-        await interaction.response.send_message(embed=embed)
+        if isinstance(ctx, discord.Interaction):
+            await ctx.response.send_message(embed=embed)
+        else:
+            await ctx.reply(embed=embed)
         return
-    bot_db = cast("Lily", interaction.client).db
-    assert bot_db is not None
-    try:
-        data = await bot_db.fetch_staff_summary(interaction.guild.id)
-        ranks = await bot_db.get_staff_ranks(interaction.guild.id)
 
-        view = StaffsView(interaction, ranks ,data)
-        await interaction.response.send_message(view=view, ephemeral=True)
+    client = ctx.client if isinstance(ctx, discord.Interaction) else ctx.bot
+    bot_db = cast("Lily", client).db
+    assert bot_db is not None
+
+    try:
+        data = await bot_db.fetch_staff_summary(ctx.guild.id)
+        ranks = await bot_db.get_staff_ranks(ctx.guild.id)
+
+        view = StaffsView(ctx, ranks, data)
+
+        if isinstance(ctx, discord.Interaction):
+            await ctx.response.send_message(view=view, ephemeral=True)
+        else:
+            await ctx.reply(view=view, ephemeral=True)
 
     except Exception:
-        logger.exception(f"[FetchAllStaffs] Failed to fetch staff list for guild_id={interaction.guild.id}")
+        logger.exception(f"[FetchAllStaffs] Failed to fetch staff list for guild_id={ctx.guild.id}")
 
-        await interaction.response.send_message(embed=simple_embed("No staff data returned", 'cross'), ephemeral=True)
+        embed = simple_embed("No staff data returned", 'cross')
+        if isinstance(ctx, discord.Interaction):
+            await ctx.response.send_message(embed=embed, ephemeral=True)
+        else:
+            await ctx.reply(embed=embed, ephemeral=True)
 
 async def update_all_staffs(interaction: discord.Interaction) -> None:
     if interaction.guild is None:

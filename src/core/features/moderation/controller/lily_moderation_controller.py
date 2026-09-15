@@ -631,39 +631,47 @@ async def case_delete(
         await interaction.response.send_message(embed=simple_embed(str(response.get("message")), 'cross'))
 
 async def ms(
-    interaction: discord.Interaction,
+    ctx: discord.Interaction | commands.Context,
     moderator: discord.Member | discord.User,
     page_start: int = 0,
     page_end: int = 5
 ):
-    bot = cast("Lily", interaction.client)
+    client = ctx.client if isinstance(ctx, discord.Interaction) else ctx.bot
+    bot = cast("Lily", client)
 
     assert bot.db is not None
     bot_db = bot.db
 
-    if interaction.guild is None:
-        await interaction.response.send_message(
-            embed=simple_embed(
-                "Command requires guild object in order to execute",
-                "cross"
-            )
-        )
+    if ctx.guild is None:
+        embed = simple_embed("Command requires guild object in order to execute", "cross")
+        if isinstance(ctx, discord.Interaction):
+            await ctx.response.send_message(embed=embed)
+        else:
+            await ctx.reply(embed=embed)
         return
 
     try:
         result = await bot_db.fetch_mod_stats(
-            guild_id=interaction.guild.id,
+            guild_id=ctx.guild.id,
             moderator_id=moderator.id,
             page_start=page_start,
             page_end=page_end
         )
     except Exception:
-        logger.exception("Failed to fetch mod stats for moderator %s in guild %s", moderator.id, interaction.guild.id)
-        await interaction.response.send_message(embed=simple_embed("An unexpected error occurred while fetching moderator stats.", "cross"))
+        logger.exception("Failed to fetch mod stats for moderator %s in guild %s", moderator.id, ctx.guild.id)
+        embed = simple_embed("An unexpected error occurred while fetching moderator stats.", "cross")
+        if isinstance(ctx, discord.Interaction):
+            await ctx.response.send_message(embed=embed)
+        else:
+            await ctx.reply(embed=embed)
         return
 
     if not result["success"]:
-        await interaction.response.send_message(embed=simple_embed("No stats found For the given moderator ID"))
+        embed = simple_embed("No stats found for the given moderator ID", "cross")
+        if isinstance(ctx, discord.Interaction):
+            await ctx.response.send_message(embed=embed)
+        else:
+            await ctx.reply(embed=embed)
         return
 
     try:
@@ -674,45 +682,59 @@ async def ms(
             total_logs=result["total_logs"],
             page_start=page_start
         )
-        await interaction.response.send_message(embeds=embeds)
+        if isinstance(ctx, discord.Interaction):
+            await ctx.response.send_message(embeds=embeds, ephemeral=True)
+        else:
+            await ctx.reply(embeds=embeds)
     except Exception:
-        logger.exception("Failed to build/send mod stats embed for moderator %s in guild %s", moderator.id, interaction.guild.id)
-        await interaction.response.send_message(embed=simple_embed("An unexpected error occurred while displaying moderator stats.", "cross"))
+        logger.exception("Failed to build/send mod stats embed for moderator %s in guild %s", moderator.id, ctx.guild.id)
+        embed = simple_embed("An unexpected error occurred while displaying moderator stats.", "cross")
+        if isinstance(ctx, discord.Interaction):
+            await ctx.response.send_message(embed=embed, ephemeral=True)
+        else:
+            await ctx.reply(embed=embed)
 
 async def mod_logs(
-    interaction: discord.Interaction,
+    ctx: discord.Interaction | commands.Context,
     user: discord.Member | discord.User,
     moderator: discord.User | discord.Member | None = None,
     mod_type: str = "all"
 ):
-    if interaction.guild is None:
-        await interaction.response.send_message(
-            embed=simple_embed(
-                "Command requires guild object in order to execute",
-                "cross"
-            ),
-            ephemeral=True
-        )
+    if ctx.guild is None:
+        embed = simple_embed("Command requires guild object in order to execute", "cross")
+        if isinstance(ctx, discord.Interaction):
+            await ctx.response.send_message(embed=embed, ephemeral=True)
+        else:
+            await ctx.reply(embed=embed, ephemeral=True)
         return
 
-    bot = cast("Lily", interaction.client)
+    client = ctx.client if isinstance(ctx, discord.Interaction) else ctx.bot
+    bot = cast("Lily", client)
     assert bot.db is not None
     bot_db = bot.db
 
     try:
         result = await bot_db.fetch_mod_logs(
-            guild_id=interaction.guild.id,
+            guild_id=ctx.guild.id,
             target_user_id=user.id,
             moderator_id=moderator.id if moderator else None,
             mod_type=mod_type,
         )
     except Exception:
-        logger.exception("Failed to fetch mod logs for user %s in guild %s", user.id, interaction.guild.id)
-        await interaction.response.send_message(embed=simple_embed("An unexpected error occurred while fetching moderation logs.", 'cross'), ephemeral=True)
+        logger.exception("Failed to fetch mod logs for user %s in guild %s", user.id, ctx.guild.id)
+        embed = simple_embed("An unexpected error occurred while fetching moderation logs.", 'cross')
+        if isinstance(ctx, discord.Interaction):
+            await ctx.response.send_message(embed=embed, ephemeral=True)
+        else:
+            await ctx.reply(embed=embed)
         return
 
     if not result["success"]:
-        await interaction.response.send_message(embed=simple_embed("No cases found.", 'cross'), ephemeral=True)
+        embed = simple_embed("No cases found.", 'cross')
+        if isinstance(ctx, discord.Interaction):
+            await ctx.response.send_message(embed=embed, ephemeral=True)
+        else:
+            await ctx.reply(embed=embed)
         return
 
     try:
@@ -720,16 +742,25 @@ async def mod_logs(
             (user.display_name.title(), user.display_avatar.url),
             result,
             bot_db,
-            guild_id=interaction.guild.id,
+            guild_id=ctx.guild.id,
             target_user_id=user.id,
             moderator_id=moderator.id if moderator else None,
             mod_type=mod_type,
         )
-        await interaction.response.send_message(view=view, allowed_mentions=discord.AllowedMentions.none(), ephemeral=True)
-        view.message = await interaction.original_response()
+
+        if isinstance(ctx, discord.Interaction):
+            await ctx.response.send_message(view=view, allowed_mentions=discord.AllowedMentions.none(), ephemeral=True)
+            view.message = await ctx.original_response()
+        else:
+            view.message = await ctx.reply(view=view, allowed_mentions=discord.AllowedMentions.none())
+
     except Exception:
-        logger.exception("Failed to build/send mod logs view for user %s in guild %s", user.id, interaction.guild.id)
-        await interaction.response.send_message(embed=simple_embed("An unexpected error occurred while displaying moderation logs.", 'cross'), ephemeral=True)
+        logger.exception("Failed to build/send mod logs view for user %s in guild %s", user.id, ctx.guild.id)
+        embed = simple_embed("An unexpected error occurred while displaying moderation logs.", 'cross')
+        if isinstance(ctx, discord.Interaction):
+            await ctx.response.send_message(embed=embed, ephemeral=True)
+        else:
+            await ctx.reply(embed=embed)
 
 async def moderation_insights(
     interaction: discord.Interaction

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import discord
+from discord.ext import commands
 import src.core.configs.bot_details as Configs
 
 from datetime import datetime, timezone
@@ -286,7 +287,7 @@ class LOAStaffsView(discord.ui.LayoutView):
         self.add_item(self.container)
 
 class StaffsView(discord.ui.LayoutView):
-    def __init__(self, interaction: discord.Interaction, ranks: List[int], overall_details: Dict[str, Dict[str, int]]):
+    def __init__(self, interaction: discord.Interaction | commands.Context, ranks: List[int], overall_details: Dict[str, Dict[str, int]]):
         super().__init__(timeout=None)
 
         assert interaction.guild is not None
