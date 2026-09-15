@@ -20,6 +20,8 @@ from src.core.features.moderation.controller.lily_moderation_controller import (
     unban as unban_fn,
     release as release_fn,
     warn as warn_fn,
+    mod_logs as mod_logs_fn,
+    ms as ms_fn
 )
 
 from .groups import *
@@ -189,7 +191,7 @@ class LilyModeration(commands.Cog):
             await webhook.send(**kwargs)
 
     @commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
-    @commands.command(name='ban', description='Ban a user from the server', aliases=['b'])
+    @commands.hybrid_command(name='ban', description='Ban a user from the server', aliases=['b'])
     @permission(command_name="ban")
     async def ban(self, ctx: commands.Context, member: discord.User | discord.Member | None = None, *, reason="No reason provided"):
         if not member:
@@ -217,7 +219,7 @@ class LilyModeration(commands.Cog):
         await ban_user(self.bot_db, self.logging_controller, ctx, target_user, reason, proofs)
 
     @commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
-    @commands.command(name='quarantine', description='Quarantines an user from this server', aliases=['jail', 'j', 'q'])
+    @commands.hybrid_command(name='quarantine', description='Quarantines an user from this server', aliases=['jail', 'j', 'q'])
     @permission(command_name="quarantine")
     async def quarantine(self, ctx: commands.Context, member: discord.Member | discord.User | None = None, *, reason="No reason provided"):
         if not member:
@@ -237,7 +239,7 @@ class LilyModeration(commands.Cog):
         await quarantine_user(ctx, member, reason, proofs)
 
     @commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
-    @commands.command(name='unban', description='Unban a Particular User', aliases=['ub'])
+    @commands.hybrid_command(name='unban', description='Unban a Particular User', aliases=['ub'])
     @permission(command_name="unban")
     async def unban(self, ctx, user: discord.User | None = None, * ,reason: str="No reason provided"):
         if user is None:
@@ -247,7 +249,7 @@ class LilyModeration(commands.Cog):
         await unban_fn(ctx, user, reason)
 
     @commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
-    @commands.command(name='release', description='Release a member from quarantine', aliases=['qr', 'r'])
+    @commands.hybrid_command(name='release', description='Release a member from quarantine', aliases=['qr', 'r'])
     @permission(command_name="unban")
     async def release(self, ctx, user: discord.Member | None =None, * ,reason: str="No reason provided"):
         if user is None:
@@ -257,7 +259,7 @@ class LilyModeration(commands.Cog):
         await release_fn(ctx, user, reason)
 
     @commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
-    @commands.command(name='mute', description='Mute a user with desired input', aliases=['m'])
+    @commands.hybrid_command(name='mute', description='Mute a user with desired input', aliases=['m'])
     @permission(command_name="mute")
     async def mute(self, ctx:commands.Context, member:discord.Member | discord.User | None = None, duration:str="1",*, reason="No reason provided"):
         await ctx.defer()
@@ -270,7 +272,7 @@ class LilyModeration(commands.Cog):
         await mute_user(ctx, member, duration, reason, proofs)
 
     @commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
-    @commands.command(name='warn', description='Warn a user with a specific reason')
+    @commands.hybrid_command(name='warn', description='Warn a user with a specific reason')
     @permission(command_name="warn")
     async def warn(self, ctx:commands.Context, member:discord.Member | discord.User | None = None,*, reason="No reason provided"):
         await ctx.defer()
@@ -291,6 +293,55 @@ class LilyModeration(commands.Cog):
 
         await ctx.defer()
         await unmute_fn(ctx, member, reason)
+
+
+
+
+
+
+    """ Some pure prefix counter part"""
+    @commands.group(name="case", invoke_without_command=True)
+    async def case(self, ctx: commands.Context):
+        pass
+
+    @case.command(name="list")
+    @permission(command_name="modlogs")
+    async def case_list(
+        self,
+        ctx: commands.Context,
+        member: discord.User | discord.Member | None = None,
+    ):
+        target_id = member.id if member else ctx.author.id
+        
+        try:
+            user = await ctx.bot.fetch_user(target_id)
+        except Exception:
+            return
+
+        try:
+            await mod_logs_fn(
+                ctx,
+                user=user
+            )
+
+        except Exception as e:
+            print(f"Exception [ModLogs] : {e}")
+
+    @commands.command(name="modstats", aliases=["ms"])
+    @permission(command_name="ms")
+    async def stats(
+        self,
+        ctx: commands.Context,
+        member: discord.Member | discord.User | None = None
+    ):
+        user = member or ctx.author
+        await ms_fn(
+            ctx=ctx,
+            moderator=user,
+            page_start=0,
+            page_end=0
+        )
+
 
 
 async def setup(bot):
