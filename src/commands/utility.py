@@ -193,10 +193,10 @@ class LilyUtility(commands.Cog):
         description="Afk Utilities"
     )
 
-    timezone = app_commands.Group(
-        name = "timezone",
-        description="Timezone utility commands"
-    )
+    @commands.hybrid_group(name="timezone", description="Timezone utility commands", aliases=["tz"])
+    async def timezone(self, ctx: commands.Context):
+        if ctx.invoked_subcommand is None:
+            await ctx.reply(embed=simple_embed("Please specify a timezone subcommand.", 'cross'), ephemeral=True)
 
     #UID UTILITY
     @commands.command(name="id")
@@ -206,44 +206,45 @@ class LilyUtility(commands.Cog):
         else:
             await ctx.reply(str(user.id))
         
-    @app_commands.command(name='purge',description='Purge Message with specified amount')
-    @app_commands.checks.cooldown(1, 10.0)
-    @app_permission(command_name="purge")
-    async def purge(self, 
-                    interaction: discord.Interaction, 
-                    amount: int=0, 
-                    member: discord.Member | None = None,
-                    oldest_first: bool = False,
-
-        ):
+    @commands.hybrid_command(name='purge', description="Purge messages with a specified amount")
+    @commands.cooldown(1, 10.0, commands.BucketType.user)
+    @permission(command_name="purge")
+    async def purge(
+        self,
+        ctx: commands.Context,
+        amount: int = 0,
+        member: discord.Member | None = None,
+        oldest_first: bool = False,
+    ):
         if amount <= 0:
-            await interaction.response.send_message(embed=simple_embed("Specify a valid amount", 'cross'), ephemeral=True)
+            return await ctx.reply(embed=simple_embed("Specify a valid amount", 'cross'), ephemeral=True)
+
         if amount > 1000:
-            await interaction.response.send_message(embed=simple_embed("You cannot purge more than 1000 messages!", 'cross'), ephemeral=True)
-            return
+            return await ctx.reply(embed=simple_embed("You cannot purge more than 1000 messages!", 'cross'), ephemeral=True)
 
         def check(msg):
             return True if member is None else msg.author == member
 
-        await interaction.response.defer()
+        await ctx.defer()
         try:
-            if not isinstance(interaction.channel, discord.TextChannel):
-                await interaction.followup.send(embed=simple_embed("Failed to purge", 'cross'))
-                return
-            deleted = await interaction.channel.purge(
-                limit=amount, 
-                check=check, 
-                bulk=True, 
-                oldest_first=oldest_first, 
-                reason=f"Purged by {interaction.user.mention}"
-            )
-            await interaction.followup.send(embed=simple_embed(f"Deleted {len(deleted)} message(s)."))
-        except discord.Forbidden:
-            await interaction.followup.send(embed=simple_embed("I do not have app_permission to delete messages.", 'cross'))
-        except discord.HTTPException as e:
-            await interaction.followup.send(embed=simple_embed("An Unknown error occured", 'cross'))
+            if not isinstance(ctx.channel, discord.TextChannel):
+                return await ctx.reply(embed=simple_embed("Failed to purge", 'cross'))
 
-    @commands.command(name="ping")
+            deleted = await ctx.channel.purge(
+                limit=amount,
+                check=check,
+                bulk=True,
+                oldest_first=oldest_first,
+                reason=f"Purged by {ctx.author.mention}"
+            )
+            await ctx.reply(embed=simple_embed(f"Deleted {len(deleted)} message(s)."))
+        except discord.Forbidden:
+            await ctx.reply(embed=simple_embed("I do not have permission to delete messages.", 'cross'))
+        except discord.HTTPException:
+            await ctx.reply(embed=simple_embed("An unknown error occurred", 'cross'))
+
+            
+    @commands.hybrid_command(name="ping")
     async def ping(self, ctx: commands.Context):
         ws_latency = round(self.bot.latency * 1000, 2)
 
@@ -258,45 +259,77 @@ class LilyUtility(commands.Cog):
             )
         )
 
-    @app_commands.command(name='role',description='Assigns/Removes a specified role from the user (not case-sensitive)')
-    @app_commands.checks.cooldown(1, 5.0)
-    @app_permission(command_name="role")
-    async def role(self, interaction: discord.Interaction, user: discord.Member, role: discord.Role):
-        if interaction.guild is None or isinstance(interaction.user, discord.User):
-            await interaction.response.send_message(embed=simple_embed("You can only use this command inside an guild"), ephemeral=True)
-            return
-        if user is None and role_input is None:
-            await interaction.response.send_message(view=CI(interaction, "Role", ["role user role", f"role {interaction.guild.me.mention} Moderator", f"role {interaction.guild.me.mention} 1324893524184793130"]))
-            return
+    @commands.hybrid_command(name='role', description="Assigns/Removes a specified role from the user (not case-sensitive)")
+    @commands.cooldown(rate=5, per=1, type = commands.BucketType.user)
+    @permission(command_name="role")
+    async def role(
+        self,
+        ctx: commands.Context,
+        user: discord.Member | None = None,
+        role: discord.Role | None = None
+    ):
+        if ctx.guild is None:
+            return await ctx.reply(
+                embed=simple_embed("You can only use this command inside a guild"),
+                ephemeral=True
+            )
 
-        author = interaction.user
+        author = ctx.author
+        assert isinstance(author, discord.Member)
+
+        if user is None or role is None:
+            return await ctx.reply(
+                view=CI(ctx, "Role", [
+                    "role user role",
+                    f"role {ctx.guild.me.mention} Moderator",
+                    f"role {ctx.guild.me.mention} 1324893524184793130"
+                ])
+            )
 
         if (
-            author != interaction.guild.owner
+            author != ctx.guild.owner
             and author != user
             and author.top_role <= user.top_role
         ):
-            return await interaction.response.send_message(embed=simple_embed("You cannot modify someone with equal or higher top role.", 'cross'), ephemeral=True)
+            return await ctx.reply(
+                embed=simple_embed("You cannot modify someone with equal or higher top role.", 'cross'),
+                ephemeral=True
+            )
 
-        if role > author.top_role and author != interaction.guild.owner:
-            return await interaction.response.send_message(embed=simple_embed("You cannot assign a role that is higher than your top role.", 'cross'), ephemeral=True)
+        if role > author.top_role and author != ctx.guild.owner:
+            return await ctx.reply(
+                embed=simple_embed("You cannot assign a role that is higher than your top role.", 'cross'),
+                ephemeral=True
+            )
 
-        if interaction.guild.me.top_role <= role:
-            return await interaction.response.send_message(embed=simple_embed("I cannot manage that role because it is above my top role.", 'cross'), ephemeral=True)
+        if ctx.guild.me.top_role <= role:
+            return await ctx.reply(
+                embed=simple_embed("I cannot manage that role because it is above my top role.", 'cross'),
+                ephemeral=True
+            )
 
         bot_db: BotGlobalsDatabaseAccess = self.bot.db
         author_role_ids = [r.id for r in author.roles]
-        allowed = bot_db.can_assign_role(interaction.guild.id, author_role_ids, role.id)
+        allowed = bot_db.can_assign_role(ctx.guild.id, author_role_ids, role.id)
 
         if not allowed:
-            return await interaction.response.send_message(embed=simple_embed("You are not allowed to assign this role.", 'cross'), ephemeral=True)
+            return await ctx.reply(
+                embed=simple_embed("You are not allowed to assign this role.", 'cross'),
+                ephemeral=True
+            )
 
         if role in user.roles:
             await user.remove_roles(role, reason=f"Role removed by {author}")
-            return await interaction.response.send_message(embed=simple_embed(f"Removed role **{role.name}** from **{user.name}**."), ephemeral=True)
+            return await ctx.reply(
+                embed=simple_embed(f"Removed role **{role.name}** from **{user.name}**."),
+                ephemeral=True
+            )
         else:
             await user.add_roles(role, reason=f"Role given by {author}")
-            return await interaction.response.send_message(embed=simple_embed(f"Added role **{role.name}** to **{user.name}**."), ephemeral=True)
+            return await ctx.reply(
+                embed=simple_embed(f"Added role **{role.name}** to **{user.name}**."),
+                ephemeral=True
+            )
 
     @customize.command(name="role", description="Customize your role")  
     @app_commands.checks.cooldown(1, 5.0)
@@ -757,31 +790,34 @@ class LilyUtility(commands.Cog):
     @timezone.command(name="get", description="Get a timezone of a user")
     async def get_timezone(
         self,
-        interaction: discord.Interaction,
+        ctx: commands.Context,
         member: discord.Member | None = None
     ):
         db: BotGlobalsDatabaseAccess = self.bot.db
-        assert interaction.guild is not None
 
-        target_member = member or await interaction.guild.fetch_member(interaction.user.id)
+        if ctx.guild is None:
+            return await ctx.reply(
+                embed=simple_embed("This command can only be used inside a guild", 'cross'),
+                ephemeral=True
+            )
 
-        timezone = await db.get_timezone(target_member.id, interaction.guild.id)
+        target_member = member or await ctx.guild.fetch_member(ctx.author.id)
 
-        if not timezone:
-            await interaction.response.send_message(
+        tz_name = await db.get_timezone(target_member.id, ctx.guild.id)
+
+        if not tz_name:
+            return await ctx.reply(
                 embed=simple_embed(f"**{target_member.display_name}** hasn't set their timezone yet.", 'cross'),
                 ephemeral=True
             )
-            return
 
         try:
-            tz = ZoneInfo(timezone)
+            tz = ZoneInfo(tz_name)
         except ZoneInfoNotFoundError:
-            await interaction.response.send_message(
+            return await ctx.reply(
                 embed=simple_embed("Invalid timezone configured", 'cross'),
                 ephemeral=True
             )
-            return
 
         now = datetime.now(tz)
 
@@ -790,16 +826,16 @@ class LilyUtility(commands.Cog):
 
         description = (
             f"### {target_member.display_name}'s Timezone\n"
-            f"**Timezone:** `{timezone}`\n"
+            f"**Timezone:** `{tz_name}`\n"
             f"**Local time:** {formatted_time}\n"
             f"**Date:** {formatted_date}"
         )
 
-        requester_timezone = await db.get_timezone(interaction.user.id, interaction.guild.id)
+        requester_tz_name = await db.get_timezone(ctx.author.id, ctx.guild.id)
 
-        if requester_timezone:
+        if requester_tz_name:
             try:
-                requester_tz = ZoneInfo(requester_timezone)
+                requester_tz = ZoneInfo(requester_tz_name)
             except ZoneInfoNotFoundError:
                 requester_tz = None
 
@@ -823,7 +859,7 @@ class LilyUtility(commands.Cog):
         embed = discord.Embed(description=description, color=16777215)
         embed.set_thumbnail(url=target_member.display_avatar.url)
 
-        await interaction.response.send_message(embed=embed)
+        await ctx.reply(embed=embed)
 
     async def timezone_autocomplete(self, interaction: discord.Interaction, current):
             matches = [
@@ -835,39 +871,45 @@ class LilyUtility(commands.Cog):
                 for tz in matches[:25]
             ]
 
-    @app_commands.autocomplete(timezone=timezone_autocomplete)
     @timezone.command(name="set", description="Assign your own timezone")
+    @app_commands.autocomplete(timezone=timezone_autocomplete)
     async def set_timezone(
         self,
-        interaction: discord.Interaction,
+        ctx: commands.Context,
         timezone: str
     ):
         db: BotGlobalsDatabaseAccess = self.bot.db
-        assert interaction.guild is not None
+
+        if ctx.guild is None:
+            return await ctx.reply(
+                embed=simple_embed("This command can only be used inside a guild", 'cross'),
+                ephemeral=True
+            )
 
         try:
             ZoneInfo(timezone)
         except ZoneInfoNotFoundError:
-            await interaction.response.send_message(
+            return await ctx.reply(
                 embed=simple_embed(f"`{timezone}` is not a valid timezone.", 'cross'),
                 ephemeral=True
             )
-            return
 
         await db.set_timezone(
-            interaction.user.id,
-            interaction.guild.id,
+            ctx.author.id,
+            ctx.guild.id,
             timezone
         )
 
         now = datetime.now(ZoneInfo(timezone))
 
-        await interaction.response.send_message(
+        await ctx.reply(
             embed=simple_embed(
-            f"Your timezone has been set to `{timezone}`.\n"
-            f"Your local time is **{now.strftime('%A, %-I:%M %p')}**.", bold=False),
+                f"Your timezone has been set to `{timezone}`.\n"
+                f"Your local time is **{now.strftime('%A, %-I:%M %p')}**.", bold=False
+            ),
             ephemeral=True
         )
+
 
     @commands.hybrid_command(
         name="myprefix",
@@ -985,20 +1027,20 @@ class LilyUtility(commands.Cog):
     async def profile(self, interaction: discord.Interaction, member: discord.Member | None = None):
         ...
 
-    @app_commands.command(name="messages", description="View the number of messages sent by you or an user")
-    async def messages(self, interaction: discord.Interaction, member: discord.Member | discord.User | None = None):
+    @commands.hybrid_command(name="messages", description="View the number of messages sent by you or an user")
+    async def messages(self, ctx: commands.Context, member: discord.Member | discord.User | None = None):
         db: BotGlobalsDatabaseAccess = self.bot.db
 
-        if interaction.guild is None:
-            await interaction.response.send_message(
+        if ctx.guild is None:
+            await ctx.reply(
                 ephemeral=True,
                 embed=simple_embed("This command can only be executed inside a guild", 'cross')
             )
             return
 
-        target = member if member is not None else interaction.user
+        target = member if member is not None else ctx.author
 
-        msg_stats = await db.get_messages(interaction.guild.id, target.id)
+        msg_stats = await db.get_messages(ctx.guild.id, target.id)
 
         view = discord.ui.LayoutView().add_item(
             discord.ui.Container(
@@ -1020,7 +1062,7 @@ class LilyUtility(commands.Cog):
             )
         )
 
-        await interaction.response.send_message(view=view)
+        await ctx.reply(view=view)
 
     @app_commands.command(name="leaderboard", description="View the message leaderboard")
     @app_commands.describe(type="Which leaderboard to view")
@@ -1030,6 +1072,7 @@ class LilyUtility(commands.Cog):
         app_commands.Choice(name="Monthly", value=2),
         app_commands.Choice(name="Total", value=3),
     ])
+    @app_commands.checks.cooldown(1, 20.0)
     @app_commands.guild_only()
     async def leaderboard(
         self,
@@ -1045,7 +1088,7 @@ class LilyUtility(commands.Cog):
             )
             return
 
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer()
 
         try:
             results = await db.leaderboard(
@@ -1061,8 +1104,7 @@ class LilyUtility(commands.Cog):
                 leaderboard_type,
             )
             await interaction.followup.send(
-                embed=simple_embed("Something went wrong while fetching the leaderboard.", 'cross'),
-                ephemeral=True,
+                embed=simple_embed("Something went wrong while fetching the leaderboard.", 'cross')
             )
             return
 
@@ -1117,9 +1159,9 @@ class LilyUtility(commands.Cog):
         try:
             if img_bytes is not None:
                 file = discord.File(BytesIO(img_bytes), filename="leaderboard.png")
-                await interaction.followup.send(view=view, file=file, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+                await interaction.followup.send(view=view, file=file, allowed_mentions=discord.AllowedMentions.none())
             else:
-                await interaction.followup.send(view=view, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+                await interaction.followup.send(view=view, allowed_mentions=discord.AllowedMentions.none())
 
             view.message = await interaction.original_response()
         except Exception:
