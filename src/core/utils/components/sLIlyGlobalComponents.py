@@ -218,12 +218,11 @@ class LeaderboardView(discord.ui.LayoutView):
 
         for entry in entries:
             rank = entry["rank"]
-            medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, f"#{rank}")
 
             rows.append(
                 discord.ui.TextDisplay(
                     content=(
-                        f"**{medal}** <@{entry['member_id']}> — "
+                        f"{rank}. <@{entry['member_id']}> — "
                         f"**{entry['messages']:,}** messages"
                     )
                 )
