@@ -19,3 +19,5 @@ jishaku
 jinja2
 pilmoji
 unidecode
+pyyaml
+sqlalchemy
