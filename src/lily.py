@@ -1,4 +1,4 @@
-from typing import Optional, Set
+from typing import Optional
 from discord import app_commands
 import discord
 from discord.ext import commands, tasks
@@ -8,7 +8,12 @@ from src.core.logging.lily_logging import LilyLoggingController
 from src.core.utils.embeds.sLilyEmbed import simple_embed
 from src.core.features.moderation.components.lily_moderation_components import AppealButton
 from src.core.configs.path import CONFIG_DB
+
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+
 import re
+import time
 
 
 class Lily(commands.Bot):
@@ -20,6 +25,7 @@ class Lily(commands.Bot):
 
         self.lily_session = None
         self.db: Optional[BotGlobalsDatabaseAccess] = None
+        self.scheduler: Optional[AsyncIOScheduler] = None
         self.logging_controller: Optional[LilyLoggingController] = None
 
         super().__init__(command_prefix=self.prefix,intents=intents,help_command=None, owner_ids={1488556914605428988})
@@ -29,6 +35,16 @@ class Lily(commands.Bot):
         self.db = await BotGlobalsDatabaseAccess.connect(str(CONFIG_DB))
         self.logging_controller = LilyLoggingController(self.db)
 
+
+        """ Preconfigured CRON schedular """
+        jobstores = {
+            'default': SQLAlchemyJobStore(
+                url=f'sqlite:///{CONFIG_DB.resolve()}',
+                engine_options={'connect_args': {'timeout': 30}}
+            )
+        }
+        self.scheduler = AsyncIOScheduler(jobstores=jobstores)
+        self.scheduler.start()
         self.add_dynamic_items(AppealButton)
 
 
@@ -97,8 +113,9 @@ class Lily(commands.Bot):
 
     async def on_ready(self):
         print('Logged on as', self.user)
-        
+
         await self.modify_status.start()
+        
 
     async def on_guild_join(self, guild: discord.Guild):
         if self.db is not None:
@@ -109,7 +126,14 @@ class Lily(commands.Bot):
         member_count = 0
         for guild in self.guilds:
             member_count += guild.member_count or 0
-        activity = discord.Activity(type=discord.ActivityType.watching, name=f"{member_count:,} members!")
+
+        activity = discord.Activity(
+            type=discord.ActivityType.watching,
+            name=f"{member_count:,} users across {len(self.guilds):,} guilds",
+            timestamps={
+                "start": int(time.time() * 1000)
+            },
+        )
         await self.change_presence(activity=activity)
 
     async def on_message(self, message:discord.Message): 
