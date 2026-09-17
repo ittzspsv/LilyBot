@@ -300,11 +300,8 @@ class LilyModeration(commands.Cog):
 
 
     """ Some pure prefix counter part"""
-    @commands.group(name="case", invoke_without_command=True)
-    async def case(self, ctx: commands.Context):
-        pass
 
-    @case.command(name="list")
+    @commands.command(name="modlogs", aliases=["cases"])
     @permission(command_name="modlogs")
     async def case_list(
         self,
