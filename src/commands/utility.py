@@ -1263,9 +1263,12 @@ class LilyUtility(commands.Cog):
                 await ctx.reply(embed=simple_embed("Something went wrong while scheduling your reminder.", 'cross'))
                 return
 
-            await ctx.reply(content=(
-                f"Got it, I'll remind you in DMs {discord.utils.format_dt(run_time, style='R')}."
-            ))
+            await ctx.send(content=(
+                f"{ctx.author.mention} I Got it, I'll remind you in DMs {discord.utils.format_dt(run_time, style='R')}."
+            ), ephemeral=True)
+
+            if not ctx.interaction:
+                await ctx.message.delete()
         except Exception:
             logger.exception("Failed to execute remind function")
 
