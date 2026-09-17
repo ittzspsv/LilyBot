@@ -699,7 +699,7 @@ async def mod_logs(
     user: discord.Member | discord.User,
     moderator: discord.User | discord.Member | None = None,
     mod_type: str = "all"
-):
+) -> None:
     if ctx.guild is None:
         embed = simple_embed("Command requires guild object in order to execute", "cross")
         if isinstance(ctx, discord.Interaction):

@@ -1151,6 +1151,7 @@ class StrikesListView(discord.ui.LayoutView):
         *,
         guild_id: int,
         staff_id: int,
+        elevated: bool
     ) -> None:
         super().__init__(timeout=None)
 
@@ -1160,6 +1161,7 @@ class StrikesListView(discord.ui.LayoutView):
 
         self.guild_id = guild_id
         self.staff_id = staff_id
+        self.elevated = elevated
 
         self.channel = None
         self.message: discord.Message | None = None
@@ -1204,7 +1206,7 @@ class StrikesListView(discord.ui.LayoutView):
                         content=(
                             f"{heading}\n"
                             f"{status_marker}"
-                            f"> {Configs.emoji['shield']} Moderator: <@{strike['manager']}>\n"
+                            f"> {Configs.emoji['shield']} Management: <@{strike['manager'] if self.elevated else "Hidden"}>\n"
                             f"> {Configs.emoji['pencil']} Reason: {strike['reason']}"
                         )
                     ),
@@ -1264,6 +1266,7 @@ class StrikesListView(discord.ui.LayoutView):
                 self.db,
                 guild_id=self.guild_id,
                 staff_id=self.staff_id,
+                elevated=self.elevated
             )
             new_view.message = self.message
             await interaction.response.edit_message(view=new_view, allowed_mentions=discord.AllowedMentions.none())
@@ -1297,6 +1300,7 @@ class StrikesListView(discord.ui.LayoutView):
                 self.db,
                 guild_id=self.guild_id,
                 staff_id=self.staff_id,
+                elevated=self.elevated
             )
             new_view.message = self.message
 
@@ -1324,7 +1328,7 @@ class StrikesListView(discord.ui.LayoutView):
             await interaction.response.send_message(embed=simple_embed("Strike not found.", 'cross'), ephemeral=True)
             return
 
-        issued_by = f"<@{strike_info['issued_by_id']}>"
+        issued_by = f"<@{strike_info['issued_by_id']}>" if self.elevated else "Hidden"
         reason = strike_info["reason"] or "No reason provided"
         date_raw = strike_info["date"]
         date = f"<t:{int(datetime.fromisoformat(date_raw).timestamp())}:R>" if date_raw else "Unknown"

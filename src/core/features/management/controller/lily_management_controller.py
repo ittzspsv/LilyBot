@@ -6,6 +6,7 @@ from src.core.utils.embeds.sLilyEmbed import simple_embed
 from ..types.staff_management_types import QuotaCheckBy
 from typing import Optional, cast, Final, TYPE_CHECKING
 from ..embeds.staff_management_embed import *
+from src.core.features.permissions.lily_permissions import has_app_permission
 
 import matplotlib.pyplot as plt
 
@@ -453,7 +454,8 @@ async def list_strikes(interaction: discord.Interaction, staff: discord.Member):
             strikes_list_data=strikes_list_data,
             db=bot_db,
             guild_id=interaction.guild.id,
-            staff_id=staff.id
+            staff_id=staff.id,
+            elevated=has_app_permission(interaction, "strike_add")
         )
 
         await interaction.response.send_message(
