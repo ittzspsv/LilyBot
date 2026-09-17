@@ -33,7 +33,22 @@ async def _remainder(user_id: int, content: str):
         try:
             bot = get_instance()
             user = await bot.fetch_user(user_id)
-            await user.send(content=f"You asked me to remind you of this:\n- {content}")
+            assert bot.user is not None
+
+            view = discord.ui.LayoutView().add_item(
+                discord.ui.Container(
+                    discord.ui.Section(
+                        discord.ui.TextDisplay(content="## Remainder\n- You asked me to remind you of this"),
+                        discord.ui.TextDisplay(content=f"> {content}"),
+                        accessory=discord.ui.Thumbnail(
+                            media=bot.user.display_avatar.url,
+                        )
+                    )
+                )
+            ).add_item(
+                 discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small)
+            )
+            await user.send(view=view)
         except discord.Forbidden:
             logger.warning("Could not DM reminder to user %s: DMs closed", user_id)
             return
