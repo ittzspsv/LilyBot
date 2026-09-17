@@ -1,9 +1,8 @@
-import re
-import json
+from __future__ import annotations
 import discord
-import aiohttp
 import asyncio
 import time
+import re
 import logging
 
 
@@ -14,17 +13,32 @@ from src.core.features.permissions.lily_permissions import app_permission, permi
 from src.core.utils.components.sLIlyGlobalComponents import CommandInfo as CI
 from src.core.utils.embeds.sLilyEmbed import ParseAdvancedEmbed
 from src.core.utils.types.types import ChannelEnum, NotifiersEnum
-from src.core.logging.lily_logging import LilyLoggingController
 from zoneinfo import available_timezones, ZoneInfo, ZoneInfoNotFoundError
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
 from src.core.utils.components.sLIlyGlobalComponents import RoleCustomizationModal, Avatar, LeaderboardView
 from src.core.visuals.cards.quote import make_quote_card
 from src.core.visuals.cards.leaderboard import leaderboard_img
-from src.core.features.ticketing.transcript import transcript
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
+from typing import cast, TYPE_CHECKING
+from datetime import timedelta, timezone
+from src.core.bot import get_instance
+if TYPE_CHECKING:
+    from src.lily import Lily
 
 logger = logging.getLogger("lily")
+
+
+async def _remainder(user_id: int, content: str):
+        try:
+            bot = get_instance()
+            user = await bot.fetch_user(user_id)
+            await user.send(content=f"You asked me to remind you of this:\n- {content}")
+        except discord.Forbidden:
+            logger.warning("Could not DM reminder to user %s: DMs closed", user_id)
+            return
+        except Exception:
+            logger.exception("Failed to deliver reminder to user %s", user_id)
 
 
 class LilyUtility(commands.Cog):
@@ -120,7 +134,8 @@ class LilyUtility(commands.Cog):
                 unix_ts = int(afk_since.timestamp())
 
                 await message.reply(
-                    embed=simple_embed(f"Welcome back, {message.author.mention}! I've removed your AFK status. You were AFK Since <t:{unix_ts}:R>", 'check')
+                    content=f"Welcome back, {message.author.mention}! I've removed your AFK status. You were AFK Since <t:{unix_ts}:R>",
+                    allowed_mentions=discord.AllowedMentions.none()
                 )
 
         afk_mentions = []
@@ -825,7 +840,6 @@ class LilyUtility(commands.Cog):
         formatted_time = now.strftime("%-I:%M %p")
 
         description = (
-            f"### {target_member.display_name}'s Timezone\n"
             f"**Timezone:** `{tz_name}`\n"
             f"**Local time:** {formatted_time}\n"
             f"**Date:** {formatted_date}"
@@ -856,10 +870,19 @@ class LilyUtility(commands.Cog):
 
                     description += f"\n\n**Compared to you:**\n{difference_text}"
 
-        embed = discord.Embed(description=description, color=16777215)
-        embed.set_thumbnail(url=target_member.display_avatar.url)
+        view = discord.ui.LayoutView().add_item(
+            discord.ui.Container(
+                discord.ui.Section(
+                    discord.ui.TextDisplay(content=f"### {target_member.display_name}'s Timezone\n"),
+                    discord.ui.TextDisplay(content=description),
+                    accessory=discord.ui.Thumbnail(
+                        media=target_member.display_avatar.url,
+                    ),
+                ),
+            )
+        )
 
-        await ctx.reply(embed=embed)
+        await ctx.reply(view=view, ephemeral=True)
 
     async def timezone_autocomplete(self, interaction: discord.Interaction, current):
             matches = [
@@ -991,7 +1014,7 @@ class LilyUtility(commands.Cog):
                 except discord.HTTPException:
                     pass
 
-            await ctx.reply(embed=simple_embed(f"You are now AFK: {reason}"))
+            await ctx.send(content=f"{ctx.author.mention} You are now AFK: {reason}", allowed_mentions=discord.AllowedMentions.none())
         except Exception as e:
             print(e)
 
@@ -1030,7 +1053,6 @@ class LilyUtility(commands.Cog):
     @commands.hybrid_command(name="messages", description="View the number of messages sent by you or an user")
     async def messages(self, ctx: commands.Context, member: discord.Member | discord.User | None = None):
         db: BotGlobalsDatabaseAccess = self.bot.db
-
         if ctx.guild is None:
             await ctx.reply(
                 ephemeral=True,
@@ -1170,6 +1192,67 @@ class LilyUtility(commands.Cog):
                 interaction.guild.id,
                 leaderboard_type,
             )
+
+
+    @permission(command_name="remaind")
+    @commands.hybrid_command(name="remind", description="Create a bot remainder which reminds you")
+    async def create_remainder(self, ctx: commands.Context, duration: str, *, content: str = "A reminder"):
+        try:
+            bot = cast("Lily", ctx.bot)
+            scheduler = bot.scheduler
+
+            if scheduler is None:
+                logger.error("Reminder command invoked but bot.scheduler is None (user=%s)", ctx.author.id)
+                await ctx.reply(embed=simple_embed("Unknown error occurred while scheduling the task!"))
+                return
+
+            match = re.fullmatch(
+                r'(?:(?P<days>\d+)d)?(?:(?P<hours>\d+)h)?(?:(?P<minutes>\d+)m)?(?:(?P<seconds>\d+)s)?',
+                duration.strip()
+            )
+
+            if not match:
+                await ctx.reply(embed=simple_embed(
+                    "Couldn't parse that duration. Try something like `10m`, `2h30m`, or `1d`."
+                ))
+                return
+
+            parts = {k: int(v) for k, v in match.groupdict().items() if v is not None}
+
+            if not parts:
+                await ctx.reply(embed=simple_embed(
+                    "Couldn't parse that duration. Try something like `10m`, `2h30m`, or `1d`."
+                ))
+                return
+
+            delta = timedelta(**parts)
+            if delta.total_seconds() <= 0:
+                await ctx.reply(embed=simple_embed("Duration must be greater than zero."))
+                return
+
+            run_time = datetime.now(timezone.utc) + delta
+            job_id = f"remind_{ctx.author.id}_{int(run_time.timestamp())}"
+
+            try:
+                scheduler.add_job(
+                    _remainder,
+                    trigger="date",
+                    run_date=run_time,
+                    args=[ctx.author.id, content],
+                    id=job_id,
+                    replace_existing=True,
+                    misfire_grace_time=1000
+                )
+            except Exception:
+                logger.exception("Failed to schedule reminder job %s for user %s", job_id, ctx.author.id)
+                await ctx.reply(embed=simple_embed("Something went wrong while scheduling your reminder.", 'cross'))
+                return
+
+            await ctx.reply(content=(
+                f"Got it, I'll remind you in DMs {discord.utils.format_dt(run_time, style='R')}."
+            ))
+        except Exception:
+            logger.exception("Failed to execute remind function")
 
 async def setup(bot):
     await bot.add_cog(LilyUtility(bot))
