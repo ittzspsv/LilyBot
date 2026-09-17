@@ -3,6 +3,7 @@ import asyncio
 import logging
 
 from src.core.backups import ObjectStorageService
+from src.core.bot import set_instance
 from src.lily import Lily
 
 from dotenv import load_dotenv
@@ -19,6 +20,7 @@ logger = logging.getLogger("lily")
 
 async def lily_bot():
     bot = Lily()
+    set_instance(bot=bot)
 
     token = os.getenv("token")
     if not token:
