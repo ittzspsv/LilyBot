@@ -43,10 +43,9 @@ async def _remainder(user_id: int, content: str):
                         accessory=discord.ui.Thumbnail(
                             media=bot.user.display_avatar.url,
                         )
-                    )
+                    ),
+                    discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small)
                 )
-            ).add_item(
-                 discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small)
             )
             await user.send(view=view)
         except discord.Forbidden:
