@@ -73,7 +73,9 @@ async def _validate_moderation_target(
 
         quarantine_role = (
             discord.utils.get(ctx.guild.roles, name="Quarantine")
-            or discord.utils.get(ctx.guild.roles, name="Prisoner")
+            or discord.utils.get(ctx.guild.roles, name="Prisoner") or
+            discord.utils.get(ctx.guild.roles, name="Quarantined") or
+            discord.utils.get(ctx.guild.roles, name="Jailed")
         )
 
         if quarantine_role in user_input.roles:
@@ -248,9 +250,11 @@ async def quarantine_user(
         return
 
     quarantine_role = (
-        discord.utils.get(ctx.guild.roles, name="Quarantine")
-        or discord.utils.get(ctx.guild.roles, name="Prisoner")
-    )
+                discord.utils.get(ctx.guild.roles, name="Quarantine")
+                or discord.utils.get(ctx.guild.roles, name="Prisoner") or
+                discord.utils.get(ctx.guild.roles, name="Quarantined") or
+                discord.utils.get(ctx.guild.roles, name="Jailed")
+            )
 
     if not quarantine_role or quarantine_role >= ctx.guild.me.top_role:
         return await bot.send(ctx, embed=simple_embed("Quarantine role issue.", "cross"))
@@ -498,9 +502,11 @@ async def release(
     logging_controller = bot.logging_controller
 
     quarantine_role = (
-        discord.utils.get(ctx.guild.roles, name="Quarantine")
-        or discord.utils.get(ctx.guild.roles, name="Prisoner")
-    )
+                discord.utils.get(ctx.guild.roles, name="Quarantine")
+                or discord.utils.get(ctx.guild.roles, name="Prisoner") or
+                discord.utils.get(ctx.guild.roles, name="Quarantined") or
+                discord.utils.get(ctx.guild.roles, name="Jailed")
+            )
 
     if not quarantine_role:
         await bot.send(ctx, embed=simple_embed("No Quarantine/Prisoner role found in this server.", "cross"))
@@ -910,6 +916,7 @@ async def setup_mod_appeal(
         interaction.user: discord.PermissionOverwrite(
             view_channel=True,
             send_messages=True,
+            manage_channels=True,
             read_message_history=True,
             send_messages_in_threads=True,
             attach_files=True,
@@ -961,8 +968,7 @@ async def setup_mod_appeal(
 
         webhook = await forum.create_webhook(
             name="Lily Webhook"
-        )
-        
+        )        
 
         await bot_db.set_webhook(
             interaction.guild.id,
