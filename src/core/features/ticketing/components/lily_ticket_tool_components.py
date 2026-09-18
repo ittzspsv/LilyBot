@@ -737,6 +737,38 @@ class TicketComponentEmbed(discord.ui.LayoutView):
                     )
                 )
 
+            elif field_type in ("guild_invite",):
+                if value["flag"] == 0:
+                    guild_icon = value.get("icon") or "https://img.icons8.com/?size=100&id=2mIgusGquJFz&format=png&color=000000"
+                    ticket_details.append(
+                        discord.ui.Section(
+                            discord.ui.TextDisplay(content=f"### {value.get('name', 'Unknown server')}"),
+                            discord.ui.TextDisplay(
+                                content=(
+                                    f"- **Member Count: **: {value['member_count']}\n"
+                                    f"- **Guild Owner: **: <@{value['owner_id']}>"
+                                )
+                            ),
+                            accessory=discord.ui.Thumbnail(media=guild_icon)
+                        )
+                    )
+
+                    ticket_details.append(
+                        discord.ui.ActionRow(
+                            discord.ui.Button(
+                                label="Invite URL",
+                                style=discord.ButtonStyle.link,
+                                url=value["invite_url"]
+                            )
+                        )
+                    )
+
+                else:
+                    ticket_details.append(
+                        discord.ui.TextDisplay(content=value["invite_url"])
+                    )
+
+
 
         ticket_details_container = discord.ui.Container(
             discord.ui.TextDisplay(
@@ -909,7 +941,7 @@ class TicketModal(discord.ui.Modal):
             component = None
 
             """ Assign Components based on field type """
-            if field_type in ("member", "long", "short"):
+            if field_type in ("member", "long", "short", "guild_invite"):
                 style = (
                     discord.TextStyle.paragraph
                     if field_type == "long"
@@ -1279,7 +1311,51 @@ class TicketModal(discord.ui.Modal):
                     })
 
                 ...
-            
+
+            elif field_type == "guild_invite":
+                assert isinstance(item.component, discord.ui.TextInput)
+                client = interaction.client
+
+                try:
+                    invite = await client.fetch_invite(item.component.value)
+                    guild = invite.guild
+
+                    if guild is None or isinstance(guild, discord.Object):
+                        field_data.append({
+                            "field": field,
+                            "value": {
+                                "flag": 0,
+                                "url": item.component.value
+                            }
+                        })
+
+                    else:
+                        field_data.append({
+                            "field": field,
+                            "value": {
+                                "flag": 0,
+                                "name": guild.name,
+                                "icon": guild.icon.url if guild.icon else None,
+                                "member_count": invite.approximate_member_count,
+                                "owner_id": guild.owner.id if isinstance(guild, discord.Guild) and guild.owner is not None else 0,
+                                "invite_url": f"https://discord.com/invite/{invite.code}",
+                            }
+                        })
+                except Exception:
+                    logger.warning(
+                        "TicketModal.on_submit: could not resolve guild invite field value %r, falling back to raw text",
+                        item.component.value,
+                        exc_info=True
+                    )
+                    field_data.append({
+                        "field": field,
+                        "value": {
+                            "flag": 0,
+                            "invite_url": item.component.value
+                        }
+                    })
+
+
             elif field_type == "role_select":
                 assert isinstance(item.component, discord.ui.RoleSelect)
                 field_data.append({
