@@ -1,5 +1,6 @@
 import discord
 from discord import app_commands
+from discord.ext import commands
 
 from src.core.features.permissions.lily_permissions import app_permission
 from src.core.features.management.controller import lily_management_controller as controller
@@ -50,7 +51,7 @@ class StaffCommands(app_commands.Group):
     @app_permission(command_name="staff_add")
     @app_commands.guild_only()
     async def add(self, interaction: discord.Interaction, staff: discord.Member, rank: discord.Role | None = None):
-        await controller.add_staff(interaction, staff)
+        await controller.add_staff(interaction, staff, rank=rank)
 
     @app_commands.command(name='remove', description='Removes a member from staff_data')
     @app_permission(command_name="staff_remove")
