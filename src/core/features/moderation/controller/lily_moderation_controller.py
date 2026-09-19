@@ -213,6 +213,8 @@ async def ban_user(
     except Exception:
         logger.exception("Failed to log/send ban confirmation for user %s in guild %s", member.id, ctx.guild.id)
 
+
+
 async def quarantine_user(
     ctx: commands.Context | discord.Interaction,
     user_input: discord.User | discord.Member,
@@ -264,8 +266,19 @@ async def quarantine_user(
 
     author = ctx.author if isinstance(ctx, commands.Context) else ctx.user
 
+
+    roles_before_quarantine = [
+        role.id for role in member.roles
+        if role != ctx.guild.default_role
+        and role < ctx.guild.me.top_role
+        and not role.managed
+    ]
+
     try:
-        await member.add_roles(quarantine_role, reason=f"Quarantine by {author} | {reason}")
+        await member.edit(
+            roles=[quarantine_role],
+            reason=f"Quarantine by {author} | {reason}",
+        )
     except discord.Forbidden:
         logger.exception("Missing permissions to quarantine user %s in guild %s", member.id, ctx.guild.id)
         await bot.send(ctx, embed=simple_embed("I don't have permission to add the Quarantine role.", "cross"))
@@ -280,11 +293,15 @@ async def quarantine_user(
         if proofs:
             await bot.send(ctx, embed=simple_embed(quarantine_message))
             await logging_controller.log_moderation_action(
-                ctx, author, member, "quarantine", reason, proofs.copy()
+                ctx, author, member, "quarantine", reason, proofs.copy(), metadata={
+                    "roles_before_quarantine": roles_before_quarantine
+                }
             )
         else:
             case_id = await logging_controller.log_moderation_action(
-                ctx, author, member, "quarantine", reason, proofs.copy()
+                ctx, author, member, "quarantine", reason, proofs.copy(), metadata={
+                    "roles_before_quarantine": roles_before_quarantine
+                }
             )
             if case_id and not _force_no_proofs:
                 view = CaseProofsView(case_id, logging_controller, None)
@@ -294,6 +311,7 @@ async def quarantine_user(
                 await bot.send(ctx, embed=simple_embed(quarantine_message))
     except Exception:
         logger.exception("Failed to log/send quarantine confirmation for user %s in guild %s", member.id, ctx.guild.id)
+
 
 async def mute_user(
     ctx: commands.Context | discord.Interaction,
