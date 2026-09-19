@@ -1127,16 +1127,46 @@ class TicketModal(discord.ui.Modal):
                 ephemeral=True
             )
             return None
-        except discord.HTTPException:
-            logger.exception(
-                "TicketModal.ticket_thread_constructor: HTTP error creating ticket channel in guild %s",
-                interaction.guild.id
-            )
-            await interaction.followup.send(
-                embed=simple_embed("Failed to create the ticket channel due to a network error!", 'cross'),
-                ephemeral=True
-            )
-            return None
+        except discord.HTTPException as e:
+            if e.code == 50035:
+                logger.warning(
+                    "TicketModal.ticket_thread_constructor: invalid form body creating ticket channel in guild %s: %s",
+                    interaction.guild.id, e.text
+                )
+                if channel_category is not None and "parent_id" in str(e.text):
+                    await interaction.followup.send(
+                        embed=simple_embed(
+                            "This ticket category is full (max 50 channels). Please contact an admin to free up space or set a new category.",
+                            'cross'
+                        ),
+                        ephemeral=True
+                    )
+                else:
+                    await interaction.followup.send(
+                        embed=simple_embed(f"Discord rejected the channel creation request: {e.text}", 'cross'),
+                        ephemeral=True
+                    )
+                return None
+            elif e.status == 429:
+                logger.warning(
+                    "TicketModal.ticket_thread_constructor: rate limited creating ticket channel in guild %s",
+                    interaction.guild.id
+                )
+                await interaction.followup.send(
+                    embed=simple_embed("Discord is rate-limiting requests right now, please try again shortly.", 'cross'),
+                    ephemeral=True
+                )
+                return None
+            else:
+                logger.exception(
+                    "TicketModal.ticket_thread_constructor: HTTP error creating ticket channel in guild %s",
+                    interaction.guild.id
+                )
+                await interaction.followup.send(
+                    embed=simple_embed("Failed to create the ticket channel due to a Discord API error!", 'cross'),
+                    ephemeral=True
+                )
+                return None
 
         if not isinstance(opener, discord.Member):
             logger.error(
