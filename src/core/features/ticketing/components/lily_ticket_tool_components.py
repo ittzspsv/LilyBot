@@ -1185,7 +1185,8 @@ class TicketModal(discord.ui.Modal):
             )
 
             ticket_details_message: discord.Message = await ticket_details_thread.send(
-                view=view
+                view=view,
+                allowed_mentions=discord.AllowedMentions.none()
             )
         except discord.HTTPException:
             logger.exception(
