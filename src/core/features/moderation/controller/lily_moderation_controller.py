@@ -312,7 +312,6 @@ async def quarantine_user(
     except Exception:
         logger.exception("Failed to log/send quarantine confirmation for user %s in guild %s", member.id, ctx.guild.id)
 
-
 async def mute_user(
     ctx: commands.Context | discord.Interaction,
     user: discord.Member | discord.User,
@@ -501,7 +500,7 @@ async def release(
     ctx: commands.Context | discord.Interaction,
     member: discord.Member | None = None,
     reason: str = "No reason provided"
-):
+) -> None:
     if isinstance(ctx, commands.Context):
         bot = cast("Lily", ctx.bot)
         author = ctx.author
@@ -535,7 +534,32 @@ async def release(
         return
 
     try:
-        await member.remove_roles(quarantine_role, reason=f"By {author} | {reason}")
+        assert bot.db is not None
+        result = await bot.db.get_case_latest(
+            case_type="quarantine",
+            guild_id=ctx.guild.id,
+            target_user_id=member.id,
+        )
+
+        roles_to_restore: list[discord.Role] = []
+        if result:
+            metadata = result.get("metadata", {})
+            role_ids = metadata.get("roles_before_quarantine", [])
+
+            for role_id in role_ids:
+                role = ctx.guild.get_role(role_id)
+                if role is None:
+                    continue
+                if role >= ctx.guild.me.top_role:
+                    continue
+                roles_to_restore.append(role)
+
+        new_roles = [
+            role for role in member.roles if role != quarantine_role
+        ] + roles_to_restore
+
+        await member.edit(roles=new_roles, reason=f"By {author} | {reason}")
+
         await bot.send(ctx, embed=simple_embed(f"Released {member.mention} from quarantine."))
         await logging_controller.log_moderation_action(
             ctx,
@@ -553,6 +577,7 @@ async def release(
     except Exception:
         logger.exception("Unexpected error while releasing user %s in guild %s", member.id, ctx.guild.id)
         await bot.send(ctx, embed=simple_embed("An unexpected error occurred while releasing this user.", "cross"))
+
 
 async def warn(
     ctx: commands.Context | discord.Interaction,
