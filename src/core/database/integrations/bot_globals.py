@@ -1177,6 +1177,42 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         row = await self.fetch_one(query, params)
         return dict(row) if row is not None else None
 
+    async def get_case_latest(
+        self,
+        case_type: str,
+        guild_id: int,
+        target_user_id: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        conditions = ["guild_id = ?", "mod_type = ?", "deleted = 0"]
+        params: list[Any] = [guild_id, case_type]
+
+        if target_user_id is not None:
+            conditions.append("target_user_id = ?")
+            params.append(target_user_id)
+
+        row = await self.fetch_one(
+            f"""
+            SELECT id, guild_id, moderator_id, target_user_id, mod_type,
+                reason, timestamp, deleted, metadata
+            FROM modlogs
+            WHERE {' AND '.join(conditions)}
+            ORDER BY timestamp DESC, id DESC
+            LIMIT 1
+            """,
+            tuple(params),
+        )
+
+        if row is None:
+            return None
+
+        case = dict(row)
+        try:
+            case["metadata"] = json.loads(case["metadata"]) if case["metadata"] else {}
+        except (TypeError, json.JSONDecodeError):
+            case["metadata"] = {}
+
+        return case
+
     async def delete_case(self, case_id: int, guild_id: int) -> Dict[str, Any]:
         if not case_id:
             return {
