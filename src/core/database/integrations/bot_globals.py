@@ -1470,10 +1470,10 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         await self.ensure_member(member_id=staff_id, guild_id=guild_id)
         await self.execute(
             """
-            INSERT OR IGNORE INTO staffs (staff_id, guild_id, name)
-            VALUES (?, ?, 'Unknown')
+            INSERT OR IGNORE INTO staffs (staff_id, guild_id, name, stale)
+            VALUES (?, ?, 'Unknown', 1)
             """,
-            (staff_id, guild_id),
+            (staff_id, guild_id)
         )
 
     async def fetch_staff_detail(self, staff_id: int, guild_id: int) -> Dict[str, Any]:
@@ -1901,11 +1901,16 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         return current_role_row["priority"] >= updater_row["priority"]
 
     async def add_staff(
-        self, staff_id: int, guild_id: int, name: str, avatar_url: str, role_id: int | None = None
+        self, 
+        staff_id: int, 
+        guild_id: int, 
+        name: str, 
+        avatar_url: str, 
+        role_id: int | None = None
     ) -> Dict[str, Any]:
         await self.ensure_member(staff_id, guild_id)
         row = await self.fetch_one(
-            "SELECT retired FROM staffs WHERE staff_id = ? AND guild_id = ?",
+            "SELECT retired, stale FROM staffs WHERE staff_id = ? AND guild_id = ?",
             (staff_id, guild_id),
         )
 
@@ -1916,28 +1921,29 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
                 "message": "The given role is not a valid staff rank."
             }
 
+        today = datetime.now().strftime("%d/%m/%Y")
+
         if row:
-            if row["retired"] == 1:
+            if row["retired"] == 1 or row["stale"] == 1:
                 await self.execute(
                     """
                     UPDATE staffs
-                    SET retired = 0, name = ?, avatar_url = ?
+                    SET retired = 0, stale = 0, name = ?, avatar_url = ?, joined_on = ?
                     WHERE staff_id = ? AND guild_id = ?
                     """,
-                    (name, avatar_url, staff_id, guild_id),
+                    (name, avatar_url, today, staff_id, guild_id),
                     commit=True,
                 )
             else:
                 return {"success": False, "message": "Staff entry already exists"}
         else:
-            today = datetime.now().strftime("%d/%m/%Y")
             await self.execute(
                 """
                 INSERT INTO staffs (
-                    staff_id, name, guild_id, on_loa, retired,
+                    staff_id, name, guild_id, on_loa, retired, stale,
                     responsibility, avatar_url, joined_on
                 )
-                VALUES (?, ?, ?, 0, 0, 'None', ?, ?)
+                VALUES (?, ?, ?, 0, 0, 0, 'None', ?, ?)
                 """,
                 (staff_id, name, guild_id, avatar_url, today),
                 commit=True,
@@ -1949,10 +1955,9 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
                 "SELECT role_id FROM roles WHERE guild_id = ? AND role_type = 'staff_base'",
                 (guild_id,),
             )
-
-            base_roles = [row["role_id"] for row in configs]
+            base_roles = [r["role_id"] for r in configs]
         except Exception:
-            pass  
+            pass
 
         if role_id is not None:
             initial_role: Optional[int] = role_id
@@ -2576,7 +2581,7 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         elevated: bool = False,
         rank_id: int | None = None
     ) -> Dict[str, Any]:
-        if staff_id == updated_by:
+        if staff_id == updated_by and not elevated:
             return {"success": False, "message": "You cannot update yourself."}
         if update_type not in ("promotion", "demotion"):
             return {"success": False, "message": "Invalid update_type."}
