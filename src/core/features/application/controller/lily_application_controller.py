@@ -29,6 +29,12 @@ async def create_application(interaction: Interaction):
 
     try:
         application_groups: List[Dict[str, Any]] = await bot_db.app_management_db.get_groups_by_guild(interaction.guild.id)
+        if len(application_groups) <= 0:
+            await interaction.response.send_message(
+                embed=simple_embed("Please create application question groups first.  Use /application group new to proceed", 'cross'),
+                ephemeral=True
+            )
+            return
     except Exception:
         logger.exception(
             "Failed to fetch application groups for guild %s while opening create_application modal",
@@ -111,7 +117,7 @@ async def send_application_view(
         )
         raise
 
-    await interaction.response.send_message(embed=simple_embed(f"Successfully sent application to {channel.mention}"))
+    await interaction.response.send_message(embed=simple_embed(f"Successfully sent application to {channel.mention}"), ephemeral=True)
 
 async def update_application(
         interaction: Interaction,
@@ -177,7 +183,8 @@ async def get_application(interaction: Interaction, application_id: int):
             f"**{application['name']}**\n"
             f"{application['description']}\n"
             f"-# Active: {bool(application['active'])} | Wave: {application['current_wave']}"
-        )
+        ),
+        ephemeral=True
     )
 
 async def list_applications(interaction: Interaction, active_only: bool = False):
@@ -201,7 +208,8 @@ async def list_applications(interaction: Interaction, active_only: bool = False)
 
     if not applications:
         await interaction.response.send_message(
-            embed=simple_embed("No applications found for this server.")
+            embed=simple_embed("No applications found for this server."),
+            ephemeral=True
         )
         return
 
@@ -212,7 +220,8 @@ async def list_applications(interaction: Interaction, active_only: bool = False)
     ]
 
     await interaction.response.send_message(
-        embed=simple_embed("\n".join(lines))
+        embed=simple_embed("\n".join(lines)),
+        ephemeral=True
     )
 
 async def set_active(
@@ -352,7 +361,8 @@ async def set_active(
         raise app_commands.CheckFailure("Failed to update the application message due to a Discord error.")
 
     await interaction.response.send_message(
-        embed=simple_embed(response)
+        embed=simple_embed(response),
+        ephemeral=True
     )
 
 async def advance_wave(interaction: Interaction, application_id: int):
@@ -379,7 +389,8 @@ async def advance_wave(interaction: Interaction, application_id: int):
         raise app_commands.CheckFailure("Application not found.")
 
     await interaction.response.send_message(
-        embed=simple_embed(f"Advanced application to wave {new_wave}.")
+        embed=simple_embed(f"Advanced application to wave {new_wave}."),
+        ephemeral=True
     )
 
 async def delete_application(interaction: Interaction, application_id: int):
@@ -400,7 +411,8 @@ async def delete_application(interaction: Interaction, application_id: int):
 
     if success:
         await interaction.response.send_message(
-            embed=simple_embed("Successfully deleted the application.")
+            embed=simple_embed("Successfully deleted the application."),
+            ephemeral=True
         )
     else:
         logger.info(
@@ -459,7 +471,8 @@ async def create_question(
     await interaction.response.send_message(
         embed=simple_embed(
             f"Successfully created question **#{result['id']}**."
-        )
+        ),
+        ephemeral=True
     )
 
 async def get_question(interaction: Interaction, question_id: int):
@@ -494,7 +507,8 @@ async def get_question(interaction: Interaction, question_id: int):
             f"-# Length: {question['min_length'] or 0}-{question['max_length'] or '∞'}\n"
             f"-# Multiline: {bool(question['multiline'])}\n"
             f"-# Metadata: {question['metadata'] or 'None'}"
-        )
+        ),
+        ephemeral=True
     )
 
 async def list_questions(interaction: Interaction):
@@ -517,7 +531,8 @@ async def list_questions(interaction: Interaction):
 
     if not questions:
         await interaction.response.send_message(
-            embed=simple_embed("No questions found for this server.")
+            embed=simple_embed("No questions found for this server."),
+            ephemeral=True
         )
         return
 
@@ -527,7 +542,8 @@ async def list_questions(interaction: Interaction):
     ]
 
     await interaction.response.send_message(
-        embed=simple_embed("\n".join(lines))
+        embed=simple_embed("\n".join(lines)),
+        ephemeral=True
     )
 
 async def update_question(
@@ -568,7 +584,8 @@ async def update_question(
 
     if success:
         await interaction.response.send_message(
-            embed=simple_embed("Successfully updated question.")
+            embed=simple_embed("Successfully updated question."),
+            ephemeral=True
         )
     else:
         logger.warning(
@@ -595,7 +612,8 @@ async def delete_question(interaction: Interaction, question_id: int):
 
     if success:
         await interaction.response.send_message(
-            embed=simple_embed("Successfully deleted the question.")
+            embed=simple_embed("Successfully deleted the question."),
+            ephemeral=True
         )
     else:
         logger.info(
@@ -634,7 +652,8 @@ async def create_group(
     await interaction.response.send_message(
         embed=simple_embed(
             f"Successfully created group **#{result['id']}** with {len(question_ids)} question(s)."
-        )
+        ),
+        ephemeral=True
     )
 
 async def get_group(interaction: Interaction, group_id: int):
@@ -676,7 +695,8 @@ async def get_group(interaction: Interaction, group_id: int):
             f"**#{group['id']}** {group['name']}\n"
             f"{group['description']}\n\n"
             f"**Questions:**\n{question_lines}"
-        )
+        ),
+        ephemeral=True
     )
 
 async def list_groups(interaction: Interaction):
@@ -699,7 +719,8 @@ async def list_groups(interaction: Interaction):
 
     if not groups:
         await interaction.response.send_message(
-            embed=simple_embed("No groups found for this server.")
+            embed=simple_embed("No groups found for this server."),
+            ephemeral=True
         )
         return
 
@@ -709,7 +730,8 @@ async def list_groups(interaction: Interaction):
     ]
 
     await interaction.response.send_message(
-        embed=simple_embed("\n".join(lines))
+        embed=simple_embed("\n".join(lines)),
+        ephemeral=True
     )
 
 async def update_group(
@@ -740,7 +762,8 @@ async def update_group(
 
     if success:
         await interaction.response.send_message(
-            embed=simple_embed("Successfully updated group.")
+            embed=simple_embed("Successfully updated group."),
+            ephemeral=True
         )
     else:
         logger.warning(
@@ -785,7 +808,8 @@ async def set_group_questions(
     await interaction.response.send_message(
         embed=simple_embed(
             f"Successfully updated group questions ({len(parsed_ids)} question(s))."
-        )
+        ),
+        ephemeral=True
     )
 
 async def delete_group(interaction: Interaction, group_id: int):
@@ -806,7 +830,8 @@ async def delete_group(interaction: Interaction, group_id: int):
 
     if success:
         await interaction.response.send_message(
-            embed=simple_embed("Successfully deleted the group.")
+            embed=simple_embed("Successfully deleted the group."),
+            ephemeral=True
         )
     else:
         logger.info(
@@ -925,7 +950,7 @@ async def applicant_entry_delete(
         raise
 
     if application_submission is None:
-        await interaction.response.send_message(embed=simple_embed("This applicant has not submitted any application", 'cross'))
+        await interaction.response.send_message(embed=simple_embed("This applicant has not submitted any application", 'cross'), ephemeral=True)
         return
 
     submission_thread: int | None = application_submission["submission_thread_reference"]
@@ -967,13 +992,13 @@ async def applicant_entry_delete(
         raise
 
     if success:
-        await interaction.response.send_message(embed=simple_embed("Successfully Deleted Submission"))
+        await interaction.response.send_message(embed=simple_embed("Successfully Deleted Submission"), ephemeral=True)
     else:
         logger.warning(
             "applicant_entry_delete: delete_submission reported failure for submission %s (guild %s)",
             application_submission["id"], interaction.guild.id,
         )
-        await interaction.response.send_message(embed=simple_embed("Failed to Delete Submission", 'cross'))
+        await interaction.response.send_message(embed=simple_embed("Failed to Delete Submission", 'cross'), ephemeral=True)
 
 async def flush_submission(interaction: discord.Interaction, application_id: int, wave: int):
     bot_db = cast("Lily", interaction.client).db
@@ -1319,7 +1344,8 @@ async def update_applicant(
         message += f"\n**Reason:** {reason}"
 
     await interaction.response.send_message(
-        embed=simple_embed(message)
+        embed=simple_embed(message),
+        ephemeral=True
     )
 
 async def application_invalidate(
