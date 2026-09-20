@@ -227,10 +227,15 @@ class CreateApplicationModal(discord.ui.Modal, title="Create Application"):
             )
 
 class UpdateApplicationModal(discord.ui.Modal, title="Update Application"):
-    def __init__(self, bot_db: BotGlobalsDatabaseAccess, application: Dict[str, Any]) -> None:
+    def __init__(self, 
+                 bot_db: BotGlobalsDatabaseAccess, 
+                 application: Dict[str, Any], 
+                 _application_groups: List[Dict[str, Any]]
+        ) -> None:
         super().__init__()
         self.bot_db: BotGlobalsDatabaseAccess = bot_db
         self.application = application
+        self.application_groups_data = _application_groups
 
         self.name = discord.ui.Label(
             text="Application Name",
@@ -270,8 +275,29 @@ class UpdateApplicationModal(discord.ui.Modal, title="Update Application"):
             )
         )
 
+        group_options = [
+            discord.SelectOption(
+                label=group_data.get("name", "Unknown")[:100],
+                description=group_data.get("description", "No Description")[:100],
+                value=str(group_data["id"]),
+                default=group_data["id"] in application["group_assignments"]
+            )
+            for group_data in self.application_groups_data
+        ]
+
+        self.application_groups = discord.ui.Label(
+            text="Application Groups",
+            description="Select the group of questions for your applications",
+            component=discord.ui.Select(
+                min_values=1,
+                max_values=min(len(group_options), 25),
+                options=group_options
+            )
+        )
+
         self.add_item(self.name)
         self.add_item(self.description)
+        self.add_item(self.application_groups)
         self.add_item(self.submit_btn_name)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
@@ -286,6 +312,7 @@ class UpdateApplicationModal(discord.ui.Modal, title="Update Application"):
         assert isinstance(self.name.component, discord.ui.TextInput)
         assert isinstance(self.description.component, discord.ui.TextInput)
         assert isinstance(self.submit_btn_name.component, discord.ui.TextInput)
+        assert isinstance(self.application_groups.component, discord.ui.Select)
 
         try:
             success = await self.bot_db.app_management_db.update_application(
@@ -293,7 +320,8 @@ class UpdateApplicationModal(discord.ui.Modal, title="Update Application"):
                 self.application["id"],
                 self.name.component.value,
                 self.description.component.value,
-                self.submit_btn_name.component.value
+                self.submit_btn_name.component.value,
+                [int(i) for i in self.application_groups.component.values]
             )
         except Exception:
             logger.exception(

@@ -124,6 +124,7 @@ async def update_application(
     assert bot_db is not None
 
     try:
+        application_groups = await bot_db.app_management_db.get_groups_by_guild(interaction.guild.id)
         application = await bot_db.app_management_db.get_application(interaction.guild.id, application_id)
     except Exception:
         logger.exception(
@@ -140,7 +141,7 @@ async def update_application(
         raise app_commands.CheckFailure("Application not found.")
 
     try:
-        await interaction.response.send_modal(UpdateApplicationModal(bot_db, application))
+        await interaction.response.send_modal(UpdateApplicationModal(bot_db, application, application_groups))
     except Exception:
         logger.exception(
             "Failed to send UpdateApplicationModal for application %s (guild %s)",
@@ -973,6 +974,76 @@ async def applicant_entry_delete(
             application_submission["id"], interaction.guild.id,
         )
         await interaction.response.send_message(embed=simple_embed("Failed to Delete Submission", 'cross'))
+
+async def flush_submission(interaction: discord.Interaction, application_id: int, wave: int):
+    bot_db = cast("Lily", interaction.client).db
+    assert bot_db is not None
+    assert interaction.guild is not None
+
+    results = await bot_db.app_management_db.get_pending_submissions(
+        guild_id=interaction.guild.id,
+        application_id=application_id
+    )
+
+    if results is None:
+        await interaction.response.send_message("No pending submission has been found", ephemeral=True)
+        return
+
+    await interaction.response.send_message("Job has been started", ephemeral=True)
+
+    failed: list[int] = []
+
+    for r in results:
+        if r["wave"] != wave:
+            continue
+
+        member_id = r["member_id"]
+
+        try:
+            user = await interaction.client.fetch_user(member_id)
+        except discord.NotFound:
+            logger.warning("User %s not found (deleted account?), skipping", member_id)
+            failed.append(member_id)
+            continue
+        except discord.HTTPException as e:
+            logger.warning("HTTP error fetching user %s: %s", member_id, e)
+            failed.append(member_id)
+            continue
+
+        pending = await bot_db.app_management_db.get_unanswered_application_question(
+            r["submission_id"]
+        )
+        if pending is not None:
+            continue
+
+        try:
+            await push_submission(user=user, bot=cast(commands.Bot, interaction.client))
+            await bot_db.app_management_db.update_submission_status(
+                r["submission_id"],
+                "completed",
+            )
+            await user.send("Your application was automatically submitted!")
+        except discord.Forbidden:
+            logger.warning("Cannot DM user %s (DMs closed/blocked)", member_id)
+            failed.append(member_id)
+        except discord.HTTPException as e:
+            logger.warning("Failed to push submission to %s: %s", member_id, e)
+            failed.append(member_id)
+        except Exception:
+            logger.exception("Unexpected error pushing submission to %s", member_id)
+            failed.append(member_id)
+
+        await asyncio.sleep(2)
+
+    if failed:
+        await interaction.followup.send(
+            f"Job finished with {len(failed)} failure(s): {failed}", ephemeral=True
+        )
+    else:
+        await interaction.followup.send("Job finished successfully", ephemeral=True)
+
+        
+
 
 async def push_submission(user: User, bot: commands.Bot):
     bot_db = cast("Lily", bot).db
