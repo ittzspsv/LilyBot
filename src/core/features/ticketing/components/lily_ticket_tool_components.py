@@ -1368,7 +1368,7 @@ class TicketModal(discord.ui.Modal):
                                 "name": guild.name,
                                 "icon": guild.icon.url if guild.icon else None,
                                 "member_count": invite.approximate_member_count,
-                                "owner_id": guild.owner.id if isinstance(guild, discord.Guild) and guild.owner is not None else 0,
+                                "owner_id": guild.owner_id if isinstance(guild, discord.Guild) else 0,
                                 "invite_url": f"https://discord.com/invite/{invite.code}",
                             }
                         })
