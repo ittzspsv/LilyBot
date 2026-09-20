@@ -5,6 +5,7 @@ import io
 import numpy as np
 from scipy.interpolate import make_interp_spline
 from datetime import datetime, timedelta
+import json
 from typing import Optional, List, Tuple, cast, TYPE_CHECKING
 
 import discord
@@ -1139,7 +1140,36 @@ async def accept_appeal(
         elif case["mod_type"] == "quarantine":
             role = discord.utils.get(interaction.guild.roles, name="Quarantine")
             if role:
-                await member.remove_roles(role, reason=f"Appeal accepted by {interaction.user.mention}")
+                roles_to_restore: list[discord.Role] = []
+                metadata_raw = case.get("metadata", {})
+                metadata = json.loads(metadata_raw)
+                role_ids = metadata.get("roles_before_quarantine", [])
+
+                for role_id in role_ids:
+                    restored_role = interaction.guild.get_role(role_id)
+                    if restored_role is None:
+                        continue
+                    if restored_role >= interaction.guild.me.top_role:
+                        continue
+                    roles_to_restore.append(restored_role)
+
+                new_roles = [
+                    r for r in member.roles if r != role
+                ] + roles_to_restore
+
+                try:
+                    await member.edit(roles=new_roles, reason=f"Appeal accepted by {interaction.user}")
+                except discord.Forbidden:
+                    logger.exception(
+                        "Missing permissions to restore roles for user %s in guild %s",
+                        member.id, interaction.guild.id
+                    )
+                except discord.HTTPException:
+                    logger.exception(
+                        "Failed to restore roles for user %s in guild %s",
+                        member.id, interaction.guild.id
+                    )
+
                 await bot_db.log_moderation_action(
                     interaction.guild.id,
                     interaction.user.id,
