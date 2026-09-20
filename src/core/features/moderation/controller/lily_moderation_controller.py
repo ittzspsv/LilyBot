@@ -269,15 +269,31 @@ async def quarantine_user(
 
 
     roles_before_quarantine = [
-        role.id for role in member.roles
-        if role != ctx.guild.default_role
-        and role < ctx.guild.me.top_role
-        and not role.managed
+        role.id
+        for role in member.roles
+        if (
+            role != ctx.guild.default_role
+            and role < ctx.guild.me.top_role
+            and not role.managed
+            and not role.is_premium_subscriber()
+        )
     ]
+
+    roles = [
+        role
+        for role in member.roles
+        if (
+            role.is_default()
+            or role.is_premium_subscriber()
+            or role >= ctx.guild.me.top_role
+        )
+    ]
+
+    roles.append(quarantine_role)
 
     try:
         await member.edit(
-            roles=[quarantine_role],
+            roles=roles,
             reason=f"Quarantine by {author} | {reason}",
         )
     except discord.Forbidden:
@@ -1178,7 +1194,14 @@ async def accept_appeal(
                     "Appealed"
                 )
 
-        await member.send(embed=simple_embed("Your appeal has been accepted and the action has been lifted"))
+            else:
+                await interaction.response.send_message(
+                    content="Seems like I can’t find a Quarantined role. Is there a role on this server called Quarantined, Jailed, or Quarantine?",
+                    ephemeral=True
+                )
+
+
+        await member.send(content=f"Your {case['mod_type'].title()} appeal has been accepted and the action has been lifted. ")
     except Exception:
         logger.exception("Failed to fully process appeal acceptance for case %s in guild %s", appeal["case_id"], interaction.guild.id)
 
