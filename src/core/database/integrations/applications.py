@@ -33,16 +33,39 @@ class ApplicationManagement:
             "current_wave": 0
         }
 
-    async def get_application(self, guild_id: int, application_id: int) -> Optional[Dict[str, Any]]:
+    async def get_application(
+        self,
+        guild_id: int,
+        application_id: int
+    ) -> Optional[Dict[str, Any]]:
         row = await self.db.fetch_one(
-            "SELECT * FROM application WHERE id = ? AND guild_id = ?",
+            """
+            SELECT
+                a.*,
+                GROUP_CONCAT(aga.group_id) AS group_ids
+            FROM application AS a
+            LEFT JOIN application_group_assignments AS aga
+                ON aga.application_id = a.id
+            WHERE a.id = ? AND a.guild_id = ?
+            GROUP BY a.id
+            """,
             (application_id, guild_id)
         )
 
         if row is None:
             return None
 
-        return dict(row)
+        result = dict(row)
+
+        result["group_assignments"] = (
+            [int(group_id) for group_id in result["group_ids"].split(",")]
+            if result["group_ids"]
+            else []
+        )
+
+        return result
+    
+    
 
     async def get_pending_application(self, guild_id: int):
         ...
@@ -94,7 +117,8 @@ class ApplicationManagement:
         application_id: int,
         application_name: Optional[str] = None,
         application_description: Optional[str] = None,
-        submit_btn_label: Optional[str] = None
+        submit_btn_label: Optional[str] = None,
+        application_group_assignments: Optional[List[int]] = []
     ) -> bool:
         fields: List[str] = []
         params: List[Any] = []
@@ -122,6 +146,25 @@ class ApplicationManagement:
             tuple(params),
             row_count=True
         )
+
+        if application_group_assignments is not None:
+            await self.db.execute(
+                """
+                DELETE FROM application_group_assignments
+                WHERE application_id = ? AND guild_id = ?
+                """,
+                (application_id, guild_id)
+            )
+
+            for position, group_id in enumerate(application_group_assignments):
+                await self.db.execute(
+                    """
+                    INSERT INTO application_group_assignments
+                        (guild_id, application_id, group_id, position)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (guild_id, application_id, group_id, position),
+                )
 
         return bool(rows_affected)
 
