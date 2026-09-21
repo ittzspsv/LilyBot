@@ -12,7 +12,6 @@ from src.core.features.permissions.lily_permissions import permission
 from src.core.features.management.controller import lily_management_controller as controller
 from src.core.features.management.components.staff_management_components import LOARequestView
 from src.core.features.management.controller.lily_management_controller import (
-    on_message,
     automatic_quota_evaluator,
 )
 
@@ -127,7 +126,6 @@ class LilyManagement(commands.Cog):
     async def on_message(self, message: discord.Message):
         if self.db is None:
             return
-        await on_message(message, self.db)
 
     @tasks.loop(minutes=5)
     async def message_reset_schedular(self):
