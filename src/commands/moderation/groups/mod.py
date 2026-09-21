@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import discord
 from discord import app_commands
 
@@ -10,6 +12,11 @@ from src.core.features.moderation.controller.lily_moderation_controller import (
     moderation_insights as moderation_insights_fn,
     setup_mod_appeal,
 )
+
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from src.lily import Lily
 
 
 class ModCommands(app_commands.Group):
@@ -45,7 +52,8 @@ class ModCommands(app_commands.Group):
         if interaction.guild is None:
             return await interaction.response.send_message(embed=simple_embed("This command can only be executed inside an guild", 'cross'))
 
-        bot_db: BotGlobalsDatabaseAccess = interaction.client.db
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
         await bot_db.add_moderation_acronym(interaction.user.id, interaction.guild.id, key, value)
         await interaction.response.send_message(embed=simple_embed(f"Successfully Added Moderation Acronym"))
 
@@ -55,7 +63,8 @@ class ModCommands(app_commands.Group):
         if interaction.guild is None:
             return await interaction.response.send_message(embed=simple_embed("This command can only be executed inside an guild", 'cross'))
 
-        bot_db: BotGlobalsDatabaseAccess = interaction.client.db
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
 
         await bot_db.remove_moderation_acronym(interaction.user.id, interaction.guild.id, key)
         await interaction.response.send_message(embed=simple_embed(f"Successfully Removed Moderation Acronym"))
@@ -66,7 +75,9 @@ class ModCommands(app_commands.Group):
         if interaction.guild is None:
             return await interaction.response.send_message(embed=simple_embed("This command can only be executed inside an guild", 'cross'))
 
-        bot_db: BotGlobalsDatabaseAccess = interaction.client.db
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+
         await bot_db.update_moderation_acronym(interaction.user.id, interaction.guild.id, key, value)
 
         await interaction.response.send_message(embed=simple_embed(f"Successfully Updated Moderation Acronym"))
@@ -77,7 +88,9 @@ class ModCommands(app_commands.Group):
         if interaction.guild is None:
             return await interaction.response.send_message(embed=simple_embed("This command can only be executed inside an guild", 'cross'))
 
-        bot_db: BotGlobalsDatabaseAccess = interaction.client.db
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+        
         result: dict[str, str] = await bot_db.get_moderation_acronyms(member.id if member is not None else interaction.user.id, interaction.guild.id)
 
         acronyms_text = ""
@@ -97,7 +110,9 @@ class ModCommands(app_commands.Group):
         if interaction.guild is None:
             return await interaction.response.send_message(embed=simple_embed("This command can only be executed inside an guild", 'cross'))
 
-        bot_db: BotGlobalsDatabaseAccess = interaction.client.db
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+
         result: dict[str, str] = await bot_db.get_moderation_acronyms(interaction.user.id, interaction.guild.id)
 
         for key, value in result.items():
@@ -106,10 +121,27 @@ class ModCommands(app_commands.Group):
         await interaction.response.send_message(embed=simple_embed(f"Successfully transferred moderation acronym to {target.mention}"))
 
     @app_commands.command(name="dashboard", description="Spawn in the dashboard")
-    @app_permission(command_name="dashboard", restrict=True)
+    @app_permission(command_name="mod_dashboard")
     async def dashboard(self, interaction: discord.Interaction):
+
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                embed=simple_embed("You can only use this command inside a guild only", 'cross'),
+                ephemeral=True
+            )
+
+            return
+
+        logs_channel = bot_db.get_channel(interaction.guild.id, "logs_channel")
+
+
         view = ModerationDashboard({
             "setup_mod_appeal": setup_mod_appeal
+        }, prefill_values={
+            "logs_channel": logs_channel
         })
 
         await interaction.response.send_message(

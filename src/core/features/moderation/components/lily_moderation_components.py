@@ -1379,7 +1379,7 @@ class PermissionConfigureModal(discord.ui.Modal):
 
 """ Moderation Dashboard """
 class ModerationDashboard(discord.ui.LayoutView):
-    def __init__(self, functions: Dict[str, Callable]) -> None:
+    def __init__(self, functions: Dict[str, Callable], prefill_values: Dict[str, Any] = {}) -> None:
         super().__init__(timeout=None)
 
         self.functions: Dict[str, Callable] = functions
@@ -1406,12 +1406,14 @@ class ModerationDashboard(discord.ui.LayoutView):
             label="Edit"
         )
 
+        logs_channel_id = prefill_values.get("logs_channel")
         self.moderation_logging = discord.ui.ChannelSelect(
             channel_types=[discord.ChannelType.text],
             required=True,
             min_values=1,
             placeholder="Choose a channel",
-            max_values=1
+            max_values=1,
+            default_values=[discord.Object(id=logs_channel_id)] if logs_channel_id else [],
         )
 
         self.moderation_logging_btn = discord.ui.Button(
