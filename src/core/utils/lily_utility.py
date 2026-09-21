@@ -38,6 +38,24 @@ def format_currency(val: Union[str, int]) -> str:
         return f"{value / 1_000:.1f}k"
     else:
         return str(int(value))
+
+
+def format_duration(seconds: int | float) -> str:
+    units = [
+        ("month", 30 * 24 * 60 * 60),
+        ("week", 7 * 24 * 60 * 60),
+        ("day", 24 * 60 * 60),
+        ("hour", 60 * 60),
+        ("minute", 60),
+        ("second", 1),
+    ]
+
+    for name, unit_seconds in units:
+        if seconds >= unit_seconds:
+            value = seconds / unit_seconds
+            return f"{value:.1f} {name}{'s' if value != 1 else ''}"
+
+    return "0 seconds"
     
 # function used to safely load an json
 def load_json(path: str) -> dict:
