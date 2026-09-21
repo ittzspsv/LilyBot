@@ -836,26 +836,6 @@ async def update_staff(interaction: discord.Interaction, staff: discord.Member, 
         logger.exception(f"[UpdateStaff] Unhandled exception while updating staff_id={staff.id} in guild_id={interaction.guild.id}")
         await interaction.response.send_message(embed=simple_embed("Failed to update staff.", "cross"))
 
-async def on_message(message: discord.Message, bot_db: BotGlobalsDatabaseAccess):
-    if not message.guild:
-        return
-
-    if isinstance(message.author, discord.User):
-        return
-
-    try:
-        allowed_channels = bot_db.get_channels(message.guild.id, "valid_channel")
-
-        if message.channel.id in allowed_channels:
-            await bot_db.update_message(**{
-                "guild_id": message.guild.id,
-                "staff_id": message.author.id,
-                "avatar_url": message.author.display_avatar.url,
-                "name": message.author.name
-            })
-
-    except Exception:
-        logger.exception(f"[OnMessage] Failed to update message stats for staff_id={message.author.id} in guild_id={message.guild.id}")
 
 async def add_staff_quota(interaction: discord.Interaction, quota_role: discord.Role, minimum_ms: int, minimum_msg: int, check_by: QuotaCheckBy):
     if interaction.guild is None:
