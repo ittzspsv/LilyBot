@@ -98,13 +98,15 @@ class ApplicantCommands(app_commands.Group):
             view = discord.ui.LayoutView().add_item(
                 discord.ui.Container(
                     discord.ui.Section(
-                        discord.ui.TextDisplay(content=f"## {emoji["logs"]} A remark has been added to your **{application["name"]}** application\n{emoji["staff"]} by {interaction.guild.name} Staff team."),
-                        discord.ui.TextDisplay(content=f"### {remark}"),
-                        discord.ui.TextDisplay(content=f"### {emoji["clock"]} Wave\n- {application["current_wave"] + 1}"),
+                        discord.ui.TextDisplay(content=f"## {emoji["logs"]} A remark has been added to **{application["name"]}**"),
+                        discord.ui.TextDisplay(content=f"> ### {remark}"),
+                        discord.ui.TextDisplay(content=f"{emoji["clock"]} **Wave**\n- {application["current_wave"] + 1}"),
                         accessory=discord.ui.Thumbnail(
                             media=interaction.guild.icon.url if interaction.guild.icon else interaction.guild.me.display_avatar.url,
                         ),
-                    )
+                    ),
+                    discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+                    discord.ui.TextDisplay(f"-# {emoji["staff"]} by {interaction.guild.name} Staff team.")
                 )
             )
 
