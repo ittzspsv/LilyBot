@@ -1,6 +1,7 @@
 from ..access import LilyDatabaseAccess
 from .applications import ApplicationManagement
 from .leveling import LevelingManagement
+from ...features.leveling.utils.lily_leveling_utils import *
 
 from typing import List, Optional, Final, Set, Dict, Any, Tuple
 from dataclasses import dataclass
@@ -2937,35 +2938,88 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
             },
         }
 
-    async def update_message(self, staff_id: int, guild_id: int, avatar_url: str | None = None, name: str | None = None) -> None:
-
-        """ Updating their profile each message to keep them upto date. """
-        
+    async def set_xp_boost(self, guild_id: int, role_id: int, multiplier: float) -> None:
         await self.execute(
-                """
-                INSERT INTO members (member_id, guild_id, avatar_url, name)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(member_id, guild_id)
-                DO UPDATE SET
-                    avatar_url = excluded.avatar_url,
-                    name = excluded.name
-                """, (staff_id, guild_id, avatar_url, name)
+            """
+            INSERT INTO xp_boosts (guild_id, role_id, multiplier)
+            VALUES (?, ?, ?)
+            ON CONFLICT(guild_id, role_id) DO UPDATE SET multiplier = excluded.multiplier
+            """,
+            (guild_id, role_id, multiplier),
         )
+
+    async def remove_xp_boost(self, guild_id: int, role_id: int) -> None:
         await self.execute(
+            "DELETE FROM xp_boosts WHERE guild_id = ? AND role_id = ?",
+            (guild_id, role_id),
+        )
+
+    async def fetch_boosted_roles(self, guild_id: int) -> dict[int, float]:
+        rows = await self.fetch_all(
+            "SELECT role_id, multiplier FROM xp_boosts WHERE guild_id = ?",
+            (guild_id,),
+        )
+        return {row["role_id"]: row["multiplier"] for row in rows}
+
+    def get_xp_multiplier(self, member_role_ids: set[int], boosted_roles: dict[int, float]) -> float:
+        multipliers = [mult for role_id, mult in boosted_roles.items() if role_id in member_role_ids]
+        return max(multipliers, default=1.0)
+
+    async def update_message(
+        self, staff_id: int, guild_id: int,
+        member_role_ids: set[int],
+        boosted_roles: dict[int, float],
+        avatar_url: str | None = None, name: str | None = None,
+    ) -> dict | None:
+        """Update profile + message/XP counts. Returns level-up info if leveled up, else None."""
+
+        multiplier = self.get_xp_multiplier(member_role_ids, boosted_roles)
+        xp_gain = round(1 * multiplier)
+
+        await self.execute(
+            """
+            INSERT INTO members (member_id, guild_id, avatar_url, name)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(member_id, guild_id)
+            DO UPDATE SET
+                avatar_url = excluded.avatar_url,
+                name = excluded.name
+            """,
+            (staff_id, guild_id, avatar_url, name),
+        )
+
+        row = await self.fetch_one(
             """
             INSERT INTO messages (
                 member_id, guild_id,
-                daily_messages, weekly_messages, monthly_messages, total_messages
+                daily_messages, weekly_messages, monthly_messages, total_messages, total_xp
             )
-            VALUES (?, ?, 1, 1, 1, 1)
+            VALUES (?, ?, 1, 1, 1, 1, ?)
             ON CONFLICT(member_id, guild_id) DO UPDATE SET
                 daily_messages   = daily_messages   + 1,
                 weekly_messages  = weekly_messages  + 1,
                 monthly_messages = monthly_messages + 1,
-                total_messages   = total_messages   + 1
+                total_messages   = total_messages   + 1,
+                total_xp         = total_xp         + excluded.total_xp
+            RETURNING total_xp
             """,
-            (staff_id, guild_id),
+            (staff_id, guild_id, xp_gain),
         )
+
+        new_total_xp = row["total_xp"]
+        old_total_xp = new_total_xp - xp_gain   
+
+        old_level = level_from_messages(old_total_xp)
+        new_level = level_from_messages(new_total_xp)
+
+        if new_level > old_level:
+            return {
+                "leveled_up": True,
+                "old_level": old_level,
+                "new_level": new_level,
+                **get_level_progress(new_total_xp),
+            }
+        return None
             
     async def remove_role(self, guild_id: int, role_id: int) -> Dict[str, Any]:
         try:
