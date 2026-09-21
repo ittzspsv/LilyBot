@@ -5,6 +5,7 @@ from discord import app_commands
 from typing import cast, TYPE_CHECKING
 
 from src.core.features.leveling.controller.lily_leveling_controller import show_level
+from src.core.features.permissions.lily_permissions import app_permission
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
 
 
@@ -21,6 +22,11 @@ class LilyLeveling(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+    booster = app_commands.Group(
+        name="xpboost",
+        description="Leveling XP Boosting"
+    )
+
     @app_commands.command(name="level", description="Displays your current level")
     @app_commands.guild_only()
     async def show_level(self, interaction: discord.Interaction, member: discord.Member | None):
@@ -28,33 +34,60 @@ class LilyLeveling(commands.Cog):
         _member = member if member is not None else interaction.user
         await show_level(interaction, _member)
 
-    @commands.command()
-    @commands.has_permissions(manage_guild=True)
-    async def setxpboost(self, ctx: commands.Context, role: discord.Role, multiplier: float):
+    @booster.command(name="set", description="Set a level booster role")
+    @app_permission(command_name="leveling_management")
+    async def setxpboost(self, interaction: discord.Interaction, role: discord.Role, multiplier: int):
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "This command can only be executed inside a guild.",
+                ephemeral=True,
+            )
+            return
+
         if multiplier <= 0:
-            return await ctx.send("Multiplier must be positive.")
-
-        if ctx.guild is None:
-            await ctx.reply("This command can only be executed inside a guild")
+            await interaction.response.send_message(
+                "Multiplier must be positive.",
+                ephemeral=True,
+            )
             return
 
-        bot_db = cast("Lily", ctx.bot).db
+        bot_db = cast("Lily", interaction.client).db
         assert bot_db is not None
-        await bot_db.set_xp_boost(ctx.guild.id, role.id, multiplier)
-        await ctx.send(f"{role.mention} now grants {multiplier}x XP.", allowed_mentions=discord.AllowedMentions.none())
 
-    @commands.command()
-    @commands.has_permissions(manage_guild=True)
-    async def removexpboost(self, ctx: commands.Context, role: discord.Role):
-        if ctx.guild is None:
-            await ctx.reply("This command can only be executed inside a guild")
+        await bot_db.set_xp_boost(
+            interaction.guild.id,
+            role.id,
+            multiplier,
+        )
+
+        await interaction.response.send_message(
+            f"{role.mention} now grants {multiplier}x XP.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+
+    @booster.command(name="remove", description="Remove a level booster role")
+    @app_permission(command_name="leveling_management")
+    async def removexpboost(self, interaction: discord.Interaction, role: discord.Role):
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "This command can only be executed inside a guild.",
+                ephemeral=True,
+            )
             return
 
-        bot_db = cast("Lily", ctx.bot).db
+        bot_db = cast("Lily", interaction.client).db
         assert bot_db is not None
 
-        await bot_db.remove_xp_boost(ctx.guild.id, role.id)
-        await ctx.send(f"Removed XP boost from {role.mention}.", allowed_mentions=discord.AllowedMentions.none())
+        await bot_db.remove_xp_boost(
+            interaction.guild.id,
+            role.id,
+        )
+
+        await interaction.response.send_message(
+            f"Removed XP boost from {role.mention}.",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
