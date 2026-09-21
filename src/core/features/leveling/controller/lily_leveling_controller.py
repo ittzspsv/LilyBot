@@ -30,7 +30,7 @@ async def show_level(interaction: discord.Interaction, member: discord.Member | 
     await interaction.response.defer()
 
     progress = get_level_progress(
-        result["total_messages"]
+        result["total_xp"]
     )
 
     bytes = await create_level_card(
