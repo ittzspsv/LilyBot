@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import discord
 from src.core.utils.embeds.sLilyEmbed import simple_embed
+from src.core.utils.lily_utility import format_duration
 from typing import Optional, cast, Any, TYPE_CHECKING, List, Dict, Tuple, Union, Callable
 from datetime import datetime
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
@@ -421,11 +422,29 @@ class CaseView(discord.ui.LayoutView):
             logger.exception("Failed to parse metadata JSON for case_id=%s: %r", case_id, raw_metadata)
             metadata = {}
 
-
+        metadata_lines = ""
         if metadata:
-            metadata_lines = "\n".join(
-                f"> - **{key.title()}**: {value}" for key, value in metadata.items()
-            )
+            for key, value in metadata.items():
+                if key == "roles_before_quarantine":
+                    metadata_lines += (
+                        "- **Roles Before Quarantine**\n"
+                        + "\n".join(f"> <@&{role_id}>" for role_id in value)
+                        + "\n"
+                    )
+
+                elif key == "duration":
+                    duration = (
+                        format_duration(int(value))
+                        if value is not None
+                        else "Permanent"
+                    )
+
+                    metadata_lines += f"- **Duration**: {duration}\n"
+
+                else:
+                    metadata_lines += (
+                        f"- **{key.replace('_', ' ').title()}**: {value}\n"
+                    )
         else:
             metadata_lines = "> - *No metadata available*"
 
@@ -902,7 +921,7 @@ class CaseListView(discord.ui.LayoutView):
                 return
 
             view = CaseView(case_id, case_data, self)
-            await interaction.response.send_message(view=view, ephemeral=True)
+            await interaction.response.send_message(view=view, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
             view.message = await interaction.original_response()
         except Exception:
             logger.exception("Failed to open case info for custom_id=%s", getattr(interaction, "custom_id", None))
