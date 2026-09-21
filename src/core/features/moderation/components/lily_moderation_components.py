@@ -339,6 +339,50 @@ class EditCaseModal(discord.ui.Modal):
             else:
                 await interaction.followup.send(embed=simple_embed("Something went wrong while editing the case.", 'cross'), ephemeral=True)
 
+class AddProofsModal(discord.ui.Modal):
+    def __init__(self, case_id: int) -> None:
+        super().__init__(title="Add Proofs")
+
+        self.case_id = case_id
+
+        self.proofs = discord.ui.Label(
+            text="Proofs",
+            description="Add relavent proofs supporting the case",
+            component=discord.ui.FileUpload(
+                min_values=1,
+                max_values=10
+            )
+        )
+
+        self.add_item(self.proofs)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        assert isinstance(self.proofs.component, discord.ui.FileUpload)
+        uploaded_attachments = self.proofs.component.values
+
+        logging_controller = cast("Lily", interaction.client).logging_controller
+        assert logging_controller is not None
+
+        await interaction.response.defer()
+
+        success = await logging_controller.send_proofs(
+            interaction=interaction,
+            proofs=uploaded_attachments,
+            case_id=self.case_id
+        )
+
+        if success:
+            await interaction.followup.send(
+                f"Successfully attached proof for case {self.case_id}",
+                ephemeral=True
+            )
+
+        else:
+            await interaction.followup.send(
+                f"Failed to attach proofs for case {self.case_id}",
+                ephemeral=True
+            )
+
 class CaseView(discord.ui.LayoutView):
     def __init__(self, case_id: int, case_data: Dict[str, Any], case_list_view: CaseListView) -> None:
         super().__init__(timeout=None)
@@ -403,9 +447,15 @@ class CaseView(discord.ui.LayoutView):
             emoji=emoji["trash"]
         )
 
+        self.add_proofs = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label="Add Proofs"
+        )
+
         self.edit_case.callback = self.edit_case_callback
         self.get_proofs.callback = self.proofs_button_callback
         self.delete_case.callback = self.delete_case_callback
+        self.add_proofs.callback = self.add_proofs_callback
 
         case_overview = discord.ui.Container(
             discord.ui.TextDisplay(
@@ -450,8 +500,14 @@ class CaseView(discord.ui.LayoutView):
 
             proofs_references = await bot_db.get_proof_references(interaction.guild.id, case_id=self.case_id)
             if len(proofs_references) <= 0:
+                view = discord.ui.LayoutView().add_item(
+                    discord.ui.Section(
+                        discord.ui.TextDisplay(content="No Proofs Found for the given case id"),
+                        accessory=self.add_proofs
+                    )
+                )
                 await interaction.response.send_message(
-                    embed=simple_embed("No Proofs Found for the given case id", 'cross'), ephemeral=True
+                    view=view, ephemeral=True
                 )
                 return
 
@@ -562,9 +618,19 @@ class CaseView(discord.ui.LayoutView):
                 )
                 return
 
+            view = discord.ui.LayoutView().add_item(
+                discord.ui.ActionRow(
+                    self.add_proofs
+                )
+            )
             await interaction.followup.send(
                 content=f"Proofs for case `{self.case_id}`",
                 files=files,
+                ephemeral=True
+            )
+
+            await interaction.followup.send(
+                view=view,
                 ephemeral=True
             )
         except Exception:
@@ -621,6 +687,9 @@ class CaseView(discord.ui.LayoutView):
                 await interaction.response.send_message(embed=simple_embed("Something went wrong deleting the case.", 'cross'), ephemeral=True)
             else:
                 await interaction.followup.send(embed=simple_embed("Something went wrong deleting the case.", 'cross'), ephemeral=True)
+
+    async def add_proofs_callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(AddProofsModal(self.case_id))
 
 class CaseListView(discord.ui.LayoutView):
     def __init__(
