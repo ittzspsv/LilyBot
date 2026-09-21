@@ -1068,6 +1068,14 @@ class ApplicationManagement:
         , (tag.lower(), thread_id) 
         )
 
+    async def get_submission_thread_reference(self, thread_id: int):
+        row = await self.db.fetch_one(
+            "SELECT * FROM application_submissions WHERE submission_thread_reference = ?",
+            (thread_id,)
+        )
+
+        return dict(row)
+
     async def set_submission_thread_reference(self, submission_id: int, thread_id: int):
         await self.db.execute(
             "UPDATE application_submissions SET submission_thread_reference = ? WHERE id = ?"
