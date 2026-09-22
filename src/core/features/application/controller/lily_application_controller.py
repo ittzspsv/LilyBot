@@ -3,7 +3,7 @@ from src.core.utils.lily_utility import length, truncate
 from src.core.features.application.types.lily_application_types import QuestionType
 from ..components.lily_application_components import CreateApplicationModal, ApplicationView, UpdateApplicationModal
 
-from discord import Interaction, app_commands, TextChannel, User, Embed, ForumChannel
+from discord import Interaction, app_commands, TextChannel, User, ForumChannel
 import discord
 import json
 import asyncio
@@ -1067,9 +1067,6 @@ async def flush_submission(interaction: discord.Interaction, application_id: int
     else:
         await interaction.followup.send("Job finished successfully", ephemeral=True)
 
-        
-
-
 async def push_submission(user: User, bot: commands.Bot):
     bot_db = cast("Lily", bot).db
     assert bot_db is not None
@@ -1299,6 +1296,10 @@ async def push_submission(user: User, bot: commands.Bot):
                 submission_id, forum_thread.id,
             )
 
+    assert bot.user is not None
+    await forum_thread.send(
+        content=f"To send an application remark to {user.mention}, ping me (<@{bot.user.mention}>) and type your remark. I'll send it directly to their DMs."
+    )
 
 async def update_applicant(
     interaction: Interaction,
