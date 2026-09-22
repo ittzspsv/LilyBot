@@ -139,15 +139,14 @@ class Lily(commands.Bot):
     async def on_message(self, message:discord.Message): 
         if message.author == self.user:
               return
-        #await self.agent_controller.on_message(self, message=message)
         await self.process_commands(message)
 
-    async def on_command_error(self, ctx, error):
+    async def on_command_error(self, ctx: commands.Context, error):
         if isinstance(error, commands.CheckFailure):
-            await ctx.reply(embed=simple_embed(str(error), 'cross'))
+            await ctx.reply(embed=simple_embed(str(error), 'cross'), delete_after=5)
 
         elif isinstance(error, commands.CommandOnCooldown):
-            await ctx.reply(embed=simple_embed(f"So fast! Try again after {error.retry_after:.1f} seconds.", 'cross'))
+            await ctx.reply(embed=simple_embed(f"So fast! Try again after {error.retry_after:.1f} seconds.", 'cross'), delete_after=5)
         else:
             pass
 
