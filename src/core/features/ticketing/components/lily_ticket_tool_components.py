@@ -1127,6 +1127,7 @@ class TicketModal(discord.ui.Modal):
                 ephemeral=True
             )
             return None
+        
         except discord.HTTPException as e:
             if e.code == 50035:
                 logger.warning(
@@ -1134,19 +1135,43 @@ class TicketModal(discord.ui.Modal):
                     interaction.guild.id, e.text
                 )
                 if channel_category is not None and "parent_id" in str(e.text):
-                    await interaction.followup.send(
-                        embed=simple_embed(
-                            "This ticket category is full (max 50 channels). Please contact an admin to free up space or set a new category.",
-                            'cross'
-                        ),
-                        ephemeral=True
+                    logger.warning(
+                        "TicketModal.ticket_thread_constructor: category %s full in guild %s, retrying without category",
+                        channel_id, interaction.guild.id
                     )
+                    try:
+                        text_channel: discord.TextChannel = await interaction.guild.create_text_channel(
+                            name=f"{ticket_name}-{opener.name}",
+                            overwrites=overwrites
+                        )
+
+                    except discord.Forbidden:
+                        logger.exception(
+                            "TicketModal.ticket_thread_constructor: missing permissions to create fallback ticket channel in guild %s",
+                            interaction.guild.id
+                        )
+                        await interaction.followup.send(
+                            embed=simple_embed("I don't have permission to create the ticket channel!", 'cross'),
+                            ephemeral=True
+                        )
+                        return None
+                    
+                    except discord.HTTPException:
+                        logger.exception(
+                            "TicketModal.ticket_thread_constructor: HTTP error creating fallback ticket channel in guild %s",
+                            interaction.guild.id
+                        )
+                        await interaction.followup.send(
+                            embed=simple_embed("Failed to create the ticket channel due to a Discord API error!", 'cross'),
+                            ephemeral=True
+                        )
+                        return None
                 else:
                     await interaction.followup.send(
                         embed=simple_embed(f"Discord rejected the channel creation request: {e.text}", 'cross'),
                         ephemeral=True
                     )
-                return None
+                    return None
             elif e.status == 429:
                 logger.warning(
                     "TicketModal.ticket_thread_constructor: rate limited creating ticket channel in guild %s",
