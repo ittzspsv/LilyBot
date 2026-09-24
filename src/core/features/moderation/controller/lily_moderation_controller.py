@@ -149,7 +149,8 @@ async def ban_user(
     ctx: commands.Context | discord.Interaction,
     user_input,
     reason="No reason provided",
-    proofs: list = []
+    proofs: list = [],
+    delete_message_days: int = 7
 ):
     if isinstance(ctx, commands.Context):
         bot = cast("Lily", ctx.bot)
@@ -183,6 +184,7 @@ async def ban_user(
         await ctx.guild.ban(
             discord.Object(id=member.id),
             reason=f"By {author} | {reason}",
+            delete_message_days=delete_message_days
         )
     except discord.Forbidden:
         logger.exception("Missing permissions to ban user %s in guild %s", member.id, ctx.guild.id)
