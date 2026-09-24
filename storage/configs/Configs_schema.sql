@@ -60,7 +60,6 @@ CREATE TABLE IF NOT EXISTS "staff_roles" (
 
     FOREIGN KEY (staff_id, guild_id)
         REFERENCES staffs(staff_id, guild_id),
-
     FOREIGN KEY (guild_id, role_id)
         REFERENCES roles(guild_id, role_id)
 );
@@ -71,10 +70,8 @@ CREATE TABLE IF NOT EXISTS "leaves" (
     reason     TEXT,
     days       INTEGER,
     issued_by  INTEGER, `started_on` TEXT, `ended_on` TEXT,
-
     FOREIGN KEY (staff_id, guild_id)
         REFERENCES staffs(staff_id, guild_id),
-
     FOREIGN KEY (issued_by, guild_id)
         REFERENCES staffs(staff_id, guild_id)
 );
@@ -94,8 +91,6 @@ CREATE TABLE IF NOT EXISTS "rank_updates" (
 
     FOREIGN KEY (staff_id, guild_id)
         REFERENCES staffs(staff_id, guild_id),
-
-    FOREIGN KEY (updated_by, guild_id)
         REFERENCES staffs(staff_id, guild_id),
 
     FOREIGN KEY (guild_id, old_role_id)
@@ -124,7 +119,7 @@ CREATE TABLE IF NOT EXISTS "messages" (
     daily_messages  INTEGER DEFAULT 0,
     weekly_messages INTEGER DEFAULT 0,
     monthly_messages INTEGER DEFAULT 0,
-    total_messages  INTEGER DEFAULT 0,
+    total_messages  INTEGER DEFAULT 0, total_xp INTEGER DEFAULT 0,
 
     PRIMARY KEY ("member_id", guild_id),
 
@@ -142,7 +137,7 @@ CREATE TABLE IF NOT EXISTS "staffs" (
     on_loa          INTEGER DEFAULT 0,
     retired         INTEGER DEFAULT 0,
     responsibility  TEXT,
-    avatar_url      TEXT,
+    avatar_url      TEXT, stale INTEGER DEFAULT 0,
 
     PRIMARY KEY (staff_id, guild_id),
 
@@ -387,4 +382,31 @@ CREATE TABLE IF NOT EXISTS "afk" (
     `display_name` TEXT DEFAULT 'AFK',
     reason TEXT,
     PRIMARY KEY (`member_id`, `guild_id`)
+);
+CREATE TABLE IF NOT EXISTS "tasks" (
+    `id`         INTEGER PRIMARY KEY AUTOINCREMENT,
+    `guild_id`   INTEGER NOT NULL,
+    `member_id`  INTEGER NOT NULL,
+    `task_name`  TEXT NOT NULL,
+    `job_type`   TEXT NOT NULL,
+    `payload`    TEXT,
+    `status`     TEXT NOT NULL DEFAULT 'pending',
+    `run_at`     TEXT NOT NULL,
+    `created_at` TEXT NOT NULL DEFAULT (datetime('now')),
+    `updated_at` TEXT,
+    FOREIGN KEY (`guild_id`, `member_id`) REFERENCES `members`(`guild_id`, `member_id`)
+);
+CREATE TABLE apscheduler_jobs (
+	id VARCHAR(191) NOT NULL, 
+	next_run_time FLOAT, 
+	job_state BLOB NOT NULL, 
+	PRIMARY KEY (id)
+);
+CREATE INDEX ix_apscheduler_jobs_next_run_time ON apscheduler_jobs (next_run_time);
+CREATE TABLE xp_boosts (
+    guild_id   INTEGER NOT NULL,
+    role_id    INTEGER NOT NULL,
+    multiplier REAL NOT NULL,
+    PRIMARY KEY (guild_id, role_id),
+    FOREIGN KEY (guild_id) REFERENCES data(guild_id)
 );
