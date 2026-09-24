@@ -199,12 +199,6 @@ class LilyModeration(commands.Cog):
                 view=CommandInfo(ctx, "Ban", ["ban user reason", f"ban {ctx.me.mention} Toxicity!", f"b {ctx.me.mention} Not obeying rules!"])
             )
 
-        return await ctx.reply(
-            embed=simple_embed("This command doesn't works, Try again later", 'cross')
-        )
-
-        await ctx.defer()
-
         attachments = (ctx.message.attachments if ctx.message else [])
 
         proofs = [
@@ -212,11 +206,9 @@ class LilyModeration(commands.Cog):
             if att.content_type and att.content_type.startswith(("image/", "video/"))
         ]
 
-        target_user = await self.resolve_user(ctx, member)
-        if not target_user:
-            return
+        await ctx.defer()
 
-        await ban_user(self.bot_db, self.logging_controller, ctx, target_user, reason, proofs)
+        await ban_user(ctx, member, reason, proofs)
 
     @commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
     @commands.hybrid_command(name='quarantine', description='Quarantines an user from this server', aliases=['jail', 'j', 'q'])
