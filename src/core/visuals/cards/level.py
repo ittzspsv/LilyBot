@@ -194,10 +194,10 @@ async def create_level_card(
         Image.Resampling.LANCZOS
     )
 
-    avatar_x = CARD_X + AVATAR_PAD_X - (deco_extra // 2 if avatar_deco is not None else 0)
-
-    if avatar_deco is None:
-        avatar_x = CARD_X + AVATAR_PAD_X
+    if avatar_deco is not None:
+        avatar_x = CARD_X + AVATAR_PAD_X - (deco_extra // 2)
+    else:
+        avatar_x = CARD_X - 16
 
     avatar_y = (
         CARD_Y
