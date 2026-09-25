@@ -24,6 +24,7 @@ async def issue_type_autocomplete(
     choices = [
         app_commands.Choice(name="Strike", value="strike"),
         app_commands.Choice(name="Warning", value="warning"),
+        app_commands.Choice(name="Activity Notice", value="activity_notice")
     ]
 
     choices.extend(
@@ -32,7 +33,7 @@ async def issue_type_autocomplete(
             value=strike_type,
         )
         for strike_type in strike_types
-        if strike_type not in {"strike", "warning"}
+        if strike_type not in {"strike", "warning", "activity_notice"}
     )
 
     return [
@@ -65,7 +66,7 @@ class InfractionCommands(app_commands.Group):
     @app_commands.describe(
         staff="The staff member to issue the infraction to",
         reason="Reason for the infraction",
-        type="The type of infraction (strike or warning or your own type)",
+        type="The infraction type. If it's not listed, enter your own; it'll be suggested next time.",
         notify_staff="Whether to notify the staff member via DM",
         notify_staff_updates="Whether to post this infraction to the staff-updates channel",
         expire_after="When this infraction should expire (e.g., 1d, 22d, none)"
@@ -82,7 +83,7 @@ class InfractionCommands(app_commands.Group):
         notify_staff_updates: bool = True,
         expire_after: str = "none"
     ):    
-        await controller.strike_staff(interaction, staff, reason, type, notify_staff, notify_staff_updates, expire_after)
+        await controller.strike_staff(interaction, staff, reason, type.replace(" ", "_").lower(), notify_staff, notify_staff_updates, expire_after)
 
     @app_commands.command(name='remove', description='Remove an infraction')
     @app_permission(command_name="strike_remove")
