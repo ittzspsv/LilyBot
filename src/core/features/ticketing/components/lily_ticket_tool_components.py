@@ -369,9 +369,10 @@ class TicketOpenerComponent(discord.ui.LayoutView):
         )
 
         content = (
-            f"- **ID**: {opener_details.get('member_id', 0)}\n"
-            f"- **Created on**: {opener_details.get('created_on')}\n"
-            f"- **Joined on**: {opener_details.get('joined_on')}"
+            f"> {emoji['user']} **User**: <@{opener_details.get('member_id', 0)}>\n"
+            f"> {emoji['pencil']} **ID**: {opener_details.get('member_id', 0)}\n"
+            f"> {emoji['calender']} **Created on**: {opener_details.get('created_on')}\n"
+            f"> {emoji['calender']} **Joined on**: {opener_details.get('joined_on')}"
             if opener_details is not None
             else "**User information unavailable**"
         )
@@ -398,7 +399,7 @@ class TicketOpenerComponent(discord.ui.LayoutView):
             discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
             discord.ui.Section(
                 discord.ui.TextDisplay(
-                    content=f"### Ticket Opener Information | <@{opener_details.get('member_id', 0)}>"
+                    content=f"### Ticket Opener Information"
                 ),
                 discord.ui.TextDisplay(content=content),
                 accessory=discord.ui.Thumbnail(
