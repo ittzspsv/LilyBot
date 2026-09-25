@@ -2186,7 +2186,7 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
             "staff_id": staff_id,
             "issued_by": issued_by,
             "reason": reason,
-            "message": f"Successfully issued a {type} infraction to staff <@{staff_id}>",
+            "message": f"Successfully issued {type.title()} infraction to <@{staff_id}>",
         }
 
     async def remove_strike(
@@ -2261,6 +2261,24 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         )
 
         return dict(row)
+
+    async def get_strike_types(
+        self,
+        guild_id: int
+    ) -> List[str]:
+        result = await self.fetch_all(
+            """
+            SELECT DISTINCT type
+            FROM strikes
+            WHERE type IS NOT NULL
+            AND guild_id = ?
+            """,
+            (guild_id,)
+        )
+
+        return [row[0] for row in result]
+
+
 
     async def fetch_staff_strikes(
             self,

@@ -9,11 +9,11 @@ from ..embeds.staff_management_embed import *
 from src.core.features.permissions.lily_permissions import has_app_permission
 
 import matplotlib.pyplot as plt
+import re
 
 from ..components.staff_management_components import (
     StaffsView,
     LOARequestModal,
-    InfractionModal,
     StrikesListView,
     StaffDataView
 )
@@ -379,13 +379,162 @@ async def edit_staff(interaction: discord.Interaction, staff_id: int, name: str,
         logger.exception(f"[EditStaff] Failed to edit staff_id={staff_id} in guild_id={interaction.guild.id}")
         await interaction.response.send_message(embed=simple_embed("Failed to edit staff.", "cross"))
 
-async def strike_staff(interaction: discord.Interaction, staff: discord.Member):
+async def strike_staff(
+    interaction: discord.Interaction,
+    staff: discord.Member,
+    reason: str,
+    type: str,
+    notify_staff: bool,
+    notify_staff_updates: bool,
+    expire_after: str
+):
+    assert isinstance(interaction.guild, discord.Guild)
+    assert isinstance(interaction.user, discord.Member)
+
+    try:
+        await interaction.response.defer()
+    except discord.HTTPException:
+        logger.exception(
+            "strike_staff: failed to defer interaction (staff_id=%s)",
+            staff.id,
+        )
+        return
+
+    normalized_type = type.strip().lower()
+
+    normalized_expiry = expire_after.strip().lower()
+    if not re.fullmatch(r"none|\d{1,4}[dhwm]", normalized_expiry):
+        await _safe_followup(
+            interaction,
+            f"Invalid expiry format: `{expire_after}`. Use something like `1d`, `22d`, or `none`.",
+            is_error=True,
+        )
+        return
+
     try:
         bot_db = cast("Lily", interaction.client).db
         assert bot_db is not None
-        await interaction.response.send_modal(InfractionModal(bot_db, staff))
     except Exception:
-        logger.exception(f"[StrikeStaff] Failed to open infraction modal for staff_id={staff.id}")
+        logger.exception(
+            "strike_staff: failed to resolve bot_db (staff_id=%s)",
+            staff.id,
+        )
+        await _safe_followup(interaction, "An internal error occurred.", is_error=True)
+        return
+
+    payload = {
+        "staff_id": staff.id,
+        "guild_id": interaction.guild.id,
+        "issued_by": interaction.user.id,
+        "reason": reason,
+        "type": normalized_type,
+        "expiry_date": normalized_expiry,
+    }
+
+    try:
+        response = await bot_db.strike_staff(**payload)
+    except Exception:
+        logger.exception(
+            "strike_staff: strike_staff DB call failed (staff_id=%s, guild_id=%s)",
+            staff.id, interaction.guild.id,
+        )
+        await _safe_followup(interaction, "An unknown error occurred while recording the infraction.", is_error=True)
+        return
+
+    if not response.get("success"):
+        await _safe_followup(interaction, response.get("message") or "An unknown object has been returned and failed", is_error=True)
+        return
+
+    message = response.get("message")
+    strike_reason = response.get("reason")
+
+    if notify_staff:
+        try:
+            await staff.send(embed=infraction_embed(interaction.user, reason, interaction.guild.name, normalized_type))
+        except discord.HTTPException:
+            logger.exception(
+                "strike_staff: failed to DM staff member infraction notice (staff_id=%s)",
+                staff.id,
+            )
+
+    await _safe_followup(interaction, message or "An unknown object has been returned, but It's an success!")
+
+    if not notify_staff_updates:
+        return
+
+    """ Build an embed so that we can post it on the staff updates channel"""
+
+    try:
+        channel_id = bot_db.get_channel(interaction.guild.id, "staff_updates")
+    except Exception:
+        logger.exception(
+            "strike_staff: get_channel lookup failed (guild_id=%s)",
+            interaction.guild.id,
+        )
+        channel_id = None
+
+    try:
+        border_media = img['border']
+    except KeyError:
+        logger.exception("strike_staff: 'border' key missing from Configs.img")
+        border_media = None
+
+    embed = discord.Embed(
+        color=16777215,
+        title="Infraction Information",
+        description=f"### {staff.mention} has been issued with {normalized_type.title()}"
+    )
+    embed.set_thumbnail(url=staff.display_avatar.url)
+    if border_media is not None:
+        embed.set_image(url=border_media)
+
+    embed.add_field(
+        name="Reason",
+        value=f"- {strike_reason}",
+        inline=False,
+    )
+
+    staff_updates_channel: Optional[discord.TextChannel] = None
+
+    if channel_id is not None:
+        channel = interaction.guild.get_channel(channel_id)
+
+        if channel is None:
+            try:
+                channel = await interaction.guild.fetch_channel(channel_id)
+            except discord.HTTPException:
+                logger.exception(
+                    "strike_staff: failed to fetch staff updates channel (channel_id=%s, guild_id=%s)",
+                    channel_id, interaction.guild.id,
+                )
+                channel = None
+
+        if isinstance(channel, discord.TextChannel):
+            staff_updates_channel = channel
+
+    if staff_updates_channel:
+        try:
+            await staff_updates_channel.send(
+                content=staff.mention,
+                embed=embed
+            )
+        except discord.HTTPException:
+            logger.exception(
+                "strike_staff: failed to post infraction embed to staff updates channel (channel_id=%s, staff_id=%s)",
+                staff_updates_channel.id, staff.id,
+            )
+
+async def _safe_followup(interaction: discord.Interaction, message: str, is_error: bool = False):
+    try:
+        await interaction.followup.send(
+            embed=simple_embed(message, 'cross') if is_error else simple_embed(message),
+        )
+    except discord.HTTPException:
+        logger.exception(
+            "_safe_followup: failed to send followup (user_id=%s)",
+            interaction.user.id,
+        )
+
 
 async def remove_strike_staff(interaction: discord.Interaction, strike_id: int):
     if interaction.guild is None:
