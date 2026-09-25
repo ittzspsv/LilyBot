@@ -400,8 +400,6 @@ async def strike_staff(
         )
         return
 
-    normalized_type = type.strip().lower()
-
     normalized_expiry = expire_after.strip().lower()
     if not re.fullmatch(r"none|\d{1,4}[dhwm]", normalized_expiry):
         await _safe_followup(
@@ -427,7 +425,7 @@ async def strike_staff(
         "guild_id": interaction.guild.id,
         "issued_by": interaction.user.id,
         "reason": reason,
-        "type": normalized_type,
+        "type": type,
         "expiry_date": normalized_expiry,
     }
 
@@ -450,7 +448,7 @@ async def strike_staff(
 
     if notify_staff:
         try:
-            await staff.send(embed=infraction_embed(interaction.user, reason, interaction.guild.name, normalized_type))
+            await staff.send(embed=infraction_embed(interaction.user, reason, interaction.guild.name, type.replace("_", " ").lower()))
         except discord.HTTPException:
             logger.exception(
                 "strike_staff: failed to DM staff member infraction notice (staff_id=%s)",
@@ -482,7 +480,7 @@ async def strike_staff(
     embed = discord.Embed(
         color=16777215,
         title="Infraction Information",
-        description=f"### {staff.mention} has been issued with {normalized_type.title()}"
+        description=f"### {staff.mention} has been issued with {type.replace("_", " ").title()}"
     )
     embed.set_thumbnail(url=staff.display_avatar.url)
     if border_media is not None:
