@@ -1365,7 +1365,8 @@ async def get_staffs_timezone_coverage(interaction: discord.Interaction) -> None
 
 async def automatic_quota_evaluator(check_by: str, bot):
     try:
-        bot_db = cast("Lily", bot).db
+        _bot = cast("Lily", bot)
+        bot_db = _bot.db
         assert bot_db is not None
         data = await bot_db.get_webhooks_of_type("quota_updates")
     except Exception:
@@ -1454,10 +1455,15 @@ async def automatic_quota_evaluator(check_by: str, bot):
                 embed.set_image(url=img['border'])
 
                 try:
+                    _payload = {
+                        "username": f"{_bot.user.name if _bot.user else "Lily"} {quota_conclusion_mapping.get(check_by, 'Unknown')} Quota Updates",
+                        "embed": embed
+                    }
+
+                    if _bot.user:
+                        _payload["avatar_url"] = _bot.user.display_avatar.url,
                     await webhook.send(
-                        username=f"Lily {quota_conclusion_mapping.get(check_by, 'Unknown')} Quota Updates",
-                        avatar_url="https://media.discordapp.net/attachments/1510416807847133274/1510416862112907365/Kaede.png?ex=6a1cbcd2&is=6a1b6b52&hm=3e2ddf9283e9d6eaf15f031ae0c730f60accb4437e6e1bc6b0dedaff2ad690fe&=&format=webp&quality=lossless&width=954&height=954",
-                        embed=embed
+                        **_payload
                     )
                 except Exception:
                     logger.exception(f"[AutomaticQuotaEvaluator] Failed to send webhook for guild_id={guild_id} quota_id={quota_id}")
