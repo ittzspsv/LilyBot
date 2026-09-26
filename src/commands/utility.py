@@ -12,7 +12,7 @@ from src.core.utils.lily_utility import *
 from src.core.features.permissions.lily_permissions import app_permission, permission, registered_permissions
 from src.core.utils.components.sLIlyGlobalComponents import CommandInfo as CI
 from src.core.utils.embeds.sLilyEmbed import ParseAdvancedEmbed
-from src.core.utils.types.types import ChannelEnum, NotifiersEnum
+from src.core.utils.types.types import ChannelEnum
 from zoneinfo import available_timezones, ZoneInfo, ZoneInfoNotFoundError
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
 from src.core.utils.components.sLIlyGlobalComponents import RoleCustomizationModal, Avatar, LeaderboardView
@@ -528,21 +528,43 @@ class LilyUtility(commands.Cog):
     @set.command(name="notifiers", description="Creates a notifier (webhook) when an value updates")
     @app_commands.checks.cooldown(1, 20.0)
     @app_permission(command_name="set_notifiers")
-    async def set_notifiers(self, interaction: discord.Interaction, type: NotifiersEnum, channel: discord.TextChannel, webhook_url: str):
+    @app_commands.choices(type=[
+        app_commands.Choice(name="Daily MS Leaderboard", value="daily_ms_leaderboard"),
+        app_commands.Choice(name="Weekly MS Leaderboard", value="weekly_ms_leaderboard"),
+        app_commands.Choice(name="Monthly MS Leaderboard", value="monthly_ms_leaderboard"),
+        app_commands.Choice(name="Daily Messages Leaderboard", value="daily_messages_leaderboard"),
+        app_commands.Choice(name="Weekly Messages Leaderboard", value="weekly_messages_leaderboard"),
+        app_commands.Choice(name="Monthly Messages Leaderboard", value="monthly_messages_leaderboard"),
+        app_commands.Choice(name="Quota Updates", value="quota_updates"),
+        app_commands.Choice(name="Audit Role Updates", value="audit_role_updates"),
+    ])
+    async def set_notifiers(self, interaction: discord.Interaction, type: app_commands.Choice[str], channel: discord.TextChannel | None = None, webhook_url: str | None = None):
         if interaction.guild is None:
             await interaction.response.send_message(embed=simple_embed("This command can only be used inside an guild", 'cross'))
             return
-        
+
+        notifier_type = type.value
         db: BotGlobalsDatabaseAccess = self.bot.db
+
+        if channel is None and webhook_url is None:
+            await interaction.response.send_message(embed=simple_embed("You must provide either a channel or a webhook URL", 'cross'))
+            return
+
+        if channel is not None and webhook_url is not None:
+            await interaction.response.send_message(embed=simple_embed("Provide only one of channel or webhook URL, not both", 'cross'))
+            return
+
         if channel is not None:
             await interaction.response.defer()
             webhook = await channel.create_webhook(name="Lily Listeners")
             webhook_url = webhook.url
-            await db.set_webhook(interaction.guild.id, type.value, webhook_url)
-            await interaction.followup.send(embed=simple_embed(f"Successfully created a webhook to listen `{type.value}`"))
+            await db.set_webhook(interaction.guild.id, notifier_type, webhook_url)
+            await interaction.followup.send(embed=simple_embed(f"Successfully created a webhook to listen `{notifier_type}`"), ephemeral=True)
         else:
-            await db.set_webhook(interaction.guild.id, type.value, webhook_url)
-            await interaction.response.send_message(embed=simple_embed(f"Successfully assigned a webhook to listen `{type.value}`"))
+            assert webhook_url is not None
+            await db.set_webhook(interaction.guild.id, notifier_type, webhook_url)
+            await interaction.response.send_message(embed=simple_embed(f"Successfully assigned a webhook to listen `{notifier_type}`"), ephemeral=True)
+
 
     @app_commands.guild_only()
     @app_permission(command_name="set_permission")
