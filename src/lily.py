@@ -8,6 +8,7 @@ from src.core.logging.lily_logging import LilyLoggingController
 from src.core.utils.embeds.sLilyEmbed import simple_embed
 from src.core.features.moderation.components.lily_moderation_components import AppealButton
 from src.core.configs.path import CONFIG_DB
+from src.core.features.events import on_audit_log_entry_create
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
@@ -166,6 +167,9 @@ class Lily(commands.Bot):
                     embed=simple_embed(str(error), "cross"),
                     ephemeral=True,
                 )
+
+    async def on_audit_log_entry_create(self, entry: discord.AuditLogEntry):
+        await on_audit_log_entry_create(bot=self, entry=entry)
 
     async def send(
         self,
