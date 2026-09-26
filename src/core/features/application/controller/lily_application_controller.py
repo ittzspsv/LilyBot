@@ -1298,7 +1298,7 @@ async def push_submission(user: User, bot: commands.Bot):
 
     assert bot.user is not None
     await forum_thread.send(
-        content=f"To send an application remark to {user.mention}, ping me (<@{bot.user.mention}>) and type your remark. I'll send it directly to their DMs."
+        content=f"To send an application remark to {user.mention}, ping me ({bot.user.mention}) and type your remark. I'll send it directly to their DMs."
     )
 
 async def update_applicant(
