@@ -19,12 +19,15 @@ class CommandInfo(discord.ui.LayoutView):
 
         self.cmd_name = cmd_name
         self.cmd_usage: List[str] = cmd_usage
+        self.bot_db: BotGlobalsDatabaseAccess = ctx.bot.db
 
-        self.formatted_usage: str = "\n".join(f"- {Config.bot_command_prefix}{cmd}" for cmd in self.cmd_usage)
+        prefix = self.bot_db.get_prefix_member(ctx.author.id, ctx.guild.id) or self.bot_db.get_prefix(ctx.guild.id) or "."
+
+        self.formatted_usage: str = "\n".join(f"- {prefix}{cmd}" for cmd in self.cmd_usage)
         self.container = discord.ui.Container(
             discord.ui.Section(
                 discord.ui.TextDisplay(content=f"## {self.cmd_name}"),
-                discord.ui.TextDisplay(content=f"- {ctx.command.description}"),
+                discord.ui.TextDisplay(content=f"- {ctx.command.description if ctx.command else "No description available"}"),
                 discord.ui.TextDisplay(content=f"### Command Usage\n{self.formatted_usage}"),
                 accessory=discord.ui.Thumbnail(
                     media=ctx.me.display_avatar.url,
@@ -173,7 +176,6 @@ class RoleCustomizationModal(discord.ui.Modal):
             self.assignment_scope.component.value or "none",
             {role.id for role in (self.assignment_roles.component.values or [])},
             self.role_type.value,
-            self.role_name
         )
 
         if response.get("success"):
