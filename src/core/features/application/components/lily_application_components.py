@@ -824,7 +824,7 @@ class ApplicationView(discord.ui.LayoutView):
             return
 
         try:
-            blocked = await self.db.app_management_db.is_applicant_blocked(
+            blocked, reason = await self.db.app_management_db.is_applicant_blocked(
                 interaction.guild.id, interaction.user.id
             )
         except Exception:
@@ -841,7 +841,7 @@ class ApplicationView(discord.ui.LayoutView):
 
         if blocked:
             await interaction.response.send_message(
-                embed=simple_embed("You have been blocked.", 'cross'),
+                embed=simple_embed(f"You have been blocked.\nReason: {reason}", 'cross'),
                 ephemeral=True,
             )
             return

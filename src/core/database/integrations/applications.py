@@ -1086,11 +1086,11 @@ class ApplicationManagement:
         self,
         guild_id: int,
         member_id: int
-    ) -> bool:
+    ) -> tuple[bool, Any]:
         await self.ensure_member(member_id, guild_id)
         row = await self.db.fetch_one(
             """
-            SELECT 1
+            SELECT reason
             FROM application_blocked_users
             WHERE guild_id = ?
             AND member_id = ?
@@ -1102,7 +1102,7 @@ class ApplicationManagement:
             ),
         )
 
-        return row is not None
+        return (row is not None, row["reason"] if row else None)
 
     async def update_applicant(
         self,
