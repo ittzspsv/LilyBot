@@ -1489,9 +1489,13 @@ class ModerationDashboard(discord.ui.LayoutView):
             label="Click to Configure"
         )
 
-        self.appeal_handling_edit_btn = discord.ui.Button(
-            style=discord.ButtonStyle.secondary,
-            label="Edit"
+        appeal_forum_id = prefill_values.get("appeal_channel")
+
+        self.appeal_channel_select = discord.ui.ChannelSelect(
+            channel_types=[discord.ChannelType.forum],
+            min_values=1,
+            max_values=1,
+            default_values=[discord.Object(id=appeal_forum_id)] if appeal_forum_id else []
         )
 
         logs_channel_id = prefill_values.get("logs_channel")
@@ -1504,31 +1508,55 @@ class ModerationDashboard(discord.ui.LayoutView):
             default_values=[discord.Object(id=logs_channel_id)] if logs_channel_id else [],
         )
 
-        self.moderation_logging_btn = discord.ui.Button(
-            style=discord.ButtonStyle.secondary,
-            label="Edit"
-        )
-
-        self.appeal_handling_btn.callback = self.appeal_handling_btn_callback
+        self.appeal_channel_select.callback = self.appeal_channel_select_callback
         self.moderation_logging.callback = self.moderation_logging_callback
 
+
+        quarantine_role_id = prefill_values.get("quarantine_role_id")
+
+        self.quarantine_role = discord.ui.RoleSelect(
+            min_values=1,
+            max_values=1,
+            default_values=[discord.Object(id=quarantine_role_id)] if quarantine_role_id else []
+        )
+
+        self.quarantine_role.callback = self.quarantine_role_callback
+
         container = discord.ui.Container(
-            discord.ui.TextDisplay(content="## Lily Moderation Dashboard"),
+            discord.ui.TextDisplay(content="## Lily Moderation Dashboard"), 
             discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
 
-            discord.ui.TextDisplay(content="### Command Permission Systems"),
+            discord.ui.TextDisplay(content=(
+                "### Quarantine Role\n"
+                "- Setup quarantine role (It will automatically configure permission overrides)"
+            )),
+
+            discord.ui.ActionRow(
+                self.quarantine_role
+            ),
+
+            discord.ui.TextDisplay(content=(
+                "### Command Permission Systems\n"
+                "- Setup Command permissions for roles (for administrator / guild owner no setup needed)"
+            )),
             discord.ui.ActionRow(
                 self.commands_select
             ),
 
             discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
 
-            discord.ui.TextDisplay(content="### Configure Appeals and Handling"),
+            discord.ui.TextDisplay(content=(
+                "### Configure Appeals and Handling\n"
+                "- Create a discord forum and select that here.\n"
+            )),
             discord.ui.ActionRow(
-                self.appeal_handling_btn
+                self.appeal_channel_select
             ),
             discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
-            discord.ui.TextDisplay(content="### Configure Moderation Logging"),
+            discord.ui.TextDisplay(content=(
+                "### Configure Moderation Logging\n"
+                "- A channel for posting every moderation action logging"
+            )),
             discord.ui.ActionRow(
                 self.moderation_logging
             ),
@@ -1536,6 +1564,127 @@ class ModerationDashboard(discord.ui.LayoutView):
         )
 
         self.add_item(container)
+
+    async def quarantine_role_callback(self, interaction: discord.Interaction):
+        try:
+            if not self.quarantine_role.values:
+                await interaction.response.send_message(
+                    embed=simple_embed("No role selected.", 'cross'),
+                    ephemeral=True
+                )
+                return
+
+            role = self.quarantine_role.values[0]
+            guild = interaction.guild
+            assert guild is not None
+
+            if role.position >= guild.me.top_role.position:
+                await interaction.response.send_message(
+                    "The role you have assigned is higher than me.  Please select a role that is below than my top role.",
+                    ephemeral=True
+                )
+                return
+
+            view = Confirm()
+
+            await interaction.response.send_message(
+                (
+                    f'This will configure {role.mention} as the quarantine role:\n'
+                    '- Denies `View Channel` on every channel in the server for this role\n'
+                    '\n'
+                    "-# Note: This can take some time on servers with many channels.\n"
+                    'Are you sure you want to proceed with this?'
+                ),
+                view=view,
+                ephemeral=True
+            )
+
+            await view.wait()
+
+            if view.value is None:
+                await interaction.edit_original_response(
+                    embed=simple_embed("Confirmation timed out.", 'cross'),
+                    view=None,
+                )
+                return
+
+            if not view.value:
+                await interaction.edit_original_response(
+                    embed=simple_embed('Process has been cancelled.', 'cross'),
+                    view=None,
+                )
+                return
+
+            bot_db = cast("Lily", interaction.client).db
+            assert bot_db is not None
+            assert interaction.guild is not None
+
+
+            await bot_db.delete_role_of_type(
+                guild_id=guild.id,
+                role_type="quarantine"
+            )
+
+            await bot_db.configure_role(
+                guild_id=interaction.guild.id,
+                role_id=role.id,
+                ban_limit=0,
+                ban_queue=0,
+                role_type="quarantine"
+            )
+
+            failed_channels = []
+
+            for channel in guild.channels:
+                try:
+                    await channel.set_permissions(
+                        role,
+                        overwrite=discord.PermissionOverwrite(view_channel=False),
+                        reason=f"Quarantine role setup by {interaction.user}",
+                    )
+                except discord.Forbidden:
+                    logger.exception(
+                        "Missing permissions to set quarantine overwrite on channel_id=%s guild_id=%s",
+                        channel.id, guild.id,
+                    )
+                    failed_channels.append(channel)
+                except discord.HTTPException:
+                    logger.exception(
+                        "Failed to set quarantine overwrite on channel_id=%s guild_id=%s",
+                        channel.id, guild.id,
+                    )
+                    failed_channels.append(channel)
+
+            if failed_channels:
+                failed_list = ", ".join(c.mention for c in failed_channels[:10])
+                more = f" (+{len(failed_channels) - 10} more)" if len(failed_channels) > 10 else ""
+                await interaction.edit_original_response(
+                    embed=simple_embed(
+                        f"Quarantine role configured, but I couldn't set overrides on: {failed_list}{more}",
+                        'cross'
+                    ),
+                    view=None,
+                )
+            else:
+                await interaction.edit_original_response(
+                    embed=simple_embed(
+                        f"Successfully configured {role.mention} as the quarantine role."
+                    ),
+                    view=None,
+                )
+
+        except Exception:
+            logger.exception(
+                "Failed during quarantine role setup for guild_id=%s",
+                getattr(interaction.guild, "id", None),
+            )
+            try:
+                await interaction.edit_original_response(
+                    embed=simple_embed("Something went wrong while setting up the quarantine role.", 'cross'),
+                    view=None,
+                )
+            except discord.HTTPException:
+                logger.exception("Failed to edit original response after quarantine role setup error")
 
     async def commands_select_callback(self, interaction: discord.Interaction):
         try:
@@ -1559,26 +1708,37 @@ class ModerationDashboard(discord.ui.LayoutView):
             if not interaction.response.is_done():
                 await interaction.response.send_message(embed=simple_embed("Something went wrong opening the permission configuration.", 'cross'), ephemeral=True)
 
-    async def appeal_handling_btn_callback(self, interaction: discord.Interaction):
-        """ Check appropriate permissions before performing """
+    async def appeal_channel_select_callback(self, interaction: discord.Interaction):
+        """ Configure appeal handling using an existing forum channel """
         try:
+            if not self.appeal_channel_select.values:
+                await interaction.response.send_message(
+                    embed=simple_embed("No channel selected.", 'cross'),
+                    ephemeral=True
+                )
+                return
+
+            channel = self.appeal_channel_select.values[0]
+            forum_channel = cast(discord.ForumChannel, channel)
+
             view = Confirm()
 
             await interaction.response.send_message(
                 (
-                    'This will create the following\n'
-                    '- **Forums Channel** : A forum channel where the bot would recieve appeals from the member\n'
-                    '- **Webhook**: A webhook will be created inside the forums channel where it will recieve messages from Users.\n'
+                    f'This will configure {forum_channel.mention} for appeal handling:\n'
+                    '- Checks for an existing appeal tag on the forum (creates one if missing)\n'
+                    '- **Webhook**: A webhook will be created inside the forum channel to receive messages from Users.\n'
+                    '- Sets up the required permissions on the channel.\n'
                     '\n'
                     "-# Note: Please allow the bot to do this process on it`s own as It has to setup few things \n"
-                    'Are you sure you have to proceed with this?'
+                    'Are you sure you want to proceed with this?'
                 ),
                 view=view,
                 ephemeral=True
             )
 
             await view.wait()
-            
+
             if view.value is None:
                 await interaction.edit_original_response(
                     embed=simple_embed("Confirmation timed out.", 'cross'),
@@ -1594,10 +1754,10 @@ class ModerationDashboard(discord.ui.LayoutView):
                 return
 
             else:
-                await self.functions["setup_mod_appeal"](interaction)
+                await self.functions["setup_mod_appeal_existing_channel"](interaction, forum_channel)
         except Exception:
             logger.exception(
-                "Failed during appeal handling setup confirmation for guild_id=%s",
+                "Failed during appeal handling setup (existing channel) for guild_id=%s",
                 getattr(interaction.guild, "id", None),
             )
             try:
