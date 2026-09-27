@@ -17,7 +17,7 @@ class BloxFruitsController:
         super().__init__()
 
         self.db = db
-        self.img_mode: int = 0
+        self.img_mode: int = 1
 
     def strip_mention(self, content: str, bot_user_id: int) -> str:
         return re.sub(rf"<@!?{bot_user_id}>", "", content).strip().lower()

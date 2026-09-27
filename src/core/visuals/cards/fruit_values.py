@@ -1,7 +1,7 @@
 from PIL import Image, ImageDraw, ImageFilter
 from src.core.utils.lily_utility import format_currency
 from typing import Final
-from src.core.visuals.utils.pillow_utils import load_font, fit_font_size, get_icon_path
+from src.core.visuals.utils.pillow_utils import load_font, fit_font_size, get_icon_path, apply_glow
 
 FONT_PATH: Final = "public/fonts/Berlin Sans FB Bold.ttf"
 NUMBER_FONT_PATH: Final = "public/fonts/Game Bubble.ttf"
@@ -9,7 +9,6 @@ ITEM_IMAGE_FOLDER: Final = "public/assets/blox_fruits/fruit_icons"
 BACKGROUND: Final = "public/assets/blox_fruits/fruit_values/FruitValues.png"
 ICON_SIZE: Final = 220
 GLOW_OPACITY: Final = 220
-
 
 
 def value_img(data):
@@ -31,6 +30,8 @@ def value_img(data):
 
     icon_file = get_icon_path(ITEM_IMAGE_FOLDER, fruit_name)
 
+    icon_coord = (60, 260)
+
     if icon_file:
         icon = Image.open(icon_file).convert("RGBA")
         icon = icon.resize((ICON_SIZE, ICON_SIZE), Image.Resampling.BICUBIC)
@@ -46,29 +47,16 @@ def value_img(data):
             gray = int(pixel)
             avg_color = (gray, gray, gray)
 
-        glow_size = (int(ICON_SIZE * 2.5), int(ICON_SIZE * 2.5))
-        glow_img = Image.new("RGBA", glow_size, (0, 0, 0, 0))
-        glow_draw = ImageDraw.Draw(glow_img)
-
-        ellipse_bbox = (
-            glow_size[0] // 4, glow_size[1] // 4,
-            3 * glow_size[0] // 4, 3 * glow_size[1] // 4
-        )
-
-        glow_draw.ellipse(ellipse_bbox, fill=avg_color + (GLOW_OPACITY,))
-        glow = glow_img.filter(ImageFilter.GaussianBlur(40))
+        canvas = apply_glow(canvas, icon_coord, ICON_SIZE, avg_color)
+        draw = ImageDraw.Draw(canvas)
 
         angle = 6
-        glow = glow.rotate(angle, expand=True, resample=Image.Resampling.BICUBIC)
-        icon = icon.rotate(angle, expand=True, resample=Image.Resampling.BICUBIC)
+        rotated_icon = icon.rotate(angle, expand=True, resample=Image.Resampling.BICUBIC)
 
-        glow_x = 60 + ICON_SIZE // 2 - glow.width // 2
-        glow_y = 260 + ICON_SIZE // 2 - glow.height // 2
-        canvas.paste(glow, (glow_x, glow_y), glow)
+        rotated_x = icon_coord[0] + ICON_SIZE // 2 - rotated_icon.width // 2
+        rotated_y = icon_coord[1] + ICON_SIZE // 2 - rotated_icon.height // 2
 
-        icon_x = 60 + ICON_SIZE // 2 - icon.width // 2
-        icon_y = 260 + ICON_SIZE // 2 - icon.height // 2
-        canvas.alpha_composite(icon, (icon_x, icon_y))
+        canvas.alpha_composite(rotated_icon, (rotated_x, rotated_y))
 
     else:
         print(f"[WARN] Missing icon for {fruit_name}")
