@@ -59,9 +59,9 @@ async def fetch_staff_detail(ctx: discord.Interaction | commands.Context, staff:
         view = StaffDataView(staff, data_dict)
 
         if isinstance(ctx, discord.Interaction):
-            await ctx.response.send_message(view=view)
+            await ctx.response.send_message(view=view, allowed_mentions=discord.AllowedMentions.none())
         else:
-            await ctx.reply(view=view)
+            await ctx.reply(view=view, allowed_mentions=discord.AllowedMentions.none())
 
     except Exception:
         logger.exception(f"[FetchStaffDetail] Failed to fetch staff data for staff_id={staff.id}")
