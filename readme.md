@@ -6,7 +6,7 @@
 Multi-purpose Discord bot designed to do almost any stuffs
 
 > [!WARNING]
-> Setting up this bot on your own currently requires some manual configuration. I'm working on improving the configuration system to make the setup process easier.
+> This bot has become a bit of a “kitchen sink bot.” Some of the unnecessary features will be removed, and the bot will be refocused around a more specific set of useful features.
 
 [Contact me on Discord](https://discord.com/users/1488556914605428988) if you have any doubts about this project or want to set this up on your own.
 
@@ -102,7 +102,7 @@ All modules are based on **Cogs**, meaning they can be removed or placed dependi
 | :-------------------------------------: | :----------------------------------------: |
 |              **Leveling**               |                **Profile**                 |
 
-![Preview](.github/misc/Leaderboard.webp)  
+![Preview](.github/misc/Leaderboard.webp)
 **Leaderboard**
 
 ---
