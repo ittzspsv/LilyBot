@@ -378,17 +378,14 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         assignment_scope: str = "none",
         roles: Set[int] = set(),
         role_type: str = "staff",
-        role_name: str | None = None,
         mode: int = 0
     ) -> Dict[str, str | bool]:
         try:
-            if role_name is None:
-                role_name = f"role_{role_id}"
             if mode == 0:
                 await self.execute(
                     """
                     INSERT INTO roles (
-                        guild_id, role_id, ban_limit, ban_queue, assignment_scope, role_type, role_name
+                        guild_id, role_id, ban_limit, ban_queue, assignment_scope, role_type
                     )
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(guild_id, role_id) DO UPDATE SET
@@ -396,19 +393,18 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
                         ban_queue        = excluded.ban_queue,
                         assignment_scope = excluded.assignment_scope,
                         role_type = excluded.role_type,
-                        role_name = excluded.role_name
                     """,
-                    (guild_id, role_id, ban_limit, ban_queue, assignment_scope, role_type, role_name),
+                    (guild_id, role_id, ban_limit, ban_queue, assignment_scope, role_type),
                 )
             else:
                 await self.execute(
                     """
                     INSERT OR IGNORE INTO roles (
-                        guild_id, role_id, ban_limit, ban_queue, assignment_scope, role_type, role_name
+                        guild_id, role_id, ban_limit, ban_queue, assignment_scope, role_type
                     )
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (guild_id, role_id, ban_limit, ban_queue, assignment_scope, role_type, role_name),
+                    (guild_id, role_id, ban_limit, ban_queue, assignment_scope, role_type),
                 )
 
             await self.execute(
@@ -454,8 +450,7 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
                 ban_limit,
                 ban_queue,
                 assignment_scope,
-                role_type,
-                role_name
+                role_type
             FROM roles
             WHERE guild_id = ? AND role_id = ?
             """,
@@ -481,7 +476,6 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
             "ban_queue": row["ban_queue"],
             "assignment_scope": row["assignment_scope"],
             "role_type": row["role_type"],
-            "role_name": row["role_name"],
             "assignment_roles": {
                 assignment["target_role_id"]
                 for assignment in assignment_rows
@@ -1517,7 +1511,7 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         query = """
         SELECT
             s.name,
-            GROUP_CONCAT(DISTINCT r.role_name) AS roles,
+            GROUP_CONCAT(DISTINCT sr.role_id) AS role_ids,
             s.on_loa,
             COALESCE(sc.strikes_count, 0) AS strikes_count,
             s.joined_on,
@@ -1529,9 +1523,6 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         LEFT JOIN staff_roles sr
             ON s.staff_id = sr.staff_id 
             AND s.guild_id = sr.guild_id
-        LEFT JOIN roles r
-            ON sr.role_id = r.role_id 
-            AND sr.guild_id = r.guild_id
         LEFT JOIN (
             SELECT guild_id, issued_to_id, COUNT(*) AS strikes_count
             FROM strikes
@@ -1560,7 +1551,7 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
             return {}
 
         name = row["name"]
-        role_names = row["roles"]
+        _role_ids = row["role_ids"]
         is_loa = row["on_loa"]
         strikes_count = row["strikes_count"]
         joined_on_str = row["joined_on"]
@@ -1569,7 +1560,6 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         retired = row["retired"]
         avatar_url = row["avatar_url"]
 
-        roles_list = role_names.split(",") if role_names else []
 
         if joined_on_str:
             joined_on = datetime.strptime(joined_on_str, "%d/%m/%Y")
@@ -1580,7 +1570,7 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         return {
             "name": name,
             "avatar_url": avatar_url,
-            "role_name": roles_list,
+            "role_ids": _role_ids.split(",") if _role_ids else [],
             "is_loa": is_loa,
             "strikes_count": strikes_count,
             "joined_on": joined_on_timestamp,
@@ -1657,7 +1647,6 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
             SELECT
                 srk.priority,
                 r.role_id,
-                r.role_name,
                 r.role_type,
                 s.staff_id,
                 s.name,
@@ -1692,7 +1681,6 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
 
         for row in rows:
             role_id = row["role_id"]
-            role_name = row["role_name"]
             staff_id = row["staff_id"]
             name = row["name"]
             avatar_url = row["avatar_url"] or "https://cdn3.emoji.gg/emojis/928205-membericon.png"
@@ -1716,7 +1704,6 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
             role = role_user_map.setdefault(
                 role_id,
                 {
-                    "role_name": role_name,
                     "role_type": role_type,
                     "priority": row["priority"],
                     "staff": [],
