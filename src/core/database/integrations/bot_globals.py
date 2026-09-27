@@ -210,6 +210,26 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         channels = self.get_channels(guild_id, channel_name)
         return channels[0] if channels else None
 
+    async def get_role_of_type(self, guild_id: int, role_type: str) -> List[int]:
+        rows = await self.fetch_all(
+            """
+            SELECT role_id
+            FROM roles
+            WHERE guild_id = ? AND role_type = ?
+            """,
+            (guild_id, role_type),
+        )
+
+        return [row[0] for row in rows]
+
+    async def delete_role_of_type(self, guild_id: int, role_type: str) -> None:
+        await self.execute(
+            """
+            DELETE FROM roles WHERE guild_id = ? AND role_type = ?
+            """,
+            (guild_id , role_type)
+        )
+
     def has_permission(
         self, guild_id: int, command: str | None, roles: List[int]
     ) -> bool:
@@ -387,12 +407,12 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
                     INSERT INTO roles (
                         guild_id, role_id, ban_limit, ban_queue, assignment_scope, role_type
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     ON CONFLICT(guild_id, role_id) DO UPDATE SET
                         ban_limit        = excluded.ban_limit,
                         ban_queue        = excluded.ban_queue,
                         assignment_scope = excluded.assignment_scope,
-                        role_type = excluded.role_type,
+                        role_type        = excluded.role_type
                     """,
                     (guild_id, role_id, ban_limit, ban_queue, assignment_scope, role_type),
                 )
@@ -402,11 +422,10 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
                     INSERT OR IGNORE INTO roles (
                         guild_id, role_id, ban_limit, ban_queue, assignment_scope, role_type
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     (guild_id, role_id, ban_limit, ban_queue, assignment_scope, role_type),
                 )
-
             await self.execute(
                 "DELETE FROM role_assignments WHERE guild_id = ? AND role_id = ?",
                 (guild_id, role_id),
