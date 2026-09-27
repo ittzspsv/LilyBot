@@ -25,7 +25,7 @@ class StaffDataView(discord.ui.LayoutView):
         super().__init__(timeout=None)
 
         name = member.display_name
-        role_name = data.get("role_name")
+        role_ids = data.get("role_ids")
         is_loa = data.get("is_loa")
         strikes_count = data.get("strikes_count")
         joined_on = data.get("joined_on")
@@ -60,7 +60,7 @@ class StaffDataView(discord.ui.LayoutView):
                 discord.ui.TextDisplay(f"## {name}'s Profile"),
                 discord.ui.TextDisplay(
                     "### Basic Information\n"
-                    f"{Configs.emoji['staff']} **Role:** {','.join(role_name or []) or 'N/A'}\n"
+                    f"{Configs.emoji['staff']} **Role:** {', '.join(f'<@&{rid}>' for rid in role_ids) if role_ids else 'N/A'}\n"
                     f"{Configs.emoji['pencil']} **Responsibilities:** {responsibility or 'N/A'}\n"
                     f"{Configs.emoji['calender']} **Join Date:** <t:{joined_on}:D>"
                 ),
