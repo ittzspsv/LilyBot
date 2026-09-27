@@ -1074,7 +1074,7 @@ class ApplicationManagement:
             (thread_id,)
         )
 
-        return dict(row)
+        return dict(row) if row else None
 
     async def set_submission_thread_reference(self, submission_id: int, thread_id: int):
         await self.db.execute(
