@@ -6,7 +6,7 @@
 Multi-purpose Discord bot designed to do almost any stuffs
 
 > [!WARNING]
-> This bot has become a bit of a “kitchen sink bot.” Some of the unnecessary features will be removed, and the bot will be refocused around a more specific set of useful features.
+> This bot has become a bit of a “kitchen sink.” Some of the unnecessary features will be removed, and the bot will be refocused around a more specific set of useful features.
 
 [Contact me on Discord](https://discord.com/users/1488556914605428988) if you have any doubts about this project or want to set this up on your own.
 
@@ -54,11 +54,11 @@ All modules are based on **Cogs**, meaning they can be removed or placed dependi
 
 | ![Stock](.github/misc/Stock.png) | ![FruitValues](.github/misc/FruitValues.png) |
 | :------------------------------: | :------------------------------------------: |
-|         **Stock System**         |               **Fruit Values**               |
+|      **Stock System**      |            **Fruit Values**            |
 
 | ![WinLoss](.github/misc/WinLoss.png) | ![FruitSuggestor](.github/misc/FruitSuggestor.webp) |
 | :----------------------------------: | :-------------------------------------------------: |
-|            **Win / Loss**            |                 **Fruit Suggestor**                 |
+|         **Win / Loss**         |              **Fruit Suggestor**              |
 
 ---
 
@@ -66,31 +66,31 @@ All modules are based on **Cogs**, meaning they can be removed or placed dependi
 
 | ![Preview](.github/misc/Moderation.png) | ![Preview](.github/misc/Modstats.png) |
 | :-------------------------------------: | :-----------------------------------: |
-|              **Mod Logs**               |             **Mod Stats**             |
+|           **Mod Logs**           |          **Mod Stats**          |
 
 | ![Preview](.github/misc/CaseProofs.png) |
 | :-------------------------------------: |
-|           **Proof Retrieval**           |
+|        **Proof Retrieval**        |
 
 ## STAFF MANAGEMENT TOOLS
 
 | ![Preview](.github/misc/StaffProfile.png) | ![Preview](.github/misc/StaffList.png) |
 | :---------------------------------------: | :------------------------------------: |
-|             **Staff Profile**             |             **Staff List**             |
+|          **Staff Profile**          |          **Staff List**          |
 
 | ![Preview](.github/misc/Strike.png) |
 | :---------------------------------: |
-|        **Staff Infractions**        |
+|     **Staff Infractions**     |
 
 ### Quota System
 
 | ![Preview](.github/misc/QuotaList.png) | ![Preview](.github/misc/QuotaEvaluation.png) |
 | :------------------------------------: | :------------------------------------------: |
-|            **Staff Quota**             |               **Quota Check**                |
+|         **Staff Quota**         |            **Quota Check**            |
 
 | ![Preview](.github/misc/QuotaOverallEvaluation.png) |
 | :-------------------------------------------------: |
-|            **Quota Overall Evaluation**             |
+|         **Quota Overall Evaluation**         |
 
 ---
 
@@ -100,7 +100,7 @@ All modules are based on **Cogs**, meaning they can be removed or placed dependi
 
 | ![Preview](.github/misc/levelcard.webp) | ![Preview](.github/misc/profile_card.webp) |
 | :-------------------------------------: | :----------------------------------------: |
-|              **Leveling**               |                **Profile**                 |
+|           **Leveling**           |             **Profile**             |
 
 ![Preview](.github/misc/Leaderboard.webp)
 **Leaderboard**
