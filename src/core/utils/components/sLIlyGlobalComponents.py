@@ -69,13 +69,46 @@ class RoleCustomizationModal(discord.ui.Modal):
         self.role_id = role_id
         self.role_name = role_name
 
-        self.role_type = discord.ui.TextInput(
-            label='Role Type',
-            style=discord.TextStyle.short,
-            placeholder='What kind of role is this',
-            required=True,
-            max_length=100,
-            default=role_config.get("role_type", "staff")
+        role_options = {
+            "staff_base": {
+                "name": "Staff Base",
+                "description": "Base staff role automatically assigned when using /add staff."
+            },
+            "staff_loa": {
+                "name": "Staff LOA",
+                "description": "Role assigned to staff members while they are on leave of absence."
+            },
+            "staff": {
+                "name": "Staff",
+                "description": "Staff role included in the rank hierarchy and assigned automatically."
+            },
+            "higher_staff": {
+                "name": "Higher Staff",
+                "description": "Role assigned to staff members holding a higher staff position."
+            },
+            "quarantine": {
+                "name": "Quarantine",
+                "description": "Role assigned to members who are placed under quarantine."
+            }
+        }
+
+        self.role_type = discord.ui.Label(
+            text="Role Type",
+            description="Select the type of role you want to configure.",
+            component=discord.ui.Select(
+                min_values=1,
+                max_values=1,
+                required=True,
+                options=[
+                    discord.SelectOption(
+                        label=role["name"],
+                        value=role_type,
+                        description=role["description"],
+                        default=role_config.get("role_type", "unknown") == role_type 
+                    )
+                    for role_type, role in role_options.items()
+                ]
+            )
         )
 
         self.ban_limit = discord.ui.TextInput(
@@ -164,7 +197,7 @@ class RoleCustomizationModal(discord.ui.Modal):
         assert isinstance(self.ban_queue_option.component, discord.ui.RadioGroup)
         assert isinstance(self.assignment_scope.component, discord.ui.RadioGroup)
         assert isinstance(self.assignment_roles.component, discord.ui.RoleSelect)
-        assert isinstance(self.role_type, discord.ui.TextInput)
+        assert isinstance(self.role_type.component, discord.ui.Select)
 
 
 
@@ -175,7 +208,7 @@ class RoleCustomizationModal(discord.ui.Modal):
             int(self.ban_queue_option.component.value or "0"),
             self.assignment_scope.component.value or "none",
             {role.id for role in (self.assignment_roles.component.values or [])},
-            self.role_type.value,
+            self.role_type.component.values[0],
         )
 
         if response.get("success"):
