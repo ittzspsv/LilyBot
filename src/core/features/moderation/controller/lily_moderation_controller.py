@@ -72,12 +72,14 @@ async def _validate_moderation_target(
         if user_input.top_role >= author.top_role:
             return None
 
-        quarantine_role = (
-            discord.utils.get(ctx.guild.roles, name="Quarantine")
-            or discord.utils.get(ctx.guild.roles, name="Prisoner") or
-            discord.utils.get(ctx.guild.roles, name="Quarantined") or
-            discord.utils.get(ctx.guild.roles, name="Jailed")
-        )
+        assert bot.db is not None
+        quarantine_role_id = await bot.db.get_role_of_type(ctx.guild.id, "quarantine")
+        if len(quarantine_role_id) <= 0:
+            await bot.send(ctx, embed=simple_embed("Quarantine role has not been configured, Please configure it through /mod dashboard or /configure role", 'cross'))
+            return
+
+
+        quarantine_role = ctx.guild.get_role(quarantine_role_id[0])
 
         if quarantine_role in user_input.roles:
             return None
@@ -254,18 +256,32 @@ async def quarantine_user(
         await bot.send(ctx, embed=simple_embed("User should be in the guild inorder to quarantine them", 'cross'))
         return
 
-    quarantine_role = (
-                discord.utils.get(ctx.guild.roles, name="Quarantine")
-                or discord.utils.get(ctx.guild.roles, name="Prisoner") or
-                discord.utils.get(ctx.guild.roles, name="Quarantined") or
-                discord.utils.get(ctx.guild.roles, name="Jailed")
-            )
 
-    if not quarantine_role or quarantine_role >= ctx.guild.me.top_role:
-        return await bot.send(ctx, embed=simple_embed("Quarantine role issue.", "cross"))
+    assert bot.db is not None
+    quarantine_role_id = await bot.db.get_role_of_type(ctx.guild.id, "quarantine")
+    if len(quarantine_role_id) <= 0:
+        await bot.send(ctx, embed=simple_embed("Quarantine role has not been configured, Please configure it through /mod dashboard or /configure role", 'cross'))
+        return
+
+    quarantine_role = ctx.guild.get_role(quarantine_role_id[0])
+
+    if quarantine_role is None:
+        return await bot.send(
+            ctx,
+            embed=simple_embed("Quarantine role was not found.", "cross"),
+        )
+
+    if quarantine_role >= ctx.guild.me.top_role:
+        return await bot.send(
+            ctx,
+            embed=simple_embed("I cannot Quarantine the user because the role is above or equal than my top role " , 'cross'),
+        )
 
     if quarantine_role in member.roles:
-        return await bot.send(ctx, embed=simple_embed("Already quarantined.", "cross"))
+        return await bot.send(
+            ctx,
+            embed=simple_embed("This member is already quarantined.", "cross"),
+        )
 
     author = ctx.author if isinstance(ctx, commands.Context) else ctx.user
 
@@ -537,15 +553,16 @@ async def release(
     assert bot.logging_controller is not None
     logging_controller = bot.logging_controller
 
-    quarantine_role = (
-                discord.utils.get(ctx.guild.roles, name="Quarantine")
-                or discord.utils.get(ctx.guild.roles, name="Prisoner") or
-                discord.utils.get(ctx.guild.roles, name="Quarantined") or
-                discord.utils.get(ctx.guild.roles, name="Jailed")
-            )
+    assert bot.db is not None
+    quarantine_role_id = await bot.db.get_role_of_type(ctx.guild.id, "quarantine")
+    if len(quarantine_role_id) <= 0:
+        await bot.send(ctx, embed=simple_embed("Quarantine role has not been configured, Please configure it through /mod dashboard or /configure role", 'cross'))
+        return
+
+    quarantine_role = ctx.guild.get_role(quarantine_role_id[0])
 
     if not quarantine_role:
-        await bot.send(ctx, embed=simple_embed("No Quarantine/Prisoner role found in this server.", "cross"))
+        await bot.send(ctx, embed=simple_embed("No Quarantine role found in this server.", "cross"))
         return
 
     if quarantine_role not in member.roles:
@@ -663,6 +680,8 @@ async def case_edit(
 
     assert bot.db is not None
     bot_db = bot.db
+
+    assert bot_db is not None
 
     try:
         response = await bot_db.edit_case(**{"staff_id": interaction.user.id, "case_id": case_id, "case_statement": case_statement, "absolute": absolute})
@@ -1073,6 +1092,150 @@ async def setup_mod_appeal(
         logger.exception("Unexpected error while setting up moderation appeal forum in guild %s", interaction.guild.id)
         raise discord.app_commands.CheckFailure(
             "An unexpected error occurred while setting up the moderation appeal forum."
+        )
+
+async def setup_mod_appeal_existing_channel(
+    interaction: discord.Interaction,
+    forum: discord.ForumChannel,
+):
+    if interaction.guild is None:
+        return
+
+    me = interaction.guild.me
+
+    bot = cast("Lily", interaction.client)
+
+    assert bot.db is not None
+    bot_db = bot.db
+
+    overwrites = {
+        interaction.guild.default_role: discord.PermissionOverwrite(
+            view_channel=False,
+        ),
+
+        me: discord.PermissionOverwrite(
+            view_channel=True,
+            manage_channels=True,
+            manage_threads=True,
+            send_messages=True,
+            attach_files=True,
+            add_reactions=True,
+            embed_links=True,
+            use_external_emojis=True,
+            use_external_stickers=True,
+            read_message_history=True,
+            send_messages_in_threads=True,
+            create_public_threads=True,
+            create_private_threads=True
+        ),
+
+        interaction.user: discord.PermissionOverwrite(
+            view_channel=True,
+            send_messages=True,
+            manage_channels=True,
+            read_message_history=True,
+            send_messages_in_threads=True,
+            attach_files=True,
+            embed_links=True,
+            add_reactions=True,
+            use_external_emojis=True,
+            use_external_stickers=True,
+        ),
+    }
+
+    try:
+        await forum.edit(
+            overwrites=overwrites,
+            reason=f"Moderation appeal forum configured by {interaction.user}",
+        )
+
+        existing_tag_names = {tag.name for tag in forum.available_tags}
+
+        if "Pending" not in existing_tag_names:
+            required_tags = [
+                discord.ForumTag(name="Pending", emoji="⏳"),
+                discord.ForumTag(name="Accepted", emoji="✅"),
+                discord.ForumTag(name="Denied", emoji="❌"),
+            ]
+            await forum.edit(
+                available_tags=[*forum.available_tags, *required_tags],
+                reason="Adding required moderation appeal tags",
+            )
+
+        await bot_db.remove_channel(
+            interaction.guild.id,
+            channel_type="moderation_appeal"
+        )
+
+        await bot_db.set_channel(
+            interaction.guild.id,
+            forum.id,
+            "moderation_appeal"
+        )
+
+        await bot_db.upsert_appeal_forum(
+            interaction.guild.id,
+            """
+            [
+                {
+                    "label": "Why should we remove the punishment?",
+                    "description": "Explain why the punishment should be removed and how you will follow the rules in future."
+                },
+                {
+                    "label": "Why did this happen?",
+                    "description": "Explain what caused the punishment and what you will do to prevent it from happening again."
+                }
+            ]
+            """
+        )
+
+        existing_webhooks = await forum.webhooks()
+        webhook = discord.utils.get(existing_webhooks, name="Lily Webhook")
+
+        if webhook is None:
+            webhook = await forum.create_webhook(
+                name="Lily Webhook"
+            )
+
+        await bot_db.set_webhook(
+            interaction.guild.id,
+            "moderation_appeal_dm",
+            webhook.url
+        )
+
+        message = (
+            f"Successfully configured {forum.mention} as the Appeal forum. "
+            "Appeals will be posted on that forum.\n"
+            "Please do not delete the `Pending` tag from the forum."
+        )
+
+        if interaction.response.is_done():
+            await interaction.followup.send(
+                embed=simple_embed(message),
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                embed=simple_embed(message),
+                ephemeral=True
+            )
+
+    except discord.Forbidden:
+        logger.exception("Missing permissions to configure moderation appeal forum in guild %s", interaction.guild.id)
+        raise discord.app_commands.CheckFailure(
+            "I don't have permission to configure that forum channel."
+        )
+
+    except discord.HTTPException as e:
+        logger.exception("Failed to configure moderation appeal forum in guild %s", interaction.guild.id)
+        raise discord.app_commands.CheckFailure(
+            f"Failed to configure the moderation appeal forum: {e}"
+        )
+
+    except Exception:
+        logger.exception("Unexpected error while configuring moderation appeal forum in guild %s", interaction.guild.id)
+        raise discord.app_commands.CheckFailure(
+            "An unexpected error occurred while configuring the moderation appeal forum."
         )
 
 async def accept_appeal(
