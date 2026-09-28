@@ -1461,7 +1461,7 @@ async def automatic_quota_evaluator(check_by: str, bot):
                     }
 
                     if _bot.user:
-                        _payload["avatar_url"] = _bot.user.display_avatar.url,
+                        _payload["avatar_url"] = _bot.user.display_avatar.url
                     await webhook.send(
                         **_payload
                     )
