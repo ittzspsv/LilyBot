@@ -186,19 +186,25 @@ def build_ms_embed(
     logs: list[dict],
     stats: dict,
     total_logs: int,
-    page_start: int = 0
+    page_start: int = 0,
+    ban_limit: int = 0
 ) -> list[discord.Embed]:
 
     embed1 = discord.Embed(
         title=f"{Config.emoji['arrow']} {moderator.display_name}'s Moderation Statistics",
         description=(
             f"### Total Stats : **{total_logs}**\n"
-            f"- Mutes : **{stats['mute']['total']}**\n"
-            f"- Warns: **{stats['warn']['total']}**\n"
-            f"- Quarantines: **{stats['quarantine']['total']}**\n"
-            f"- Bans: **{stats['ban']['total']}**"
+            f"> Mutes : **{stats['mute']['total']}**\n"
+            f"> Warns: **{stats['warn']['total']}**\n"
+            f"> Quarantines: **{stats['quarantine']['total']}**\n"
+            f"> Bans: **{stats['ban']['total']}**"
         ),
         colour=16777215
+    )
+
+    embed1.add_field(
+        name="Execution Limit (Ban, Quarantine)",
+        value=ban_limit
     )
 
     embed1.set_thumbnail(
