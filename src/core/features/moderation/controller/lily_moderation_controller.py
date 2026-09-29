@@ -197,7 +197,8 @@ async def ban_user(
         await bot.send(ctx, embed=simple_embed("Failed to ban this user due to a Discord API error.", "cross"))
         return
 
-    ban_message: str = f"Banned: <@{member.id}>\n**Remaining:** {max(0, status.remaining_count - 1)}"
+    remaining_message = f"**Remaining:** {max(0, status.remaining_count - 1)}" # Not used for now
+    ban_message: str = f"Banned <@{member.id}>"
 
     try:
         if proofs:
@@ -323,7 +324,8 @@ async def quarantine_user(
         await bot.send(ctx, embed=simple_embed("Failed to quarantine this user due to a Discord API error.", "cross"))
         return
 
-    quarantine_message: str = f"Quarantined: <@{member.id}>\n**Remaining:** {max(0, status.remaining_count - 1)}"
+    remaining_message = f"**Remaining:** {max(0, status.remaining_count - 1)}" # Not used for now
+    quarantine_message: str = f"Quarantined <@{member.id}>\n"
     try:
         if proofs:
             await bot.send(ctx, embed=simple_embed(quarantine_message))
@@ -410,7 +412,7 @@ async def mute_user(
 
         if len(proofs) > 0:
             await bot.send(ctx, embed=simple_embed(
-                f"Muted: <@{user.id}>"
+                f"Muted <@{user.id}>"
             ))
 
         case_id: int | None = await logging_controller.log_moderation_action(ctx, author, user, "mute", reason, proofs, {"duration": seconds})
@@ -420,7 +422,7 @@ async def mute_user(
             msg = await bot.send(
                 ctx,
                 embed=simple_embed(
-                    f"Muted: <@{user.id}>"
+                    f"Muted <@{user.id}>"
                 ),
                 view=view
             )
@@ -762,12 +764,16 @@ async def ms(
         return
 
     try:
+        assert isinstance(moderator, discord.Member)
+        ban_limit_status = await bot.db.get_ban_limit_status(ctx.guild.id, moderator.id, [role.id for role in moderator.roles])
+
         embeds = build_ms_embed(
             moderator=moderator,
             logs=result["logs"],
             stats=result["stats"],
             total_logs=result["total_logs"],
-            page_start=page_start
+            page_start=page_start,
+            ban_limit=max(0, ban_limit_status.remaining_count - 1)
         )
         if isinstance(ctx, discord.Interaction):
             await ctx.response.send_message(embeds=embeds, ephemeral=True)
@@ -1319,7 +1325,12 @@ async def accept_appeal(
             )
 
         elif case["mod_type"] == "quarantine":
-            role = discord.utils.get(interaction.guild.roles, name="Quarantine")
+            quarantine_role_id = await bot.db.get_role_of_type(interaction.guild.id, "quarantine")
+            if len(quarantine_role_id) <= 0:
+                await bot.send(interaction, embed=simple_embed("Quarantine role has not been configured, Please configure it through /mod dashboard or /configure role", 'cross'))
+                return
+    
+            role = interaction.guild.get_role(quarantine_role_id[0])
             if role:
                 roles_to_restore: list[discord.Role] = []
                 metadata_raw = case.get("metadata", {})
