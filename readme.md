@@ -6,7 +6,7 @@
 Multi-purpose Discord bot designed to do almost any stuffs
 
 > [!WARNING]
-> This bot has become a bit of a “kitchen sink.” Some of the unnecessary features will be removed, and the bot will be refocused around a more specific set of useful features.
+> Setting Up this bot for now is not easy, It will be improved in the future.
 
 [Contact me on Discord](https://discord.com/users/1488556914605428988) if you have any doubts about this project or want to set this up on your own.
 
