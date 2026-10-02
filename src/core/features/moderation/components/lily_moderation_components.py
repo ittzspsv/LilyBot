@@ -1358,6 +1358,20 @@ class CaseProofsView(discord.ui.View):
             if not interaction.response.is_done():
                 await interaction.response.send_message(embed=simple_embed("Something went wrong opening the proofs form.", 'cross'), ephemeral=True)
 
+    async def on_timeout(self):
+        for item in self.children:
+            if isinstance(item, discord.ui.Button):
+                item.disabled = True
+
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                logger.exception(
+                    "Failed to disable proofs button after timeout for case_id=%s",
+                    self.case_id
+                )
+
 class AppealMessageView(discord.ui.LayoutView):
     def __init__(self, message: str, server: str, attachments: List[discord.Attachment]) -> None:
         super().__init__(timeout=None)
