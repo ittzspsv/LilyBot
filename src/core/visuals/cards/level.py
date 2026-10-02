@@ -304,7 +304,8 @@ async def create_level_card(
         34
     )
 
-    level_text = f"Level : {format_currency(current_level)} | Rank: {format_currency(current_rank)}"
+    level_text = f"Level: {format_currency(current_level)}  •  Rank: {format_currency(current_rank)}"
+
 
     bbox = draw.textbbox(
         (0, 0),
