@@ -11,6 +11,7 @@ from src.core.features.moderation.controller.lily_moderation_controller import (
     ms as ms_fn,
     moderation_insights as moderation_insights_fn,
     setup_mod_appeal,
+    setup_mod_appeal_existing_channel
 )
 
 from typing import TYPE_CHECKING, cast
@@ -46,6 +47,8 @@ class ModCommands(app_commands.Group):
     async def insights(self, interaction: discord.Interaction):
         await moderation_insights_fn(interaction)
 
+
+    """
     @app_commands.command(name="acronym_add", description="Add an reason acronym")
     @app_permission(command_name="mod_acronym_add")
     async def acronym_add(self, interaction: discord.Interaction, key: str, *, value: str):
@@ -119,7 +122,7 @@ class ModCommands(app_commands.Group):
             await bot_db.add_moderation_acronym(target.id, interaction.guild.id, key, value)
 
         await interaction.response.send_message(embed=simple_embed(f"Successfully transferred moderation acronym to {target.mention}"))
-
+    """
     @app_commands.command(name="dashboard", description="Spawn in the dashboard")
     @app_permission(command_name="mod_dashboard")
     async def dashboard(self, interaction: discord.Interaction):
@@ -135,13 +138,18 @@ class ModCommands(app_commands.Group):
 
             return
 
+
+        quarantine_role_id = await bot_db.get_role_of_type(interaction.guild.id, "quarantine")
         logs_channel = bot_db.get_channel(interaction.guild.id, "logs_channel")
+        appeal_forum_channel = bot_db.get_channel(interaction.guild.id, "moderation_appeal")
 
 
         view = ModerationDashboard({
-            "setup_mod_appeal": setup_mod_appeal
+            "setup_mod_appeal_existing_channel": setup_mod_appeal_existing_channel
         }, prefill_values={
-            "logs_channel": logs_channel
+            "logs_channel": logs_channel,
+            "quarantine_role_id": quarantine_role_id[0],
+            "appeal_channel": appeal_forum_channel
         })
 
         await interaction.response.send_message(
