@@ -1020,7 +1020,7 @@ class LilyUtility(commands.Cog):
 
     @permission(command_name="afk_set")
     @commands.command(name="afk", description="Set an afk status")
-    async def setafk(self, ctx: commands.Context, *, reason: str):
+    async def setafk(self, ctx: commands.Context, *, reason: str = "AFK"):
         try:
             bot_db: BotGlobalsDatabaseAccess = self.bot.db
 
