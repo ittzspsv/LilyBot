@@ -400,7 +400,11 @@ class CaseView(discord.ui.LayoutView):
         moderator_id = case_data["moderator_id"]
         mod_type = case_data["mod_type"]
         self.reason = case_data["reason"]
+        self.guild_id = case_data["guild_id"]
         timestamp = case_data["timestamp"]
+        self.appeal_status = case_data["appeal_status"]
+        self.appeal_thread = case_data["thread_id"] or 0
+
         self.channel = None
 
         self.message: discord.Message | None = None
@@ -482,6 +486,24 @@ class CaseView(discord.ui.LayoutView):
         self.delete_case.callback = self.delete_case_callback
         self.add_proofs.callback = self.add_proofs_callback
 
+        appeal_section: discord.ui.Item = (
+            discord.ui.Section(
+                discord.ui.TextDisplay(content="### Appeal Information"),
+                discord.ui.TextDisplay(
+                    f"- Appeal Status: **{self.appeal_status.title()}**"
+                ),
+                accessory=discord.ui.Button(
+                    url=f"https://discord.com/channels/{self.guild_id}/{self.appeal_thread}",
+                    style=discord.ButtonStyle.link,
+                    label="View Appeal",
+                ),
+            )
+            if self.appeal_status is not None
+            else discord.ui.TextDisplay(
+                "- Appeal Status: Not appealed yet."
+            )
+        )
+
         case_overview = discord.ui.Container(
             discord.ui.TextDisplay(
                 content=f"## {emoji['pin']} Case {case_id} | {mod_type.title() if mod_type else '*Unknown*'}"
@@ -496,6 +518,7 @@ class CaseView(discord.ui.LayoutView):
             discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
             discord.ui.TextDisplay(content=f"### Metadata\n{metadata_lines}"),
             discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+            appeal_section,
             discord.ui.ActionRow(
                 self.edit_case,
                 self.get_proofs,

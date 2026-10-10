@@ -1181,15 +1181,27 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         case_id: int,
         guild_id: int | None = None
     ) -> Optional[Dict[str, Any]]:
-        if guild_id is None:
-            query = "SELECT * FROM modlogs WHERE id = ?"
-            params = (case_id,)
-        else:
-            query = "SELECT * FROM modlogs WHERE id = ? AND guild_id = ?"
-            params = (case_id, guild_id)
+        query = """
+            SELECT
+                m.*,
+                a.status AS appeal_status,
+                a.thread_id
+            FROM modlogs AS m
+            LEFT JOIN mod_appeal AS a ON a.case_id = m.id
+            WHERE m.id = ?
+        """
+        params = (case_id,)
+
+        if guild_id is not None:
+            query += " AND m.guild_id = ?"
+            params += (guild_id,)
 
         row = await self.fetch_one(query, params)
-        return dict(row) if row is not None else None
+
+        if row is None:
+            return None
+
+        return dict(row)
 
     async def get_case_latest(
         self,
