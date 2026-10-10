@@ -54,7 +54,7 @@ async def create_level_card(
 
     except Exception:
         return None
-    CARD_W, CARD_H = 720, 160
+    CARD_W, CARD_H = 720, 180
     CARD_RADIUS = 28
 
     AVATAR_SIZE = 200
