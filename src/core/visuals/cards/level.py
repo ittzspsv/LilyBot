@@ -197,7 +197,7 @@ async def create_level_card(
     if avatar_deco is not None:
         avatar_x = CARD_X + AVATAR_PAD_X - (deco_extra // 2)
     else:
-        avatar_x = CARD_X - 16
+        avatar_x = CARD_X - 29
 
     avatar_y = (
         CARD_Y
