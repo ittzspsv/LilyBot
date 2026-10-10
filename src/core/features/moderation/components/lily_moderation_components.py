@@ -1761,8 +1761,31 @@ class ModerationDashboard(discord.ui.LayoutView):
                 )
                 return
 
-            channel = self.appeal_channel_select.values[0]
-            forum_channel = cast(discord.ForumChannel, channel)
+            partial_channel = self.appeal_channel_select.values[0]
+            _forum_channel = partial_channel.resolve()
+
+            if _forum_channel is None:
+                try:
+                    _forum_channel = await partial_channel.fetch()
+                except discord.HTTPException:
+                    logger.exception(
+                        "Failed to fetch selected appeal channel_id=%s guild_id=%s",
+                        partial_channel.id, partial_channel.guild_id,
+                    )
+                    await interaction.response.send_message(
+                        embed=simple_embed("I couldn't access that channel. Check my permissions and try again.", 'cross'),
+                        ephemeral=True
+                    )
+                    return
+
+            if not isinstance(_forum_channel, discord.ForumChannel):
+                await interaction.response.send_message(
+                    embed=simple_embed("That channel isn't a forum channel.", 'cross'),
+                    ephemeral=True
+                )
+                return
+
+            forum_channel = _forum_channel
 
             view = Confirm()
 
