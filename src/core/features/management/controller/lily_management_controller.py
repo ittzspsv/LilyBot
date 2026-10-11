@@ -220,7 +220,12 @@ async def add_staff(interaction: discord.Interaction, staff: discord.Member, ran
 
     assert isinstance(interaction.user, discord.Member)
 
-    if rank is not None and interaction.user.top_role <= rank:
+    if (
+        rank is not None
+        and interaction.user.id != interaction.guild.owner_id
+        and not interaction.user.guild_permissions.administrator
+        and interaction.user.top_role <= rank
+    ):
         await interaction.response.send_message(
             embed=simple_embed(
                 "You cannot assign a rank higher than or equal to your own.",
