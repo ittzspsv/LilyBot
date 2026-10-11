@@ -66,13 +66,15 @@ async def create_level_card(
 
     deco_extra = int(AVATAR_SIZE * DECO_SCALE) - AVATAR_SIZE
     OVERFLOW_Y = (deco_extra // 2) + 8
-    OVERFLOW_X = (deco_extra // 2) + 8
+    OVERFLOW_X = (deco_extra) + 8
 
     CANVAS_W = CARD_W + OVERFLOW_X
     CANVAS_H = CARD_H + (OVERFLOW_Y * 2)
 
     CARD_X = OVERFLOW_X
     CARD_Y = OVERFLOW_Y
+
+    CARD_CUT_LEFT = 80
 
     BASE_BG = (32, 34, 39, 255)
 
@@ -162,9 +164,11 @@ async def create_level_card(
         (0, 0, 0, 0)
     )
 
+    
+
     canvas.alpha_composite(
-        card,
-        (CARD_X, CARD_Y)
+        card.crop((CARD_CUT_LEFT, 0, CARD_W, CARD_H)),
+        (CARD_X + CARD_CUT_LEFT, CARD_Y)
     )
 
     side = min(
