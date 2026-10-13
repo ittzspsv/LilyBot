@@ -1002,6 +1002,45 @@ class AppealForumCustomize(discord.ui.Modal):
             if not interaction.response.is_done():
                 await interaction.response.send_message(embed=simple_embed("Something went wrong while saving the appeal forum config. Make sure it's valid JSON.", 'cross'), ephemeral=True)
 
+class AppealRequestView(discord.ui.LayoutView):
+    def __init__(
+        self,
+        case_id: int,
+        appealer: discord.User | discord.Member,
+        appeal_answers: dict[str, str],
+        case_details: dict,
+    ) -> None:
+        super().__init__(timeout=None)
+
+        reason = (case_details["reason"] or "No reason provided")[:500]
+
+        answers_text = "\n".join(
+            f"### {question}\n{answer.strip() or '-'}"
+            for question, answer in appeal_answers.items()
+        )
+
+        appeal_container = discord.ui.Container(
+            discord.ui.Section(
+                discord.ui.TextDisplay("### Case Appeal"),
+                discord.ui.TextDisplay(f"User: {appealer.mention}\nID: {appealer.id}"),
+                discord.ui.TextDisplay(answers_text),
+                accessory=discord.ui.Thumbnail(media=appealer.display_avatar.url),
+            ),
+            discord.ui.Separator(),
+            discord.ui.TextDisplay(f"-# Case ID: {case_id}")
+        )
+
+        case_container = discord.ui.Container(
+            discord.ui.TextDisplay("### Case Information"),
+            discord.ui.Separator(),
+            discord.ui.TextDisplay(f"{emoji['bookmark']} **Case Type**\n{case_details['mod_type'].title()}"),
+            discord.ui.TextDisplay(f"{emoji['pencil']} **Reason**\n{reason}"),
+            discord.ui.TextDisplay(f"{emoji['shield']} **Moderator**\n<@{case_details['moderator_id']}>")
+        )
+
+        self.add_item(appeal_container)
+        self.add_item(case_container)
+
 class AppealModal(discord.ui.Modal):
     def __init__(
         self,
@@ -1028,7 +1067,7 @@ class AppealModal(discord.ui.Modal):
                 style=discord.TextStyle.paragraph,
                 required=True,
                 placeholder="Enter your answer...",
-                max_length=2000,
+                max_length=350,
             )
 
             label = discord.ui.Label(
@@ -1101,86 +1140,26 @@ class AppealModal(discord.ui.Modal):
                     return
 
             assert isinstance(appeal_forum, discord.ForumChannel)
-
-            """ Setup an embed """
-            appeal_embed = discord.Embed(
-                title="Case Appeal",
-                description=f"- User: {interaction.user.mention}\n- ID: {interaction.user.id}",
-                color=16777215,
+            
+            view = AppealRequestView(
+                case_id=self.case_id,
+                appealer=interaction.user,
+                appeal_answers=answers,
+                case_details=self.case,
             )
 
-            for question, answer in answers.items():
-                appeal_embed.add_field(
-                    name=question,
-                    value=answer[:1024] or "*No response*",
-                    inline=False,
-                )
+            tag = discord.utils.get(appeal_forum.available_tags, name="Pending")
 
-            appeal_embed.set_footer(text=f"Case ID: {self.case_id}")
-            appeal_embed.set_image(url=img["border"])
-
-
-            case_info_embed = discord.Embed(
-                title="Case Information",
-                color=16777215
+            thread, _ = await appeal_forum.create_thread(
+                name=f"{interaction.user.name.capitalize()}'s {self.case['mod_type'].title()} Appeal",
+                applied_tags=[tag] if tag else [],
+                view=view,
+                allowed_mentions=discord.AllowedMentions.none()
             )
-
-            case_info_embed.add_field(
-                name=f"{emoji["bookmark"]} Case Type",
-                value=self.case['mod_type'].title(),
-                inline=False
-            )
-
-            case_info_embed.add_field(
-                name=f"{emoji["pencil"]} Reason",
-                value=self.case["reason"] or "No reason Provided",
-                inline=False
-            )
-
-            case_info_embed.add_field(
-                name=f"{emoji["shield"]} Moderator",
-                value=f"<@{self.case['moderator_id']}>",
-                inline=False
-            )
-
-            case_info_embed.set_image(url=img["border"])
-
-            """ Create a thread inside that forum and post all of these"""
-            avatar = await interaction.user.display_avatar.to_file(
-                filename="avatar.png"
-            )
-
-            tag = discord.utils.get(
-                appeal_forum.available_tags,
-                name="Pending",
-            )
-
-            try:
-                thread, message = await appeal_forum.create_thread(
-                    name=f"{interaction.user.display_name}'s {self.case['mod_type'].title()} Appeal",
-                    file=avatar,
-                    applied_tags=[tag] if tag else [],
-                    embeds=[appeal_embed, case_info_embed],
-                    content=f"<@{self.case['moderator_id']}>"
-                )
-
-            except discord.Forbidden:
-                logger.exception(
-                    "Forbidden creating appeal thread with avatar file in forum channel_id=%s (case_id=%s); retrying without avatar",
-                    appeal_forum.id,
-                    self.case_id,
-                )
-                # Most likely we can assume that it might be an image permission, 
-                thread, message = await appeal_forum.create_thread(
-                    name=f"{interaction.user.display_name}'s {self.case['mod_type'].title()} Appeal",
-                    applied_tags=[tag] if tag else [],
-                    embeds=[appeal_embed, case_info_embed],
-                    content=f"<@{self.case['moderator_id']}>"
-                )
 
             assert interaction.client.user is not None
             await thread.send(
-                content=f"- To reply to the appealer, mention me (<@{interaction.client.user.id}>) and type your message.",
+                content=f"<@{self.case['moderator_id']}> Please review your {self.case['mod_type'].title()} appeal. To reply, mention me (<@{interaction.client.user.id}>) and type your message."
             )
 
             await self.db.create_appeal(
