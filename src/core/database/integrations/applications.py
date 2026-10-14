@@ -229,13 +229,63 @@ class ApplicationManagement:
         return new_wave
 
     async def delete_application(self, guild_id: int, application_id: int) -> bool:
-        rows_affected = await self.db.execute(
-            "DELETE FROM application WHERE id = ? AND guild_id = ?",
-            (application_id, guild_id),
-            row_count=True
-        )
+        """ 
+        I forgot to add ON_DELETE_CASCADE
+        Altering an existing schema is non-trivial [For me] --
+        SO I am working with an alternative
+        
+        """
+        async with self.db.transaction() as conn:
+            exists = await conn.fetchone(
+                "SELECT 1 FROM application WHERE id = ? AND guild_id = ?",
+                (application_id, guild_id),
+            )
+            if not exists:
+                return False
 
-        return bool(rows_affected)
+            await conn.execute(
+                """
+                DELETE FROM application_submission_answers
+                WHERE submission_id IN (
+                    SELECT id FROM application_submissions
+                    WHERE application_id = ? AND guild_id = ?
+                )
+                """,
+                (application_id, guild_id),
+            )
+            await conn.execute(
+                "DELETE FROM application_submissions WHERE application_id = ? AND guild_id = ?",
+                (application_id, guild_id),
+            )
+            await conn.execute(
+                "DELETE FROM application_group_assignments WHERE application_id = ? AND guild_id = ?",
+                (application_id, guild_id),
+            )
+            await conn.execute(
+                "DELETE FROM application_views WHERE application_id = ? AND guild_id = ?",
+                (application_id, guild_id),
+            )
+            cursor = await conn.execute(
+                "DELETE FROM application WHERE id = ? AND guild_id = ?",
+                (application_id, guild_id),
+            )
+            return cursor.get_cursor().rowcount > 0
+
+    async def get_delete_preview(self, guild_id: int, application_id: int) -> Optional[tuple[str, int]]:
+        row = await self.db.fetch_one(
+            """
+            SELECT a.name,
+                (SELECT COUNT(*) FROM application_submissions s
+                    WHERE s.application_id = a.id AND s.guild_id = a.guild_id) AS submissions
+            FROM application a
+            WHERE a.id = ? AND a.guild_id = ?
+            """,
+            (application_id, guild_id),
+        )
+        if row is None:
+            return None
+        return row["name"], row["submissions"]
+
 
     async def create_question(
         self,
