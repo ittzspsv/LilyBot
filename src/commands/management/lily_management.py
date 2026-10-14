@@ -32,7 +32,6 @@ class LilyManagement(commands.Cog):
         self.dev_group = DevCommands()
         self.staff_role_group = StaffRoleCommands()
 
-        self.message_reset_schedular.start()
 
     @property
     def _command_groups(self):
@@ -80,31 +79,61 @@ class LilyManagement(commands.Cog):
                     continue
             print("LOA Views Initialized!")
 
-        """ Start the cron schedular """
+
         self.scheduler.add_job(
             self._run_daily,
-            CronTrigger(hour=23, minute=55),
-            id="quota_daily",
+            CronTrigger(hour=23, minute=55, timezone="UTC"),
+            id="quota_daily_evaluate",
             misfire_grace_time=3600,
             coalesce=True,
-            replace_existing=True
+            replace_existing=True,
         )
+
+        self.scheduler.add_job(
+            self.daily_callback,
+            CronTrigger(hour=0, minute=0, timezone="UTC"),
+            id="quota_daily_reset",
+            misfire_grace_time=3600,
+            coalesce=True,
+            replace_existing=True,
+        )
+
         self.scheduler.add_job(
             self._run_weekly,
-            CronTrigger(day_of_week="sun", hour=23, minute=55),
-            id="quota_weekly",
+            CronTrigger(day_of_week="sat", hour=23, minute=55, timezone="UTC"),
+            id="quota_weekly_evaluate",
             misfire_grace_time=3600,
             coalesce=True,
-            replace_existing=True
+            replace_existing=True,
         )
+
+        self.scheduler.add_job(
+            self.weekly_callback,
+            CronTrigger(day_of_week="sun", hour=0, minute=0, timezone="UTC"),
+            id="quota_weekly_reset",
+            misfire_grace_time=3600,
+            coalesce=True,
+            replace_existing=True,
+        )
+
         self.scheduler.add_job(
             self._run_monthly,
-            CronTrigger(day="last", hour=23, minute=55),
-            id="quota_monthly",
+            CronTrigger(day="last", hour=23, minute=55, timezone="UTC"),
+            id="quota_monthly_evaluate",
             misfire_grace_time=3600,
             coalesce=True,
-            replace_existing=True
+            replace_existing=True,
         )
+
+        self.scheduler.add_job(
+            self.monthly_callback,
+            CronTrigger(day=1, hour=0, minute=0, timezone="UTC"),
+            id="quota_monthly_reset",
+            misfire_grace_time=3600,
+            coalesce=True,
+            replace_existing=True,
+        )
+
         self.scheduler.start()
 
     async def _run_daily(self):
@@ -126,68 +155,6 @@ class LilyManagement(commands.Cog):
     async def on_message(self, message: discord.Message):
         if self.db is None:
             return
-
-    @tasks.loop(minutes=5)
-    async def message_reset_schedular(self):
-        if self.bot.db is None:
-            return
-
-        now = LilyUtility.utcnow()
-
-        row = await self.bot.db.fetch_one(
-            "SELECT next_day_update, next_week_update, next_month_update FROM updates"
-        )
-
-        if not row:
-            return
-
-        next_day, next_week, next_month = map(LilyUtility.parse_date, row)
-
-        if next_day and now >= next_day:
-            await self.daily_callback()
-
-            new_day = (now + timedelta(days=1)).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
-
-            await self.bot.db.execute(
-                "UPDATE updates SET next_day_update = ?",
-                (LilyUtility.iso(new_day),),
-                commit=True
-            )
-
-        if next_week and now >= next_week:
-            await self.weekly_callback()
-
-            days_ahead = 7 - now.weekday()
-            if days_ahead == 0:
-                days_ahead = 7
-
-            new_week = (now + timedelta(days=days_ahead)).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
-
-            await self.bot.db.execute(
-                "UPDATE updates SET next_week_update = ?",
-                (LilyUtility.iso(new_week),),
-                commit=True
-            )
-
-        if next_month and now >= next_month:
-            await self.monthly_callback()
-
-            if now.month == 12:
-                new_month = now.replace(year=now.year + 1, month=1, day=1)
-            else:
-                new_month = now.replace(month=now.month + 1, day=1)
-
-            new_month = new_month.replace(hour=0, minute=0, second=0, microsecond=0)
-
-            await self.bot.db.execute(
-                "UPDATE updates SET next_month_update = ?",
-                (LilyUtility.iso(new_month),),
-                commit=True
-            )
 
     async def daily_callback(self):
         if self.db is None:
