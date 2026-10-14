@@ -6,7 +6,7 @@ from discord.ext import commands, tasks
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
 from src.core.logging.lily_logging import LilyLoggingController
 from src.core.utils.embeds.sLilyEmbed import simple_embed
-from src.core.features.moderation.components.lily_moderation_components import AppealButton
+from src.core.features.moderation.components.lily_moderation_components import AppealButton, AppealHandleButton
 from src.core.configs.path import CONFIG_DB
 from src.core.features.events import on_audit_log_entry_create
 
@@ -31,7 +31,7 @@ class Lily(commands.Bot):
 
         super().__init__(command_prefix=self.prefix,intents=intents,help_command=None, owner_ids={1488556914605428988})
 
-    async def setup_hook(self):
+    async def setup_hook(self) -> None:
         """ Bot Globals Database """
         self.db = await BotGlobalsDatabaseAccess.connect(str(CONFIG_DB))
         self.logging_controller = LilyLoggingController(self.db)
@@ -47,6 +47,7 @@ class Lily(commands.Bot):
         self.scheduler = AsyncIOScheduler(jobstores=jobstores)
         self.scheduler.start()
         self.add_dynamic_items(AppealButton)
+        self.add_dynamic_items(AppealHandleButton)
 
 
         extensions = [

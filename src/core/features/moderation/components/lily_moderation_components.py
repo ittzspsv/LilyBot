@@ -3,7 +3,7 @@ from __future__ import annotations
 import discord
 from src.core.utils.embeds.sLilyEmbed import simple_embed
 from src.core.utils.lily_utility import format_duration
-from typing import Optional, cast, Any, TYPE_CHECKING, List, Dict, Tuple, Union, Callable
+from typing import Optional, cast, Any, TYPE_CHECKING, List, Dict, Tuple, Union, Callable, Literal
 from datetime import datetime
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
 from src.core.logging.components.logging_components import ProofsComponentCommandModal
@@ -1002,6 +1002,329 @@ class AppealForumCustomize(discord.ui.Modal):
             if not interaction.response.is_done():
                 await interaction.response.send_message(embed=simple_embed("Something went wrong while saving the appeal forum config. Make sure it's valid JSON.", 'cross'), ephemeral=True)
 
+
+class AppealHandleButton(
+    discord.ui.DynamicItem[discord.ui.Button[discord.ui.LayoutView]],
+    template=r'appeal:(?P<action>accept|reject):(?P<id>[0-9]+)',
+):
+
+    def __init__(self, action: Literal['accept', 'reject'], case_id: int) -> None:
+        super().__init__(
+            discord.ui.Button(
+                label=action.title(),
+                style=discord.ButtonStyle.secondary,
+                custom_id=f'appeal:{action}:{case_id}',
+            )
+        )
+        self.action = action
+        self.case_id = case_id
+
+    @classmethod
+    async def from_custom_id(
+        cls,
+        interaction: discord.Interaction,
+        item: discord.ui.Item[Any],
+        match: re.Match[str],
+        /,
+    ):
+        return cls(match['action'], int(match['id']))  # type: ignore[arg-type]
+
+    @staticmethod
+    async def _reply(
+        interaction: discord.Interaction,
+        text: str,
+        style: str | None = None,
+        *,
+        ephemeral: bool = True,
+    ) -> None:
+        """Send a message whether or not the interaction was already responded to."""
+        embed = simple_embed(text, style) if style else simple_embed(text)
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=embed, ephemeral=ephemeral)
+        else:
+            await interaction.response.send_message(embed=embed, ephemeral=ephemeral)
+
+    async def _disable_buttons(self, interaction: discord.Interaction) -> None:
+        if interaction.message is None:
+            return
+        try:
+            view = discord.ui.LayoutView.from_message(interaction.message, timeout=None)
+            for child in view.walk_children():
+                if (
+                    isinstance(child, discord.ui.Button)
+                    and child.custom_id
+                    and child.custom_id.startswith("appeal:")
+                ):
+                    child.disabled = True
+
+            if interaction.response.is_done():
+                await interaction.edit_original_response(view=view)
+            else:
+                await interaction.response.edit_message(view=view)
+        except Exception:
+            logger.exception("Failed to disable appeal buttons for case %s", self.case_id)
+
+    async def _finalize(self, interaction: discord.Interaction, appeal: Any) -> None:
+        """Shared tail of accept/reject: disable buttons, confirm, tag + archive the thread."""
+        guild = interaction.guild
+        thread = interaction.channel
+        assert guild is not None and isinstance(thread, discord.Thread)
+
+        if self.action == "accept":
+            tag_name = "Accepted"
+            done_text = "Successfully accepted the appeal and their punishment has been lifted.\nThis thread will be archived."
+        else:
+            tag_name = "Denied"
+            done_text = "Successfully rejected the appeal. This thread will be archived!"
+
+        await self._disable_buttons(interaction)
+        await interaction.followup.send(embed=simple_embed(done_text))
+
+        try:
+            parent = thread.parent
+            tag = (
+                discord.utils.get(parent.available_tags, name=tag_name)
+                if isinstance(parent, discord.ForumChannel)
+                else None
+            )
+            if tag is None:
+                logger.error("%r tag not found on appeal forum for guild %s", tag_name, guild.id)
+                await thread.edit(locked=True, archived=True)
+            else:
+                await thread.edit(applied_tags=[tag], locked=True, archived=True)
+        except Exception:
+            logger.exception(
+                "Failed to archive thread after appeal %s (case %s)", self.action, appeal["case_id"]
+            )
+
+    async def _accept(
+        self,
+        interaction: discord.Interaction,
+        bot_db: BotGlobalsDatabaseAccess,
+        appeal: Any,
+        case: Any,
+        member: discord.Member | None,
+    ) -> None:
+        guild = interaction.guild
+        assert guild is not None
+        mod_type = case["mod_type"]
+
+        if member is not None:
+            try:
+                if mod_type == "mute":
+                    await member.edit(
+                        timed_out_until=None,
+                        reason=f"Appeal accepted by {interaction.user}",
+                    )
+                    await bot_db.log_moderation_action(
+                        guild.id, interaction.user.id, member.id, "unmute", "Appealed"
+                    )
+
+                elif mod_type == "quarantine":
+                    quarantine_role_ids = await bot_db.get_role_of_type(guild.id, "quarantine")
+                    if not quarantine_role_ids:
+                        await self._reply(
+                            interaction,
+                            "Quarantine role has not been configured. Please configure it "
+                            "through /mod dashboard or /configure role.",
+                            "cross",
+                        )
+                        return
+
+                    quarantine_role = guild.get_role(quarantine_role_ids[0])
+                    if quarantine_role is None:
+                        await self._reply(
+                            interaction,
+                            "Seems like I can't find a Quarantined role. Did you assign that first?",
+                            "cross",
+                        )
+                        return
+
+                    metadata_raw = case.get("metadata") or {}
+                    metadata = json.loads(metadata_raw) if isinstance(metadata_raw, str) else metadata_raw
+                    role_ids = metadata.get("roles_before_quarantine", [])
+
+                    roles_to_restore: list[discord.Role] = []
+                    for role_id in role_ids:
+                        restored = guild.get_role(role_id)
+                        if restored is None or restored.managed:
+                            continue
+                        if restored >= guild.me.top_role:
+                            continue
+                        roles_to_restore.append(restored)
+
+                    new_roles = [r for r in member.roles if r != quarantine_role]
+                    new_roles += [r for r in roles_to_restore if r not in new_roles]
+
+                    await member.edit(
+                        roles=new_roles,
+                        reason=f"Appeal accepted by {interaction.user}",
+                    )
+                    await bot_db.log_moderation_action(
+                        guild.id, interaction.user.id, member.id, "quarantine_release", "Appealed"
+                    )
+
+            except discord.Forbidden:
+                logger.exception(
+                    "Missing permissions to lift %s for user %s in guild %s",
+                    mod_type, member.id, guild.id,
+                )
+                await self._reply(
+                    interaction,
+                    "I don't have permission to lift this punishment. Check my role position and permissions.",
+                    "cross",
+                )
+                return
+            except Exception:
+                logger.exception(
+                    "Failed to lift %s for case %s in guild %s", mod_type, appeal["case_id"], guild.id
+                )
+                await self._reply(interaction, "Failed to lift the punishment. Please try again.", "cross")
+                return
+
+        try:
+            await bot_db.set_appeal_status(appeal["case_id"], "accepted")
+        except Exception:
+            logger.exception("Failed to set appeal %s to accepted", appeal["case_id"])
+            await self._reply(interaction, "The punishment was lifted but I couldn't update the appeal status.", "cross")
+            return
+
+        if member is not None:
+            try:
+                await member.send(
+                    content=f"Your {mod_type.title()} appeal has been accepted and the action has been lifted."
+                )
+            except discord.HTTPException:
+                pass
+
+        await self._finalize(interaction, appeal)
+
+    async def _reject(
+        self,
+        interaction: discord.Interaction,
+        bot_db: BotGlobalsDatabaseAccess,
+        appeal: Any,
+        member: discord.Member | None,
+        reason: str,
+    ) -> None:
+        try:
+            await bot_db.set_appeal_status(appeal["case_id"], "rejected")
+        except Exception:
+            logger.exception("Failed to set appeal %s to rejected", appeal["case_id"])
+            await self._reply(interaction, "Failed to update the appeal status. Please try again.", "cross")
+            return
+
+        if member is not None:
+            try:
+                await member.send(
+                    embed=simple_embed(
+                        f"Your appeal has been denied. Sorry\n- Reason: {reason or 'No reason provided'}",
+                        "cross",
+                    )
+                )
+            except discord.HTTPException:
+                pass
+
+        await self._finalize(interaction, appeal)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        action_type = self.action
+        guild = interaction.guild
+        thread = interaction.channel
+
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+
+        if guild is None or not isinstance(thread, discord.Thread):
+            await self._reply(interaction, f"Unable to {action_type} an invalid instigator appeal.", "cross")
+            return
+
+        if action_type == "accept":
+            await interaction.response.defer()
+
+        try:
+            appeal = await bot_db.get_appeal(thread.id)
+        except Exception:
+            logger.exception("Failed to fetch appeal for thread %s", thread.id)
+            await self._reply(interaction, "An unexpected error occurred while fetching this appeal.", "cross")
+            return
+
+        if appeal is None or appeal["case_id"] != self.case_id:
+            await self._reply(interaction, f"Unable to {action_type} an invalid instigator appeal.", "cross")
+            return
+
+        if appeal["status"] != "pending":
+            await self._disable_buttons(interaction)
+            await self._reply(interaction, "This appeal is no longer in a valid state for this action.", "cross")
+            return
+
+        try:
+            case = await bot_db.get_case(appeal["case_id"], guild.id)
+        except Exception:
+            logger.exception("Failed to fetch case %s for appeal on thread %s", appeal["case_id"], thread.id)
+            await self._reply(interaction, "An unexpected error occurred while fetching the related case.", "cross")
+            return
+
+        if case is None:
+            await self._reply(interaction, "Unable to find the case", "cross")
+            return
+
+        moderator = case["moderator_id"]
+        if (
+            interaction.user.id != moderator
+            and has_app_permission(interaction, "mod_appeal_management") is False
+        ):
+            await self._reply(
+                interaction,
+                f"This action has been denied. Only <@{moderator}> can initiate it.",
+                "cross",
+            )
+            return
+
+        try:
+            member: discord.Member | None = await guild.fetch_member(case["target_user_id"])
+        except discord.NotFound:
+            member = None
+        except discord.HTTPException:
+            logger.exception("Failed to fetch member %s in guild %s", case["target_user_id"], guild.id)
+            await self._reply(interaction, "Failed to fetch the appealing member. Please try again.", "cross")
+            return
+
+        if action_type == "accept":
+            await self._accept(interaction, bot_db, appeal, case, member)
+        else:
+            await interaction.response.send_modal(RejectAppealModal(self, appeal, member))
+
+class RejectAppealModal(discord.ui.Modal, title="Reject Appeal"):
+    reason = discord.ui.TextInput(
+        label="Reason for rejection",
+        placeholder="Explain why this appeal is being denied...",
+        style=discord.TextStyle.paragraph,
+        required=True,
+        max_length=1000,
+    )
+
+    def __init__(
+        self,
+        button: AppealHandleButton,
+        appeal: Any,
+        member: discord.Member | None,
+    ) -> None:
+        super().__init__()
+        self.button = button
+        self.appeal = appeal
+        self.member = member
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+
+        await interaction.response.defer()
+
+        await self.button._reject(
+            interaction, bot_db, self.appeal, self.member, self.reason.value.strip()
+        )
+
 class AppealRequestView(discord.ui.LayoutView):
     def __init__(
         self,
@@ -1022,7 +1345,7 @@ class AppealRequestView(discord.ui.LayoutView):
         appeal_container = discord.ui.Container(
             discord.ui.Section(
                 discord.ui.TextDisplay("### Case Appeal"),
-                discord.ui.TextDisplay(f"User: {appealer.mention}\nID: {appealer.id}"),
+                discord.ui.TextDisplay(f"User: {appealer.name.capitalize()}\nID: {appealer.id}"),
                 discord.ui.TextDisplay(answers_text),
                 accessory=discord.ui.Thumbnail(media=appealer.display_avatar.url),
             ),
@@ -1040,6 +1363,12 @@ class AppealRequestView(discord.ui.LayoutView):
 
         self.add_item(appeal_container)
         self.add_item(case_container)
+        self.add_item(
+            discord.ui.ActionRow[Any](
+                AppealHandleButton("accept", case_id=case_id),
+                AppealHandleButton("reject", case_id=case_id)
+            )
+        )
 
 class AppealModal(discord.ui.Modal):
     def __init__(
