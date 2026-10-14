@@ -602,7 +602,7 @@ async def list_strikes(interaction: discord.Interaction, staff: discord.Member):
         )
 
         view = StrikesListView(
-            (interaction.user.display_name, interaction.user.display_avatar.url),
+            (staff.name.capitalize(), staff.display_avatar.url),
             strikes_list_data=strikes_list_data,
             db=bot_db,
             guild_id=interaction.guild.id,
