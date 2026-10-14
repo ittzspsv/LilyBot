@@ -921,7 +921,7 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         now = datetime.now(timezone.utc)
         start_today = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
         start_week = (
-            (now - timedelta(days=now.weekday()))
+            (now - timedelta(days=(now.weekday() + 1) % 7))
             .replace(hour=0, minute=0, second=0, microsecond=0)
             .isoformat()
         )
