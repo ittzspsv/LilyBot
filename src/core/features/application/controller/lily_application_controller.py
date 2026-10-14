@@ -1,7 +1,7 @@
 from src.core.utils.embeds.sLilyEmbed import simple_embed
 from src.core.utils.lily_utility import length, truncate
 from src.core.features.application.types.lily_application_types import QuestionType
-from ..components.lily_application_components import CreateApplicationModal, ApplicationView, UpdateApplicationModal
+from ..components.lily_application_components import CreateApplicationModal, ApplicationView, UpdateApplicationModal, Confirm
 
 from discord import Interaction, app_commands, TextChannel, User, ForumChannel
 import discord
@@ -399,27 +399,58 @@ async def delete_application(interaction: Interaction, application_id: int):
 
     bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
+    guild_id = interaction.guild.id
+
+    preview = await bot_db.app_management_db.get_delete_preview(guild_id, application_id)
+    if preview is None:
+        logger.info("delete_application: application %s not found in guild %s", application_id, guild_id)
+        raise app_commands.CheckFailure("Application not found.")
+    name, submission_count = preview
+
+    view = Confirm()
+    await interaction.response.send_message(
+        embed=simple_embed(
+            f"Delete **{name}**?\n\n"
+            f"This permanently deletes the application, its **{submission_count}** "
+            f"submission(s) with all answers, and its group assignments. "
+            f"This cannot be undone.\n\n"
+            f"Panel messages and submission threads in Discord are **not** removed automatically."
+        , "warn"),
+        view=view,
+        ephemeral=True,
+    )
+    await view.wait()
+
+    if view.value is None:
+        await interaction.edit_original_response(
+            embed=simple_embed("Timed out. Nothing was deleted."), view=None
+        )
+        return
+    if view.value is False:
+        await interaction.edit_original_response(
+            embed=simple_embed("Cancelled. Nothing was deleted."), view=None
+        )
+        return
 
     try:
-        success = await bot_db.app_management_db.delete_application(interaction.guild.id, application_id)
+        success = await bot_db.app_management_db.delete_application(guild_id, application_id)
     except Exception:
-        logger.exception(
-            "Failed to delete application %s (guild %s)",
-            application_id, interaction.guild.id,
+        logger.exception("Failed to delete application %s (guild %s)", application_id, guild_id)
+        await interaction.edit_original_response(
+            embed=simple_embed("Something went wrong while deleting the application. Check the logs."),
+            view=None,
         )
-        raise
+        return
 
     if success:
-        await interaction.response.send_message(
-            embed=simple_embed("Successfully deleted the application."),
-            ephemeral=True
+        await interaction.edit_original_response(
+            embed=simple_embed(f"Successfully deleted **{name}**."), view=None
         )
     else:
-        logger.info(
-            "delete_application: application %s not found in guild %s",
-            application_id, interaction.guild.id,
+        logger.info("delete_application: application %s vanished before delete (guild %s)", application_id, guild_id)
+        await interaction.edit_original_response(
+            embed=simple_embed("Application no longer exists."), view=None
         )
-        raise app_commands.CheckFailure("Application not found.")
 
 """ Application Question Management """
 
