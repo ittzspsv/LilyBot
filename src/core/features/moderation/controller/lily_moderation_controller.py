@@ -1250,9 +1250,6 @@ async def accept_appeal(
     if interaction.guild is None:
         return
 
-    await interaction.response.send_message(content="Hey this command will be removed.  Please use the buttons above to accept/reject an appeal.")
-
-
     bot = cast("Lily", interaction.client)
     assert bot.db is not None
     bot_db = bot.db
@@ -1404,8 +1401,6 @@ async def reject_appeal(
 ):
     if interaction.guild is None:
         return
-
-    await interaction.response.send_message(content="Hey this command will be removed.  Please use the buttons above to accept/reject an appeal.")
 
     if not isinstance(interaction.channel, discord.Thread):
         return await interaction.response.send_message(

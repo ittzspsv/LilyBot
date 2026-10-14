@@ -1058,14 +1058,13 @@ class AppealHandleButton(
                     child.disabled = True
 
             if interaction.response.is_done():
-                await interaction.edit_original_response(view=view)
+                await interaction.edit_original_response(view=view, allowed_mentions=discord.AllowedMentions.none())
             else:
-                await interaction.response.edit_message(view=view)
+                await interaction.response.edit_message(view=view, allowed_mentions=discord.AllowedMentions.none())
         except Exception:
             logger.exception("Failed to disable appeal buttons for case %s", self.case_id)
 
     async def _finalize(self, interaction: discord.Interaction, appeal: Any) -> None:
-        """Shared tail of accept/reject: disable buttons, confirm, tag + archive the thread."""
         guild = interaction.guild
         thread = interaction.channel
         assert guild is not None and isinstance(thread, discord.Thread)
