@@ -259,10 +259,12 @@ class LilyUtility(commands.Cog):
             if not isinstance(ctx.channel, discord.TextChannel):
                 return await ctx.reply(embed=simple_embed("Failed to purge", 'cross'))
 
+            cutoff = discord.utils.utcnow() - timedelta(days=14)
             deleted = await ctx.channel.purge(
                 limit=amount,
                 check=check,
                 bulk=True,
+                after=cutoff,
                 oldest_first=oldest_first,
                 reason=f"Purged by {ctx.author.mention}"
             )
