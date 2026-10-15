@@ -1108,7 +1108,7 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
                     THEN 1 END) AS daily,
                 COUNT(CASE
                     WHEN datetime(replace(substr(m.timestamp,1,19),'T',' '))
-                        >= datetime('now','weekday 1','start of day','-7 days')
+                        >= datetime('now','weekday 0','start of day','-7 days')
                     THEN 1 END) AS weekly,
                 COUNT(CASE
                     WHEN datetime(replace(substr(m.timestamp,1,19),'T',' '))
