@@ -796,9 +796,9 @@ async def mod_logs(
     if ctx.guild is None:
         embed = simple_embed("Command requires guild object in order to execute", "cross")
         if isinstance(ctx, discord.Interaction):
-            await ctx.response.send_message(embed=embed, ephemeral=True)
+            await ctx.response.send_message(embed=embed)
         else:
-            await ctx.reply(embed=embed, ephemeral=True)
+            await ctx.reply(embed=embed)
         return
 
     client = ctx.client if isinstance(ctx, discord.Interaction) else ctx.bot
@@ -842,7 +842,7 @@ async def mod_logs(
         )
 
         if isinstance(ctx, discord.Interaction):
-            await ctx.response.send_message(view=view, allowed_mentions=discord.AllowedMentions.none(), ephemeral=True)
+            await ctx.response.send_message(view=view, allowed_mentions=discord.AllowedMentions.none())
             view.message = await ctx.original_response()
         else:
             view.message = await ctx.reply(view=view, allowed_mentions=discord.AllowedMentions.none())
