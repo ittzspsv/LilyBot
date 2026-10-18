@@ -9,8 +9,20 @@ class GroupCommands(app_commands.Group):
     def __init__(self):
         super().__init__(name="group", description="Application Groups")
 
-    @app_permission(command_name="application_management")
+    @app_permission(
+        command_name="application_management",
+        permissions={"manage_guild"},
+    )
     @app_commands.command(name="new", description="Create a new question group")
+    @app_commands.describe(
+        name="The name of the group",
+        description="What this group of questions covers",
+        question_1="The first question in this group",
+        question_2="An optional second question",
+        question_3="An optional third question",
+        question_4="An optional fourth question",
+        question_5="An optional fifth question",
+    )
     @app_commands.autocomplete(
         question_1=question_autocomplete,
         question_2=question_autocomplete,
@@ -36,14 +48,26 @@ class GroupCommands(app_commands.Group):
             [question_1, question_2, question_3, question_4, question_5],
         )
 
-    @app_permission(command_name="application_management")
+    @app_permission(
+        command_name="application_management",
+        permissions={"manage_guild"},
+    )
     @app_commands.command(name="update", description="Update a existing question group")
+    @app_commands.describe(
+        group="The group to update",
+        name="The new name of the group",
+        description="The new description of the group",
+    )
     @app_commands.autocomplete(group=groups_autocomplete)
     async def update(self, interaction: Interaction, group: int, name: str, description: str):
         await controller.update_group(interaction, group, name, description)
 
-    @app_permission(command_name="application_management")
+    @app_permission(
+        command_name="application_management",
+        permissions={"manage_guild"},
+    )
     @app_commands.command(name="delete", description="Delete a existing question group")
+    @app_commands.describe(group="The group to delete")
     @app_commands.autocomplete(group=groups_autocomplete)
     async def delete(self, interaction: Interaction, group: int):
         await controller.delete_group(interaction, group)

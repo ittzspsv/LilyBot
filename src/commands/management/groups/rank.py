@@ -12,7 +12,7 @@ class RankCommands(app_commands.Group):
         super().__init__(name="rank", description="Promotion and demotion commands")
 
     @app_commands.command(name='promote', description='Promotes a staff to upper rank')
-    @app_permission(command_name="rank_promote")
+    @app_permission(command_name="rank_promote", permissions={"manage_roles", "manage_guild"})
     @app_commands.guild_only()
     async def promote(
         self,
@@ -25,7 +25,7 @@ class RankCommands(app_commands.Group):
         await controller.update_staff(interaction, staff, reason, "promotion", rank=rank)
 
     @app_commands.command(name='demote', description='Demotes a staff to lower rank')
-    @app_permission(command_name="rank_demote")
+    @app_permission(command_name="rank_demote", permissions={"manage_roles"})      
     @app_commands.guild_only()
     async def demote(
         self,
@@ -38,7 +38,7 @@ class RankCommands(app_commands.Group):
         await controller.update_staff(interaction, staff, reason, "demotion", rank=rank)
 
     @app_commands.command(name="configure", description="Configure staff ranks")
-    @app_permission(command_name="rank_configure")
+    @app_permission(command_name="rank_configure", permissions={"manage_guild"})
     @app_commands.guild_only()
     async def configure(self, interaction: discord.Interaction):
         bot_db: BotGlobalsDatabaseAccess = interaction.client.db

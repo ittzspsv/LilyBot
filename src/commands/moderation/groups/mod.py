@@ -25,7 +25,16 @@ class ModCommands(app_commands.Group):
         super().__init__(name="mod", description="Moderation Command Hierarchy")
 
     @app_commands.command(name='stats', description='checks stats for a particular moderator or yourself')
-    @app_permission(command_name="ms")
+    @app_commands.describe(
+        member="The moderator whose stats you want to see (defaults to you)",
+        page_start="The first page of results to show",
+        page_end="The last page of results to show"
+    )
+    @app_permission(
+        command_name="ms",
+        permissions={"moderate_members", "kick_members", "ban_members"},
+        match="any",
+    )
     async def stats(
         self,
         interaction: discord.Interaction,
@@ -43,7 +52,11 @@ class ModCommands(app_commands.Group):
         )
 
     @app_commands.command(name='insights', description='Get detailed moderation insights')
-    @app_permission(command_name="moderation_insights")
+    @app_permission(
+        command_name="moderation_insights",
+        permissions={"manage_guild"},
+        match="all",
+    )
     async def insights(self, interaction: discord.Interaction):
         await moderation_insights_fn(interaction)
 
@@ -124,7 +137,11 @@ class ModCommands(app_commands.Group):
         await interaction.response.send_message(embed=simple_embed(f"Successfully transferred moderation acronym to {target.mention}"))
     """
     @app_commands.command(name="dashboard", description="Spawn in the dashboard")
-    @app_permission(command_name="mod_dashboard")
+    @app_permission(
+        command_name="mod_dashboard",
+        permissions={"manage_guild", "manage_channels", "manage_roles"},
+        match="all",
+    )
     async def dashboard(self, interaction: discord.Interaction):
 
         bot_db = cast("Lily", interaction.client).db

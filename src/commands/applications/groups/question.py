@@ -15,8 +15,20 @@ class QuestionCommands(app_commands.Group):
             description="Application Questions Management System",
         )
 
-    @app_permission(command_name="application_management")
+    @app_permission(
+        command_name="application_management",
+        permissions={"manage_guild"},
+    )
     @app_commands.command(name="new", description="Create a new application question")
+    @app_commands.describe(
+        label="The question text shown to applicants",
+        description="Extra help text for the question",
+        placeholder="Placeholder text shown in the input",
+        type="The kind of answer this question expects",
+        min_length="Minimum answer length",
+        max_length="Maximum answer length",
+        options="Comma-separated choices, for choice-based questions",
+    )
     async def new(
         self,
         interaction: Interaction,
@@ -39,8 +51,21 @@ class QuestionCommands(app_commands.Group):
             json.dumps({"options": options.split(",") if options is not None else []}),
         )
 
-    @app_permission(command_name="application_management")
+    @app_permission(
+        command_name="application_management",
+        permissions={"manage_guild"},
+    )
     @app_commands.command(name="update", description="Update an existing application question")
+    @app_commands.describe(
+        question="The question to update",
+        label="The new question text",
+        description="The new help text",
+        placeholder="The new placeholder text",
+        type="The new answer type",
+        min_length="The new minimum answer length",
+        max_length="The new maximum answer length",
+        options="New comma-separated choices, for choice-based questions",
+    )
     @app_commands.autocomplete(question=question_autocomplete)
     async def update(
         self,

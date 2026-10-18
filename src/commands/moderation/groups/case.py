@@ -18,7 +18,16 @@ class CaseCommands(app_commands.Group):
         super().__init__(name="case", description="Case management commands")
 
     @app_commands.command(name='list', description='Checks case logs for a particular user')
-    @app_permission(command_name="modlogs")
+    @app_commands.describe(
+        member="The user whose cases you want to see (defaults to you)",
+        mod_type="Only show this type of case",
+        moderator="Only show cases handled by this moderator"
+    )
+    @app_permission(
+        command_name="modlogs",
+        permissions={"moderate_members", "kick_members", "ban_members"},
+        match="any",
+    )
     async def list(
         self,
         interaction: discord.Interaction,
@@ -45,7 +54,15 @@ class CaseCommands(app_commands.Group):
             print(f"Exception [ModLogs] : {e}")
 
     @app_commands.command(name='edit', description='Edit a case')
-    @app_permission(command_name="case_edit")
+    @app_commands.describe(
+        case_id="The ID of the case to edit",
+        new_reason="The new reason for this case"
+    )
+    @app_permission(
+        command_name="case_edit",
+        permissions={"moderate_members", "kick_members", "ban_members"},
+        match="any",
+    )
     async def edit(self, interaction: discord.Interaction, case_id: str, *, new_reason: str):
         if case_id is None or new_reason is None:
             return await interaction.response.send_message(
@@ -55,11 +72,24 @@ class CaseCommands(app_commands.Group):
         await case_edit_fn(interaction, int(case_id), new_reason, False)
 
     @app_commands.command(name='edit_absolute', description='Edit any case')
-    @app_permission(command_name="case_edit_absolute")
+    @app_commands.describe(
+        case_id="The ID of the case to edit",
+        new_reason="The new reason for this case"
+    )
+    @app_permission(
+        command_name="case_edit_absolute",
+        permissions={"manage_guild"},
+        match="all",
+    )
     async def edit_absolute(self, interaction: discord.Interaction, case_id: int, *, new_reason: str):
         await case_edit_fn(interaction, case_id, new_reason, True)
 
     @app_commands.command(name='delete', description='Delete a case')
-    @app_permission(command_name="case_delete")
+    @app_commands.describe(case_id="The ID of the case to delete")
+    @app_permission(
+        command_name="case_delete",
+        permissions={"manage_guild"},
+        match="all",
+    )
     async def delete(self, interaction: discord.Interaction, case_id: str):
         await case_delete_fn(interaction, int(case_id))

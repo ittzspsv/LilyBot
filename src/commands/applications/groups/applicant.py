@@ -18,20 +18,41 @@ class ApplicantCommands(app_commands.Group):
             description="Application Applicants Management System",
         )
 
-    @app_permission(command_name="applicant_block_unblock")
+    @app_permission(
+        command_name="applicant_block_unblock",
+        permissions={"kick_members", "ban_members"},
+        match="any",
+    )
     @app_commands.command(name="block", description="Block an applicant (globally)")
-    @app_commands.describe(member="Which member should be blocked")
+    @app_commands.describe(
+        member="Which member should be blocked",
+        reason="Why this applicant is being blocked",
+    )
     async def block(self, interaction: Interaction, member: Member | User, reason: str):
         await controller.update_applicant(interaction, member.id, "block", reason)
 
-    @app_permission(command_name="applicant_block_unblock")
+    @app_permission(
+        command_name="applicant_block_unblock",
+        permissions={"kick_members", "ban_members"},
+        match="any",
+    )
     @app_commands.command(name="unblock", description="Unblock an applicant (globally)")
-    @app_commands.describe(member="Which member should be unblocked")
+    @app_commands.describe(
+        member="Which member should be unblocked",
+        reason="Why this applicant is being unblocked",
+    )
     async def unblock(self, interaction: Interaction, member: Member | User, reason: str):
         await controller.update_applicant(interaction, member.id, "unblock", reason)
 
-    @app_permission(command_name="application_management")
+    @app_permission(
+        command_name="application_management",
+        permissions={"manage_guild"},
+    )
     @app_commands.command(name="entrydelete", description="Delete an applicant's application entry")
+    @app_commands.describe(
+        member="The applicant whose entry should be deleted",
+        application="The application the entry belongs to",
+    )
     @app_commands.autocomplete(application=applications_autocomplete)
     async def entrydelete(
         self,
@@ -41,7 +62,11 @@ class ApplicantCommands(app_commands.Group):
     ):
         await controller.applicant_entry_delete(interaction, member, application)
 
-    @app_permission(command_name="application_staff")
+    @app_permission(
+        command_name="application_staff",
+        permissions={"moderate_members"},
+    )
     @app_commands.command(name="status", description="Show an applicant status")
+    @app_commands.describe(member="The applicant whose status you want to see")
     async def status(self, interaction: Interaction, member: Member | User):
         await controller.get_applicant_status(interaction, member)

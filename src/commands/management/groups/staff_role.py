@@ -10,7 +10,7 @@ class StaffRoleCommands(app_commands.Group):
         super().__init__(name="staff_role", description="Staff Management role utility commands")
 
     @app_commands.command(name="remove", description="Removes a staff role from the database")
-    @app_permission(command_name="staff_role_remove")
+    @app_permission(command_name="staff_role_remove", permissions={"manage_guild"})
     @app_commands.guild_only()
     async def remove(self, interaction: discord.Interaction, role: discord.Role):
         await controller.remove_role(interaction, role.id)

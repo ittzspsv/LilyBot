@@ -18,7 +18,11 @@ class AppealCommands(app_commands.Group):
         super().__init__(name="appeal", description="Moderation appeal commands")
 
     @app_commands.command(name="setup", description="Setup Moderation Appeal for this server")
-    @app_permission(command_name="mod_appeal_management")
+    @app_permission(
+        command_name="mod_appeal_management",
+        permissions={"manage_channels", "manage_webhooks"},
+        match="all",
+    )
     async def setup(self, interaction: discord.Interaction) -> None:
         if interaction.guild is None:
             await interaction.response.send_message(embed=simple_embed("This command can only be executed inside an guild", 'cross'))
@@ -29,7 +33,11 @@ class AppealCommands(app_commands.Group):
         name="forum",
         description="Configure the appeal forum that users can fill out."
     )
-    @app_permission(command_name="mod_appeal_management")
+    @app_permission(
+        command_name="mod_appeal_management",
+        permissions={"manage_guild", "manage_channels"},
+        match="any",
+    )
     async def forum(
         self,
         interaction: discord.Interaction,
@@ -45,13 +53,3 @@ class AppealCommands(app_commands.Group):
         await interaction.response.send_modal(
             AppealForumCustomize(interaction.client.db)
         )
-
-    @app_commands.command(name="accept", description="Accept an appeal")
-    @app_permission(command_name="mod_appeal_handlers")
-    async def accept(self, interaction: discord.Interaction):
-        await accept_appeal_fn(interaction)
-
-    @app_commands.command(name="reject", description="Deny an appeal")
-    @app_permission(command_name="mod_appeal_handlers")
-    async def reject(self, interaction: discord.Interaction, reason: str):
-        await reject_appeal_fn(interaction, reason)

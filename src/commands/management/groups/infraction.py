@@ -61,7 +61,11 @@ class InfractionCommands(app_commands.Group):
 
 
     @app_commands.command(name='issue', description='Issue an infraction')
-    @app_permission(command_name="strike_add")
+    @app_permission(
+        command_name="strike_add",
+        permissions={"kick_members", "ban_members", "manage_guild", "manage_roles"},
+        match="any",
+    )  
     @app_commands.guild_only()
     @app_commands.describe(
         staff="The staff member to issue the infraction to",
@@ -86,19 +90,27 @@ class InfractionCommands(app_commands.Group):
         await controller.strike_staff(interaction, staff, reason, type.replace(" ", "_").lower(), notify_staff, notify_staff_updates, expire_after)
 
     @app_commands.command(name='remove', description='Remove an infraction')
-    @app_permission(command_name="strike_remove")
+    @app_permission(
+        command_name="strike_remove",
+        permissions={"kick_members", "ban_members", "manage_roles"},
+        match="any",
+    )
     @app_commands.guild_only()
     async def remove(self, interaction: discord.Interaction, infraction_id: str):
         await controller.remove_strike_staff(interaction, int(infraction_id))
 
     @app_commands.command(name="edit", description="Edit a reason of a infraction")
-    @app_permission(command_name="strike_edit")
+    @app_permission(
+        command_name="strike_edit",
+        permissions={"kick_members", "ban_members"},
+        match="any",
+    )   
     @app_commands.guild_only()
     async def edit(self, interaction: discord.Interaction, infraction_id: str, new_reason: str):
         await controller.edit_strike(interaction, int(infraction_id), new_reason)
 
     @app_commands.command(name='show', description='shows infractions for a concurrent staff')
-    @app_permission(command_name="strike_show")
+    @app_permission(command_name="strike_show", permissions={"moderate_members"})
     @app_commands.guild_only()
     async def show(self, interaction: discord.Interaction, staff: discord.Member):
         await controller.list_strikes(interaction, staff)
