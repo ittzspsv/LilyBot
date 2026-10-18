@@ -109,6 +109,40 @@ class ApplicationManagement:
 
         return [dict(row) for row in rows]
 
+    async def get_applications_page(
+        self,
+        guild_id: int,
+        page: int = 1,
+        per_page: int = 5
+    ) -> Dict[str, Any]:
+        row = await self.db.fetch_one(
+            "SELECT COUNT(*) AS total FROM application WHERE guild_id = ?",
+            (guild_id,)
+        )
+        total_count = row["total"] if row else 0
+
+        max_page = max(1, (total_count + per_page - 1) // per_page)
+        page = min(max(page, 1), max_page)
+
+        rows = await self.db.fetch_all(
+            """
+            SELECT * FROM application
+            WHERE guild_id = ?
+            ORDER BY id
+            LIMIT ? OFFSET ?
+            """,
+            (guild_id, per_page, (page - 1) * per_page)
+        )
+
+        return {
+            "page": page,
+            "max_page": max_page,
+            "total_count": total_count,
+            "has_prev": page > 1,
+            "has_next": page < max_page,
+            "results": [dict(row) for row in rows],
+        }
+
     async def update_application(
         self,
         guild_id: int,
