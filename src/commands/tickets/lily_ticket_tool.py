@@ -45,44 +45,74 @@ class LilyTicketTool(commands.Cog):
 
     @app_commands.guild_only()
     @ticket.command(name="close", description="Close a ticket thread")
-    @app_permission(command_name="ticket_close")
+    @app_commands.describe(reason="Why this ticket is being closed")
+    @app_permission(
+        command_name="ticket_close",
+        permissions={"moderate_members"},
+        match="any",
+    )
     @app_commands.checks.cooldown(1, 20)
     async def CloseTicket(self, interaction: discord.Interaction, * ,reason: str="No reason provided"):
         await ticket_close(interaction, reason)
 
     @app_commands.guild_only()
     @ticket.command(name='rename', description='renames a ticket channel')
-    @app_permission(command_name="ticket_rename")
+    @app_commands.describe(name="The new name for this ticket")
+    @app_permission(
+        command_name="ticket_rename",
+        permissions={"moderate_members"},
+        match="any",
+    )
     @app_commands.checks.cooldown(1, 10)
     async def rename_ticket(self, interaction: discord.Interaction, * ,name: str):
         await rename_ticket(interaction, name)
 
     @app_commands.guild_only()
     @ticket.command(name='add', description='adds a member to the ticket')
-    @app_permission(command_name="ticket_add")
-    @app_commands.checks.cooldown(1, 5)
+    @app_commands.describe(user="The member to add to this ticket")
+    @app_permission(
+        command_name="ticket_add",
+        permissions={"moderate_members"},
+        match="any",
+    )
     async def ticket_add(self, interaction: discord.Interaction, user: discord.Member):
         await ticket_add_user(interaction, user)
 
     @app_commands.guild_only()
     @ticket.command(name='remove', description='Remove a user from the ticket')
-    @app_permission(command_name="ticket_remove")
-    @app_commands.checks.cooldown(1, 5)
+    @app_commands.describe(user="The member to remove from this ticket")
+    @app_permission(
+        command_name="ticket_remove",
+        permissions={"moderate_members"},
+        match="any",
+    )
     async def ticket_remove(self, interaction: discord.Interaction, user: discord.Member):
         await ticket_remove_user(interaction, user)
 
     @app_commands.guild_only()
     @ticket.command(name='stats', description='Retrive your ticket stats')
-    @app_permission(command_name="ticket_stats")
-    @app_commands.checks.cooldown(1, 5)
+    @app_commands.describe(staff="The staff member whose ticket stats you want to see (defaults to you)")
+    @app_permission(
+        command_name="ticket_stats",
+        permissions={"moderate_members"},
+        match="any",
+    )
     async def ticket_stats(self, interaction: discord.Interaction, staff: discord.Member | None=None):
         member = staff if staff is not None else interaction.user
         assert isinstance(member, discord.Member)
         await ticket_stats(interaction, member)
 
-    @commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
-    @app_permission(command_name="ticket_update")
+    @app_commands.guild_only()
     @ticket.command(name='update', description='Update the ticket config')
+    @app_commands.describe(
+        message_id="The message ID of the ticket panel to update",
+        attachment="The new .json configuration file"
+    )
+    @app_permission(
+        command_name="ticket_update",
+        permissions={"manage_guild"},
+        match="all",
+    )
     async def ticket_update(
         self,
         interaction: discord.Interaction,
@@ -138,10 +168,14 @@ class LilyTicketTool(commands.Cog):
         )
 
 
-    @commands.cooldown(rate=1, per=5, type=commands.BucketType.user)
-    @app_permission(command_name="ticket_retrieve")
     @app_commands.guild_only()
     @ticket.command(name="retrieve", description="Retrieve all tickets (can be filtered)")
+    @app_permission(
+        command_name="ticket_retrieve",
+        permissions={"manage_guild"},
+        match="all",
+    )
+    @app_commands.checks.cooldown(1, 5)
     async def ticket_retrieve(self, interaction: discord.Interaction):
         assert interaction.guild is not None
 
