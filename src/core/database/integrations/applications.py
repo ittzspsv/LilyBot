@@ -65,8 +65,6 @@ class ApplicationManagement:
 
         return result
     
-    
-
     async def get_pending_application(self, guild_id: int):
         ...
     
@@ -286,7 +284,6 @@ class ApplicationManagement:
             return None
         return row["name"], row["submissions"]
 
-
     async def create_question(
         self,
         guild_id: int,
@@ -347,6 +344,40 @@ class ApplicationManagement:
 
         return [dict(row) for row in rows]
 
+    async def get_questions_page(
+        self,
+        guild_id: int,
+        page: int = 1,
+        per_page: int = 5
+    ) -> Dict[str, Any]:
+        row = await self.db.fetch_one(
+            "SELECT COUNT(*) AS total FROM application_questions WHERE guild_id = ?",
+            (guild_id,)
+        )
+        total_count = row["total"] if row else 0
+
+        max_page = max(1, (total_count + per_page - 1) // per_page)
+        page = min(max(page, 1), max_page)
+
+        rows = await self.db.fetch_all(
+            """
+            SELECT * FROM application_questions
+            WHERE guild_id = ?
+            ORDER BY id
+            LIMIT ? OFFSET ?
+            """,
+            (guild_id, per_page, (page - 1) * per_page)
+        )
+
+        return {
+            "page": page,
+            "max_page": max_page,
+            "total_count": total_count,
+            "has_prev": page > 1,
+            "has_next": page < max_page,
+            "results": [dict(row) for row in rows],
+        }
+
     async def update_question(
         self,
         guild_id: int,
@@ -405,13 +436,16 @@ class ApplicationManagement:
         return bool(rows_affected)
 
     async def delete_question(self, guild_id: int, question_id: int) -> bool:
-        rows_affected = await self.db.execute(
-            "DELETE FROM application_questions WHERE id = ? AND guild_id = ?",
-            (question_id, guild_id),
-            row_count=True
-        )
-
-        return bool(rows_affected)
+        async with self.db.transaction() as conn:
+            await conn.execute(
+                "DELETE FROM application_group_questions WHERE question_id = ? AND guild_id = ?",
+                (question_id, guild_id),
+            )
+            cursor = await conn.execute(
+                "DELETE FROM application_questions WHERE id = ? AND guild_id = ?",
+                (question_id, guild_id),
+            )
+            return cursor.get_cursor().rowcount > 0
 
     async def create_group(
         self,
