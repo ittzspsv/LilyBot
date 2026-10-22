@@ -30,6 +30,32 @@ if TYPE_CHECKING:
 logger = logging.getLogger("lily")
 
 
+async def _remainder(user_id: int, content: str):
+        try:
+            bot = get_instance()
+            user = await bot.fetch_user(user_id)
+            assert bot.user is not None
+
+            view = discord.ui.LayoutView().add_item(
+                discord.ui.Container(
+                    discord.ui.Section(
+                        discord.ui.TextDisplay(content="## Remainder\n- You asked me to remind you of this"),
+                        discord.ui.TextDisplay(content=f"> {content}"),
+                        accessory=discord.ui.Thumbnail(
+                            media=bot.user.display_avatar.url,
+                        )
+                    ),
+                    discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small)
+                )
+            )
+            await user.send(view=view)
+        except discord.Forbidden:
+            logger.warning("Could not DM reminder to user %s: DMs closed", user_id)
+            return
+        except Exception:
+            logger.exception("Failed to deliver reminder to user %s", user_id)
+
+
 class LilyUtility(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -1222,6 +1248,70 @@ class LilyUtility(commands.Cog):
                 interaction.guild.id,
                 leaderboard_type,
             )
+
+
+    @permission(command_name="remaind")
+    @commands.hybrid_command(name="remind", description="Create a bot remainder which reminds you")
+    async def create_remainder(self, ctx: commands.Context, duration: str, *, content: str = "A reminder"):
+        try:
+            bot = cast("Lily", ctx.bot)
+            scheduler = bot.scheduler
+
+            if scheduler is None:
+                logger.error("Reminder command invoked but bot.scheduler is None (user=%s)", ctx.author.id)
+                await ctx.reply(embed=simple_embed("Unknown error occurred while scheduling the task!"))
+                return
+
+            match = re.fullmatch(
+                r'(?:(?P<days>\d+)d)?(?:(?P<hours>\d+)h)?(?:(?P<minutes>\d+)m)?(?:(?P<seconds>\d+)s)?',
+                duration.strip()
+            )
+
+            if not match:
+                await ctx.reply(embed=simple_embed(
+                    "Couldn't parse that duration. Try something like `10m`, `2h30m`, or `1d`."
+                ))
+                return
+
+            parts = {k: int(v) for k, v in match.groupdict().items() if v is not None}
+
+            if not parts:
+                await ctx.reply(embed=simple_embed(
+                    "Couldn't parse that duration. Try something like `10m`, `2h30m`, or `1d`."
+                ))
+                return
+
+            delta = timedelta(**parts)
+            if delta.total_seconds() <= 0:
+                await ctx.reply(embed=simple_embed("Duration must be greater than zero."))
+                return
+
+            run_time = datetime.now(timezone.utc) + delta
+            job_id = f"remind_{ctx.author.id}_{int(run_time.timestamp())}"
+
+            try:
+                scheduler.add_job(
+                    _remainder,
+                    trigger="date",
+                    run_date=run_time,
+                    args=[ctx.author.id, content],
+                    id=job_id,
+                    replace_existing=True,
+                    misfire_grace_time=1000
+                )
+            except Exception:
+                logger.exception("Failed to schedule reminder job %s for user %s", job_id, ctx.author.id)
+                await ctx.reply(embed=simple_embed("Something went wrong while scheduling your reminder.", 'cross'))
+                return
+
+            await ctx.send(content=(
+                f"{ctx.author.mention} I Got it, I'll remind you in DMs {discord.utils.format_dt(run_time, style='R')}."
+            ), ephemeral=True)
+
+            if not ctx.interaction:
+                await ctx.message.delete()
+        except Exception:
+            logger.exception("Failed to execute remind function")
 
 async def setup(bot):
     await bot.add_cog(LilyUtility(bot))
