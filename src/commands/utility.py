@@ -20,6 +20,7 @@ from src.core.visuals.cards.quote import make_quote_card
 from src.core.visuals.cards.leaderboard import leaderboard_img
 from discord.ext import commands, tasks
 from discord import app_commands
+from discord.utils import MISSING
 from typing import cast, TYPE_CHECKING
 from datetime import timedelta, timezone
 from src.core.bot import get_instance
@@ -27,32 +28,6 @@ if TYPE_CHECKING:
     from src.lily import Lily
 
 logger = logging.getLogger("lily")
-
-
-async def _remainder(user_id: int, content: str):
-        try:
-            bot = get_instance()
-            user = await bot.fetch_user(user_id)
-            assert bot.user is not None
-
-            view = discord.ui.LayoutView().add_item(
-                discord.ui.Container(
-                    discord.ui.Section(
-                        discord.ui.TextDisplay(content="## Remainder\n- You asked me to remind you of this"),
-                        discord.ui.TextDisplay(content=f"> {content}"),
-                        accessory=discord.ui.Thumbnail(
-                            media=bot.user.display_avatar.url,
-                        )
-                    ),
-                    discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small)
-                )
-            )
-            await user.send(view=view)
-        except discord.Forbidden:
-            logger.warning("Could not DM reminder to user %s: DMs closed", user_id)
-            return
-        except Exception:
-            logger.exception("Failed to deliver reminder to user %s", user_id)
 
 
 class LilyUtility(commands.Cog):
@@ -459,19 +434,36 @@ class LilyUtility(commands.Cog):
     @customize.command(name='bot', description='Customize the bot for this server (visually)')
     @app_commands.checks.cooldown(1, 5.0)
     @app_permission(command_name="edit_profile", restrict=True)
-    async def edit_profile(self, interaction: discord.Interaction, bio: str, avatar: discord.Attachment, banner: discord.Attachment):
+    async def edit_profile(
+        self,
+        interaction: discord.Interaction,
+        bio: str | None = None,
+        avatar: discord.Attachment | None = None,
+        banner: discord.Attachment | None = None,
+    ):
+        if bio is None and avatar is None and banner is None:
+            await interaction.response.send_message(
+                embed=simple_embed("Provide at least one of: bio, avatar, banner."),
+                ephemeral=True,
+            )
+            return
+
         await interaction.response.defer()
         try:
             guild = interaction.guild
             assert guild is not None
-            bot_member = guild.me
-            avatar_bytes = await avatar.read()
-            banner_bytes = await banner.read()
-            await bot_member.edit(avatar=avatar_bytes,banner=banner_bytes,bio=bio)
 
-            await interaction.followup.send(embed=simple_embed("Profile Edit Success. Will be updated within few mins."))
-        except Exception as e:
-            print(f"Exception [edit_profile] {e}")
+            await guild.me.edit(
+                bio=bio if bio is not None else MISSING,
+                avatar=await avatar.read() if avatar is not None else MISSING,
+                banner=await banner.read() if banner is not None else MISSING,
+            )
+
+            await interaction.followup.send(
+                embed=simple_embed("Profile Edit Success. Will be updated within few mins.")
+            )
+        except Exception:
+            logging.exception("[edit_profile] failed")
             await interaction.followup.send(embed=simple_embed("An Unknown error Occured"))
 
     @app_commands.command(name="about", description="Know something about the bot")
@@ -1230,70 +1222,6 @@ class LilyUtility(commands.Cog):
                 interaction.guild.id,
                 leaderboard_type,
             )
-
-
-    @permission(command_name="remaind")
-    @commands.hybrid_command(name="remind", description="Create a bot remainder which reminds you")
-    async def create_remainder(self, ctx: commands.Context, duration: str, *, content: str = "A reminder"):
-        try:
-            bot = cast("Lily", ctx.bot)
-            scheduler = bot.scheduler
-
-            if scheduler is None:
-                logger.error("Reminder command invoked but bot.scheduler is None (user=%s)", ctx.author.id)
-                await ctx.reply(embed=simple_embed("Unknown error occurred while scheduling the task!"))
-                return
-
-            match = re.fullmatch(
-                r'(?:(?P<days>\d+)d)?(?:(?P<hours>\d+)h)?(?:(?P<minutes>\d+)m)?(?:(?P<seconds>\d+)s)?',
-                duration.strip()
-            )
-
-            if not match:
-                await ctx.reply(embed=simple_embed(
-                    "Couldn't parse that duration. Try something like `10m`, `2h30m`, or `1d`."
-                ))
-                return
-
-            parts = {k: int(v) for k, v in match.groupdict().items() if v is not None}
-
-            if not parts:
-                await ctx.reply(embed=simple_embed(
-                    "Couldn't parse that duration. Try something like `10m`, `2h30m`, or `1d`."
-                ))
-                return
-
-            delta = timedelta(**parts)
-            if delta.total_seconds() <= 0:
-                await ctx.reply(embed=simple_embed("Duration must be greater than zero."))
-                return
-
-            run_time = datetime.now(timezone.utc) + delta
-            job_id = f"remind_{ctx.author.id}_{int(run_time.timestamp())}"
-
-            try:
-                scheduler.add_job(
-                    _remainder,
-                    trigger="date",
-                    run_date=run_time,
-                    args=[ctx.author.id, content],
-                    id=job_id,
-                    replace_existing=True,
-                    misfire_grace_time=1000
-                )
-            except Exception:
-                logger.exception("Failed to schedule reminder job %s for user %s", job_id, ctx.author.id)
-                await ctx.reply(embed=simple_embed("Something went wrong while scheduling your reminder.", 'cross'))
-                return
-
-            await ctx.send(content=(
-                f"{ctx.author.mention} I Got it, I'll remind you in DMs {discord.utils.format_dt(run_time, style='R')}."
-            ), ephemeral=True)
-
-            if not ctx.interaction:
-                await ctx.message.delete()
-        except Exception:
-            logger.exception("Failed to execute remind function")
 
 async def setup(bot):
     await bot.add_cog(LilyUtility(bot))
