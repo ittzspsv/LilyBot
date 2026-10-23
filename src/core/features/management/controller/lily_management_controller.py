@@ -7,6 +7,7 @@ from ..types.staff_management_types import QuotaCheckBy
 from typing import Optional, cast, Final, TYPE_CHECKING
 from ..embeds.staff_management_embed import *
 from src.core.features.permissions.lily_permissions import has_app_permission
+from datetime import datetime, timezone
 
 import matplotlib.pyplot as plt
 import re
@@ -1368,73 +1369,102 @@ async def get_staffs_timezone_coverage(interaction: discord.Interaction) -> None
         logger.exception(f"[GetStaffsTimezoneCoverage] Failed to generate timezone coverage chart for guild_id={interaction.guild.id}")
         await interaction.followup.send(embed=simple_embed("Failed to generate timezone coverage chart.", "cross"))
 
-async def automatic_quota_evaluator(check_by: str, bot):
+
+
+async def _record_quota_history(
+    bot_db,
+    guild_id: int,
+    quota_id: int,
+    passed_staff: list[dict],
+    failed_staff: list[dict],
+    timestamp: str,
+) -> None:
     try:
-        _bot = cast("Lily", bot)
-        bot_db = _bot.db
-        assert bot_db is not None
-        data = await bot_db.get_webhooks_of_type("quota_updates")
+        rows = [(s["staff_id"], "pass") for s in (passed_staff or [])]
+        rows += [(s["staff_id"], "fail") for s in (failed_staff or [])]
     except Exception:
-        logger.exception(f"[AutomaticQuotaEvaluator] Failed to fetch webhooks of type 'quota_updates' for check_by={check_by}")
+        logger.exception(f"[AutomaticQuotaEvaluator] Failed to prepare history rows for guild_id={guild_id} quota_id={quota_id}")
         return
 
-    for guild_id, webhook_url in data.items():
-        if webhook_url is None:
-            continue
-
+    for staff_id, status in rows:
         try:
-            webhook = discord.Webhook.from_url(webhook_url, client=bot)
-        except ValueError:  # Failed to fetch the webhook
-            logger.warning(f"[AutomaticQuotaEvaluator] Invalid webhook URL for guild_id={guild_id}, skipping")
-            continue
-
-        """ Else start evaluating """
-        try:
-            quota_ids = await bot_db.get_quota_ids_from_checkby(guild_id, check_by)
+            await bot_db.create_quota_history(
+                quota_id=quota_id,
+                staff_id=staff_id,
+                guild_id=guild_id,
+                status=status,
+                timestamp=timestamp,
+            )
         except Exception:
-            logger.exception(f"[AutomaticQuotaEvaluator] Failed to fetch quota ids for guild_id={guild_id} check_by={check_by}")
+            logger.exception(
+                f"[AutomaticQuotaEvaluator] Failed to create quota history "
+                f"guild_id={guild_id} quota_id={quota_id} staff_id={staff_id} status={status}"
+            )
+
+
+
+async def automatic_quota_evaluator(check_by: str, bot):
+    _bot = cast("Lily", bot)
+    bot_db = _bot.db
+    assert bot_db is not None
+
+    try:
+        quotas_by_guild = await bot_db.get_quota_ids_grouped_by_guild(check_by)
+    except Exception:
+        logger.exception(f"[AutomaticQuotaEvaluator] Failed to fetch quotas for check_by={check_by}")
+        return
+
+    live_guild_ids = {g.id for g in _bot.guilds}
+
+    try:
+        webhook_urls = await bot_db.get_webhooks_of_type("quota_updates") or {}
+    except Exception:
+        logger.exception(f"[AutomaticQuotaEvaluator] Failed to fetch webhooks of type 'quota_updates' for check_by={check_by}")
+        webhook_urls = {}
+
+    run_timestamp = datetime.now(timezone.utc).isoformat()
+
+    for guild_id, quota_ids in quotas_by_guild.items():
+        if guild_id not in live_guild_ids:
+            logger.info(f"[AutomaticQuotaEvaluator] Skipping guild_id={guild_id}: bot is not in this guild")
             continue
 
-        if len(quota_ids) <= 0:
-            continue
+        webhook = None
+        webhook_url = webhook_urls.get(guild_id)
+        if webhook_url:
+            try:
+                webhook = discord.Webhook.from_url(webhook_url, client=bot)
+            except ValueError:
+                logger.warning(f"[AutomaticQuotaEvaluator] Invalid webhook URL for guild_id={guild_id}, history will still be recorded")
 
         for quota_id in quota_ids:
             try:
-                """ If we have an valid quota id then let's evaluate and post the result """
-                response = await bot_db.get_quota_status(
-                    guild_id,
-                    quota_id,
-                )
-
-                """ If any error occures let's silently skip the iterration """
+                response = await bot_db.get_quota_status(guild_id, quota_id)
 
                 if not response.get("success"):
                     logger.warning(f"[AutomaticQuotaEvaluator] Quota evaluation failed: {response.get('message')} guild_id={guild_id} quota_id={quota_id}")
                     continue
 
-                quota = response["quota"]
-                summary = response["summary"]
-
                 passed_staff = response["passed_staff"]
                 failed_staff = response["failed_staff"]
 
-                passed_staff_str = "\n".join(
-                    f"<@{s['staff_id']}>"
-                    for s in passed_staff
-                ) or "None"
+                await _record_quota_history(
+                    bot_db, guild_id, quota_id, passed_staff, failed_staff, run_timestamp
+                )
 
-                failed_staff_str = "\n".join(
-                    (
-                        f"<@{s['staff_id']}>"
-                    )
-                    for s in failed_staff
-                ) or "None"
+                if webhook is None:
+                    continue
+
+                quota = response["quota"]
+                summary = response["summary"]
+
+                passed_staff_str = "\n".join(f"<@{s['staff_id']}>" for s in passed_staff) or "None"
+                failed_staff_str = "\n".join(f"<@{s['staff_id']}>" for s in failed_staff) or "None"
 
                 embed = discord.Embed(
                     color=0xFFFFFF,
-                    description=f"### Quota Evaluation for <@&{quota['role_id']}>"
+                    description=f"### Quota Evaluation for <@&{quota['role_id']}>",
                 )
-
                 embed.add_field(
                     name="Quota Summary",
                     value=(
@@ -1444,32 +1474,20 @@ async def automatic_quota_evaluator(check_by: str, bot):
                     ),
                     inline=False,
                 )
+                embed.add_field(name="Passed Staff", value=passed_staff_str, inline=False)
+                embed.add_field(name="Failed Staff", value=failed_staff_str, inline=False)
+                embed.set_image(url=img["border"])
 
-                embed.add_field(
-                    name="Passed Staff",
-                    value=passed_staff_str,
-                    inline=False,
-                )
-
-                embed.add_field(
-                    name="Failed Staff",
-                    value=failed_staff_str,
-                    inline=False,
-                )
-
-                embed.set_image(url=img['border'])
+                bot_name = _bot.user.name if _bot.user else "Lily"
+                payload = {
+                    "username": f"{bot_name} {quota_conclusion_mapping.get(check_by, 'Unknown')} Quota Updates",
+                    "embed": embed,
+                }
+                if _bot.user:
+                    payload["avatar_url"] = _bot.user.display_avatar.url
 
                 try:
-                    _payload = {
-                        "username": f"{_bot.user.name if _bot.user else "Lily"} {quota_conclusion_mapping.get(check_by, 'Unknown')} Quota Updates",
-                        "embed": embed
-                    }
-
-                    if _bot.user:
-                        _payload["avatar_url"] = _bot.user.display_avatar.url
-                    await webhook.send(
-                        **_payload
-                    )
+                    await webhook.send(**payload)
                 except Exception:
                     logger.exception(f"[AutomaticQuotaEvaluator] Failed to send webhook for guild_id={guild_id} quota_id={quota_id}")
                     continue
