@@ -3,7 +3,7 @@ from .applications import ApplicationManagement
 from .leveling import LevelingManagement
 from ...features.leveling.utils.lily_leveling_utils import *
 
-from typing import List, Optional, Final, Set, Dict, Any, Tuple
+from typing import List, Optional, Final, Set, Dict, Any, Tuple, Literal
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone, UTC
 from collections import defaultdict
@@ -3084,6 +3084,18 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
             for row in rows
         ]
 
+    async def get_quota_ids_grouped_by_guild(self, check_by: str) -> dict[int, list[int]]:
+        rows = await self.fetch_all(
+            "SELECT guild_id, quota_id FROM staff_quota WHERE check_by = ?",
+            (check_by,),
+        )
+
+        grouped: dict[int, list[int]] = defaultdict(list)
+        for row in rows:
+            grouped[row["guild_id"]].append(row["quota_id"])
+
+        return dict(grouped)
+
     async def remove_staff_quota(self, guild_id: int, quota_id: int) -> Dict[str, Any]:
         await self.execute(
             "DELETE FROM staff_quota WHERE quota_id = ? AND guild_id = ?",
@@ -4255,3 +4267,30 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
             score_cutoff=score_cutoff,
         )
         return [name for name, _score, _idx in matches]
+
+    async def create_quota_history(
+        self,
+        quota_id: int,
+        staff_id: int,
+        guild_id: int,
+        status: Literal["pass", "fail"],
+        timestamp: str,
+    ) -> int | None:
+        if status not in ("pass", "fail"):
+            raise ValueError("status must be either 'pass' or 'fail'")
+
+        query = """
+            INSERT INTO staff_quota_history (
+                quota_id,
+                staff_id,
+                guild_id,
+                status,
+                timestamp
+            )
+            VALUES (?, ?, ?, ?, ?)
+        """
+
+        return await self.execute(
+            query,
+            (quota_id, staff_id, guild_id, status, timestamp),
+        )
