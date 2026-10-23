@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone, UTC
 from collections import defaultdict
 from math import ceil
+from rapidfuzz import fuzz, process
 
 import json
 import pytz
@@ -24,6 +25,16 @@ class BanLimitStatus:
     remaining_count: int
     remaining_time: Optional[str]
     cooldown_breakdown: Optional[str]
+
+
+def _to_int(value: Any) -> int | None:
+    """Discord IDs sometimes arrive as strings in hand-written configs."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
@@ -699,40 +710,232 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
                 (guild_id, role_id),
             )
 
+    # ------------------------------------------------------------------ #
+    #  Ticket panels: ticket_views + the normalized ticket_view_* tables. #
+    #  Modal fields stay JSON (ticket_view_types.fields_json) so new      #
+    #  field types never need a migration.                                #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def validate_ticket_config(config: dict) -> None:
+        """Raise ValueError if `config` can't be stored. Pure, no I/O."""
+        tickets = config.get("Tickets")
+        if not isinstance(config.get("BasicConfigurations"), dict) or not isinstance(tickets, list) or not tickets:
+            raise ValueError("`BasicConfigurations` and a non-empty `Tickets` list are required.")
+
+        if len(tickets) > 25:
+            raise ValueError("A panel can hold at most 25 ticket types.")
+
+        names = [ticket.get("ticket_base_name") for ticket in tickets]
+        if not all(names) or not all(ticket.get("label") for ticket in tickets):
+            raise ValueError("Every ticket needs a `label` and a `ticket_base_name`.")
+
+        if len(set(names)) != len(names):
+            raise ValueError("`ticket_base_name` must be unique within a panel.")
+
     async def save_ticket_view(
         self,
         guild_id: int,
         channel_id: int,
         message_id: int,
         config: dict,
-    ) -> None:
-        await self.execute(
-            """
-            INSERT OR REPLACE INTO ticket_views
-                (guild_id, channel_id, message_id, config_json)
-            VALUES (?, ?, ?, ?)
-            """,
-            (guild_id, channel_id, message_id, json.dumps(config)),
-        )
+    ) -> int:
+        """Create the panel row if needed and replace its config. Returns ticket_views.id."""
+        self.validate_ticket_config(config)
 
-    async def get_ticket_views(self, guild_id: Optional[int] = None) -> list:
-        if guild_id:
-            return await self.fetch_all(
+        basic = config.get("BasicConfigurations") or {}
+        panel = config.get("PanelConfig") or {}
+
+        async with self.transaction() as conn:
+            # config_json is still NOT NULL but nothing reads it anymore: '{}' is a placeholder.
+            await conn.execute(
                 """
-                SELECT guild_id, channel_id, message_id, config_json
-                FROM ticket_views
-                WHERE guild_id = ?
+                INSERT OR IGNORE INTO ticket_views (guild_id, channel_id, message_id, config_json)
+                VALUES (?, ?, ?, '{}')
                 """,
-                (guild_id,),
+                (guild_id, channel_id, message_id),
             )
-        return await self.fetch_all(
-            "SELECT guild_id, channel_id, message_id, config_json FROM ticket_views"
+            row = await conn.fetchone(
+                """
+                SELECT id FROM ticket_views
+                WHERE guild_id = ? AND channel_id = ? AND message_id = ?
+                """,
+                (guild_id, channel_id, message_id),
+            )
+            view_id: int = row["id"]
+
+            # Replace the config (ping roles go with their types via ON DELETE CASCADE).
+            for table in (
+                "ticket_view_settings",
+                "ticket_view_panel",
+                "ticket_view_staff_roles",
+                "ticket_view_types",
+            ):
+                await conn.execute(f"DELETE FROM {table} WHERE view_id = ?", (view_id,))
+
+            await conn.execute(
+                """
+                INSERT INTO ticket_view_settings
+                    (view_id, spawn_channel_id, logging_channel_id, ticket_type)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    view_id,
+                    _to_int(basic.get("TicketPanelSpawnChannel")),
+                    _to_int(basic.get("TicketLoggingHandler")),
+                    basic.get("TicketType"),
+                ),
+            )
+
+            if panel:
+                await conn.execute(
+                    """
+                    INSERT INTO ticket_view_panel
+                        (view_id, title, description, footer_text, thumbnail_url)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        view_id,
+                        panel.get("title"),
+                        panel.get("description"),
+                        (panel.get("footer") or {}).get("text"),
+                        (panel.get("thumbnail") or {}).get("url"),
+                    ),
+                )
+
+            staff_roles = {_to_int(r) for r in basic.get("higher_staffs_role_id") or []} - {None}
+            if staff_roles:
+                await conn.executemany(
+                    "INSERT INTO ticket_view_staff_roles (view_id, role_id) VALUES (?, ?)",
+                    [(view_id, role_id) for role_id in staff_roles],
+                )
+
+            for position, ticket in enumerate(config["Tickets"]):
+                cursor = await conn.execute(
+                    """
+                    INSERT INTO ticket_view_types (
+                        view_id, position, label, description, emoji,
+                        channel_id, channel_emoji, ticket_base_name, fields_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        view_id,
+                        position,
+                        ticket["label"],
+                        ticket.get("description"),
+                        ticket.get("emoji"),
+                        _to_int(ticket.get("channel_id")),
+                        ticket.get("channel_emoji"),
+                        ticket["ticket_base_name"],
+                        json.dumps(ticket.get("fields") or []),
+                    ),
+                )
+                type_id = cursor.get_cursor().lastrowid
+
+                ping_roles = {_to_int(r) for r in ticket.get("ping_roles") or []} - {None}
+                if ping_roles:
+                    await conn.executemany(
+                        "INSERT INTO ticket_view_type_ping_roles (type_id, role_id) VALUES (?, ?)",
+                        [(type_id, role_id) for role_id in ping_roles],
+                    )
+
+        return view_id
+
+    async def get_ticket_view_refs(self, guild_id: Optional[int] = None) -> list[dict[str, Any]]:
+        """Panel pointers: id, guild_id, channel_id, message_id."""
+        query = "SELECT id, guild_id, channel_id, message_id FROM ticket_views"
+        params: tuple = ()
+        if guild_id is not None:
+            query += " WHERE guild_id = ?"
+            params = (guild_id,)
+
+        rows = await self.fetch_all(query + " ORDER BY id", params)
+        return [dict(row) for row in rows]
+
+    async def get_ticket_view_id(self, guild_id: int, message_id: int) -> int | None:
+        row = await self.fetch_one(
+            "SELECT id FROM ticket_views WHERE guild_id = ? AND message_id = ?",
+            (guild_id, message_id),
         )
+        return row["id"] if row else None
+
+    async def get_ticket_view_settings(self, view_id: int) -> dict[str, Any] | None:
+        row = await self.fetch_one(
+            """
+            SELECT spawn_channel_id, logging_channel_id, ticket_type
+            FROM ticket_view_settings
+            WHERE view_id = ?
+            """,
+            (view_id,),
+        )
+        return dict(row) if row else None
+
+    async def get_ticket_panel(self, view_id: int) -> dict[str, Any] | None:
+        row = await self.fetch_one(
+            """
+            SELECT title, description, footer_text, thumbnail_url
+            FROM ticket_view_panel
+            WHERE view_id = ?
+            """,
+            (view_id,),
+        )
+        return dict(row) if row else None
+
+    async def get_ticket_view_staff_roles(self, view_id: int) -> list[int]:
+        rows = await self.fetch_all(
+            "SELECT role_id FROM ticket_view_staff_roles WHERE view_id = ?",
+            (view_id,),
+        )
+        return [row["role_id"] for row in rows]
+
+    async def get_ticket_view_types(self, view_id: int) -> list[dict[str, Any]]:
+        """What the select menu needs (no modal fields / ping roles)."""
+        rows = await self.fetch_all(
+            """
+            SELECT label, description, emoji, ticket_base_name
+            FROM ticket_view_types
+            WHERE view_id = ?
+            ORDER BY position
+            """,
+            (view_id,),
+        )
+        return [dict(row) for row in rows]
+
+    async def get_ticket_view_type(self, view_id: int, base_name: str) -> dict[str, Any] | None:
+        """One ticket type with its modal `fields` and `ping_roles`, or None."""
+        row = await self.fetch_one(
+            """
+            SELECT id, label, description, emoji, channel_id, channel_emoji,
+                   ticket_base_name, fields_json
+            FROM ticket_view_types
+            WHERE view_id = ? AND ticket_base_name = ?
+            """,
+            (view_id, base_name),
+        )
+        if row is None:
+            return None
+
+        ticket = dict(row)
+        ticket["fields"] = json.loads(ticket.pop("fields_json"))
+        ticket["ping_roles"] = await self.get_ticket_ping_roles(view_id, base_name)
+        return ticket
+
+    async def get_ticket_ping_roles(self, view_id: int, base_name: str) -> list[int]:
+        rows = await self.fetch_all(
+            """
+            SELECT r.role_id
+            FROM ticket_view_type_ping_roles r
+            JOIN ticket_view_types t ON t.id = r.type_id
+            WHERE t.view_id = ? AND t.ticket_base_name = ?
+            """,
+            (view_id, base_name),
+        )
+        return [row["role_id"] for row in rows]
 
     async def delete_ticket_view(self, message_id: int) -> None:
-        await self.execute(
-            "DELETE FROM ticket_views WHERE message_id = ?", (message_id,)
-        )
+        # The normalized tables go with it via ON DELETE CASCADE.
+        await self.execute("DELETE FROM ticket_views WHERE message_id = ?", (message_id,))
 
     async def write_log(self, guild_id: int, user_id: int, log_txt: str) -> None:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -4006,3 +4209,49 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         )
 
         return {row["member_id"]: dict(row) for row in rows}
+
+
+
+    async def add_tag(self, name: str, content: str, created_by: int) -> bool:
+        count = await self.execute(
+            "INSERT INTO tags (name, content, created_by) VALUES (?, ?, ?) "
+            "ON CONFLICT(name) DO NOTHING",
+            (name.strip().lower(), content, created_by),
+            row_count=True,
+        )
+        return bool(count)
+
+    async def get_tag(self, name: str):
+        return await self.fetch_one(
+            "SELECT * FROM tags WHERE name = ?", (name.strip().lower(),)
+        )
+
+    async def update_tag(self, name: str, content: str) -> bool:
+        count = await self.execute(
+            "UPDATE tags SET content = ? WHERE name = ?",
+            (content, name.strip().lower()),
+            row_count=True,
+        )
+        return bool(count)
+
+    async def delete_tag(self, name: str) -> bool:
+        count = await self.execute(
+            "DELETE FROM tags WHERE name = ?",
+            (name.strip().lower(),),
+            row_count=True,
+        )
+        return bool(count)
+
+    async def search_tags(
+        self, query: str, limit: int = 5, score_cutoff: int = 60
+    ) -> list[str]:
+        rows = await self.fetch_all("SELECT name FROM tags")
+        names = [r["name"] for r in rows]
+        matches = process.extract(
+            query.strip().lower(),
+            names,
+            scorer=fuzz.WRatio,
+            limit=limit,
+            score_cutoff=score_cutoff,
+        )
+        return [name for name, _score, _idx in matches]

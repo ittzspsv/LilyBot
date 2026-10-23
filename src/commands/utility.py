@@ -1313,5 +1313,101 @@ class LilyUtility(commands.Cog):
         except Exception:
             logger.exception("Failed to execute remind function")
 
+
+    @permission(command_name="tag", restrict=True)
+    @commands.command(name="tag", description="Expand a tag", aliases=["t"])
+    async def tag(self, ctx: commands.Context, tag: str):
+        bot_db: BotGlobalsDatabaseAccess = ctx.bot.db
+
+        row = await bot_db.get_tag(tag)
+        if row is None:
+            suggestions = await bot_db.search_tags(tag)
+            if not suggestions:
+                return await ctx.send("No tag found.")
+            options = ", ".join(f"`{s}`" for s in suggestions)
+            return await ctx.send(f"Tag not found. Did you mean: {options}?")
+
+        await ctx.send(row["content"], allowed_mentions=discord.AllowedMentions.none())
+
+    @permission(command_name="tag", restrict=True)
+    @commands.command(name="tagnew", description="Add a new tag", aliases=["tn"])
+    async def tag_add(
+        self,
+        ctx: commands.Context,
+        tag: Optional[str] = None,
+        *,
+        content: Optional[str] = None,
+    ):
+        bot_db: BotGlobalsDatabaseAccess = ctx.bot.db
+
+        tag = (tag or "").strip()
+        if not tag:
+            return await ctx.send(
+                "Usage: `tagnew <name> <content>`, or reply to a message with `tagnew <name>`."
+            )
+
+        content = (content or "").strip()
+
+        # No inline content: fall back to the replied-to message.
+        if not content:
+            ref = ctx.message.reference
+            if ref is None or ref.message_id is None:
+                return await ctx.send(
+                    "Tag content cannot be empty. Provide content or reply to a message."
+                )
+
+            replied = ref.resolved
+            if not isinstance(replied, discord.Message):
+                try:
+                    replied = await ctx.channel.fetch_message(ref.message_id)
+                except discord.HTTPException:
+                    return await ctx.send("I couldn't fetch the message you replied to.")
+
+            content = replied.content.strip()
+            if not content:
+                return await ctx.send(
+                    "The message you replied to has no text content "
+                    "(attachments and embeds aren't supported)."
+                )
+
+        if len(content) > 2000:
+            return await ctx.send(
+                f"Tag content is too long ({len(content)}/{2000})."
+            )
+
+        if not await bot_db.add_tag(tag, content, ctx.author.id):
+            return await ctx.send(f"A tag named `{tag}` already exists.")
+        await ctx.send(f"Tag `{tag}` created.")
+
+    @permission(command_name="tag", restrict=True)
+    @commands.command(name="tagedit", description="Edit a new tag", aliases=["te"])
+    async def tag_edit(self, ctx: commands.Context, tag: str, *, content: str):
+        bot_db: BotGlobalsDatabaseAccess = ctx.bot.db
+
+        row = await bot_db.get_tag(tag)
+        if row is None:
+            return await ctx.send("No tag found.")
+        if row["created_by"] != ctx.author.id and not await ctx.bot.is_owner(ctx.author):
+            return await ctx.send("You can only edit tags you created.")
+        if len(content) > 2000:
+            return await ctx.send(f"Tag content is too long ({len(content)}/{2000}).")
+
+        await bot_db.update_tag(tag, content)
+        await ctx.send(f"Tag `{tag}` updated.")
+
+    @permission(command_name="tag", restrict=True)
+    @commands.command(name="tagdelete", description="Delete a tag", aliases=["td"])
+    async def tag_delete(self, ctx: commands.Context, tag: str):
+        bot_db: BotGlobalsDatabaseAccess = ctx.bot.db
+
+        row = await bot_db.get_tag(tag)
+        if row is None:
+            return await ctx.send("No tag found.")
+        if row["created_by"] != ctx.author.id and not await ctx.bot.is_owner(ctx.author):
+            return await ctx.send("You can only delete tags you created.")
+
+        await bot_db.delete_tag(tag)
+        await ctx.send(f"Tag `{tag}` deleted.")
+
 async def setup(bot):
     await bot.add_cog(LilyUtility(bot))
