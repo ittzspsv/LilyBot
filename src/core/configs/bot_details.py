@@ -47,6 +47,7 @@ emoji = {
     "user_unclaim": "<:user_unclaim:1541850985239027782>",
     "verified": "<:verified:1541850988107931648>",
     "warn": "<:warn:1541850991308050462>",
+    "plus": "<:plus:1561659496399511612>",
     "2xBossDrops": "<:2xBossDrops:1541880310269091860>",
     "2xMastery": "<:2xMastery:1541880318611431454>",
     "2xMoney": "<:2xMoney:1541880323711836291>",
