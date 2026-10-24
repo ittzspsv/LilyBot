@@ -1341,8 +1341,8 @@ class AppealRequestView(discord.ui.LayoutView):
 
         appeal_container = discord.ui.Container(
             discord.ui.Section(
-                discord.ui.TextDisplay("### Case Appeal"),
-                discord.ui.TextDisplay(f"User: {appealer.name.capitalize()}\nID: {appealer.id}"),
+                discord.ui.TextDisplay(f"## Case Appeal • @[{appealer.name}](https://discord.com/users/{appealer.id})"),
+                discord.ui.TextDisplay(f"ID: `{appealer.id}`"),
                 discord.ui.TextDisplay(answers_text),
                 accessory=discord.ui.Thumbnail(media=appealer.display_avatar.url),
             ),
