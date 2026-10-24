@@ -57,7 +57,7 @@ class StaffDataView(discord.ui.LayoutView):
 
         container.add_item(
             discord.ui.Section(
-                discord.ui.TextDisplay(f"## {name}'s Profile"),
+                discord.ui.TextDisplay(f"## [{name}'s Profile](https://discord.com/users/{member.id})"),
                 discord.ui.TextDisplay(
                     "### Basic Information\n"
                     f"{Configs.emoji['staff']} **Role:** {', '.join(f'<@&{rid}>' for rid in role_ids) if role_ids else 'N/A'}\n"
@@ -969,6 +969,11 @@ class StrikesListView(discord.ui.LayoutView):
             ),
         )
 
+        self.back_button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label="Back"
+        )
+
         strikes: List[discord.ui.Item] = []
 
         for strike in page_strikes:
@@ -1100,6 +1105,12 @@ class StrikesListView(discord.ui.LayoutView):
                 self.staff_id,
             )
 
+    async def back_button_callback(self, interaction: discord.Interaction):
+        await self._refresh_page(
+            interaction,
+            self.page
+        )
+
     async def previous_button_callback(self, interaction: discord.Interaction) -> None:
         await self._refresh_page(interaction, self.page - 1)
 
@@ -1138,20 +1149,21 @@ class StrikesListView(discord.ui.LayoutView):
 
         view = discord.ui.LayoutView(timeout=None).add_item(
             discord.ui.Container(
-                discord.ui.TextDisplay(f"## {title_prefix}{Configs.emoji['pin']} {strike_type.title()} | {strike_info['strike_id']}{title_suffix}"),
-                discord.ui.Separator(),
-                discord.ui.TextDisplay(
-                    f"> {Configs.emoji['staff']} Issued by: {issued_by}\n"
-                    f"> {Configs.emoji['calender']} Issued On: {date}\n"
-                    f"> {Configs.emoji['clock']} Expires: {expiry}\n"
-                    f"> {Configs.emoji['pencil']} Reason: {reason}"
+                discord.ui.Section(
+                    discord.ui.TextDisplay(f"## {title_prefix}{Configs.emoji['pin']} {strike_type.title()} | {strike_info['strike_id']}{title_suffix}"),
+                    discord.ui.TextDisplay(
+                        f"> {Configs.emoji['staff']} Issued by: {issued_by}\n"
+                        f"> {Configs.emoji['calender']} Issued On: {date}\n"
+                        f"> {Configs.emoji['clock']} Expires: {expiry}\n"
+                        f"> {Configs.emoji['pencil']} Reason: {reason}"
+                    ),
+                    accessory=self.back_button
                 )
             )
         )
 
-        await interaction.response.send_message(
-            view=view,
-            ephemeral=True
+        await interaction.response.edit_message(
+            view=view
         )
 
 class QuotaEvaluator(discord.ui.LayoutView):
