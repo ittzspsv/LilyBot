@@ -1096,7 +1096,13 @@ async def fetch_staff_quota(interaction: discord.Interaction):
         logger.exception(f"[FetchStaffQuota] Failed to fetch quotas for guild_id={interaction.guild.id}")
         await interaction.response.send_message(embed=simple_embed("Failed to fetch staff quotas.", "cross"))
 
+
 async def check_staff_quota(interaction: discord.Interaction, staff: discord.Member | discord.User):
+    def _line(current: int, required: int) -> str:
+        if current >= required:
+            return f"{emoji['checked']} Passed ({current}/{required})"
+        return f"{emoji['cross']} Failed ({current}/{required}, need {required - current} more)"
+
     if interaction.guild is None:
         embed = discord.Embed(
             title=f"{emoji['cross']} Error",
@@ -1105,72 +1111,60 @@ async def check_staff_quota(interaction: discord.Interaction, staff: discord.Mem
         )
         await interaction.response.send_message(embed=embed)
         return
+
+    await interaction.response.defer()
+
     try:
         bot_db = cast("Lily", interaction.client).db
         assert bot_db is not None
-        response = await bot_db.get_staff_current_quota(**{
-            "guild_id": interaction.guild.id,
-            "staff_id": staff.id
-        })
 
-        if not response.get("success"):
-            return await interaction.response.send_message(embed=simple_embed(f"{response.get('message')}", 'cross'))
+        response = await bot_db.evaluate_staff_quotas(interaction.guild.id, staff.id)
 
-        msgs = response["messages"]
-        quota = response["quota"]
-        result = response["result"]
-        mod_stats = response.get("mod_stats_weekly", {})
+        if not response["success"]:
+            return await interaction.followup.send(
+                embed=simple_embed(response["message"], "cross")
+            )
 
-        min_msg = quota.get("min_msg", 0) or 0
-        min_ms = quota.get("min_ms", 0) or 0
-        weekly = msgs.get("weekly", 0) or 0
-        weekly_ms = mod_stats.get("weekly_ms", 0)
-        weekly_ms = weekly_ms or 0
+        on_loa = response["on_loa"]
+        results = response["results"]
+        total = len(results)
 
-        remaining_msg = max(min_msg - weekly, 0)
-        remaining_ms = max(min_ms - weekly_ms, 0)
+        embeds: list[discord.Embed] = []
 
-        overall_status = (
-            f"## {emoji['checked']} Passed"
-            if result.get("message_quota_passed") and result.get("ms_quota_passed")
-            else f"## {emoji['cross']} Failed"
-        )
+        for index, r in enumerate(results[:10], start=1):
+            role = interaction.guild.get_role(r["role_id"])
+            role_mention = role.mention if role else f"`{r['role_id']}`"
 
-        msg_status = (
-            f"{emoji['checked']} Passed ({weekly}/{min_msg})"
-            if result.get("message_quota_passed")
-            else f"{emoji['cross']} Failed ({weekly}/{min_msg}, need {remaining_msg} more)"
-        )
+            if on_loa:
+                colour, status = 0xFFF0F3, "## On LOA (exempt)"
+            elif r["passed"]:
+                colour, status = 0xFFF0F3, f"## {emoji['checked']} Passed"
+            else:
+                colour, status = 0xFFF0F3, f"## {emoji['cross']} Failed"
 
-        ms_status = (
-            f"{emoji['checked']} Passed ({weekly_ms}/{min_ms})"
-            if result.get("ms_quota_passed")
-            else f"{emoji['cross']} Failed ({weekly_ms}/{min_ms}, need {remaining_ms} more)"
-        )
+            embed = discord.Embed(
+                title=f"{r['period']} Quota #{r['quota_id']}",
+                description=(
+                    f"{status}\n"
+                    f"- **Role:** {role_mention}\n"
+                    f"- **Messages:** {_line(r['messages'], r['min_msg'])}\n"
+                    f"- **Moderation:** {_line(r['ms'], r['min_ms'])}"
+                ),
+                color=colour
+            )
+            embed.set_thumbnail(url=staff.display_avatar.url)
+            embed.set_image(url=img["border"])
+            embed.set_author(name=str(staff), icon_url=staff.display_avatar.url)
+            embed.set_footer(text=f"Quota {index} of {total}")
+            embeds.append(embed)
 
-        embed = discord.Embed(
-            title=f"Displaying Quota Status for {staff}",
-            description=overall_status,
-            color=16777215
-        )
-
-        embed.set_thumbnail(url=staff.display_avatar.url)
-
-        embed.add_field(
-            name="Results",
-            value=(
-                f"- **Messages:** {msg_status}\n"
-                f"- **Moderation:** {ms_status}"
-            ),
-            inline=False
-        )
-
-        embed.set_footer(text=f"Staff ID: {response['staff_id']}")
-
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embeds=embeds)
     except Exception:
-        logger.exception(f"[CheckStaffQuota] Failed to check quota for staff_id={staff.id} in guild_id={interaction.guild.id}")
-        await interaction.response.send_message(embed=simple_embed("Failed to check staff quota.", "cross"))
+        logger.exception(
+            f"[CheckStaffQuota] Failed to check quota for staff_id={staff.id} in guild_id={interaction.guild.id}"
+        )
+        await interaction.followup.send(embed=simple_embed("Failed to check staff quota.", "cross"))
+
 
 async def remove_role(interaction: discord.Interaction, role: int):
     if interaction.guild is None:

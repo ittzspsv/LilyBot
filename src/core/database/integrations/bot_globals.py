@@ -3103,90 +3103,76 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         )
         return {"success": True, "message": "Quota removed successfully"}
 
-    async def get_staff_current_quota(
-        self, guild_id: int, staff_id: int
-    ) -> Dict[str, Any]:
+    async def evaluate_staff_quotas(self, guild_id: int, staff_id: int) -> Dict[str, Any]:
+        _QUOTA_PERIODS: Final = {
+            "1d":  ("daily_messages",   "today", "Daily"),
+            "7d":  ("weekly_messages",  "7d",    "Weekly"),
+            "30d": ("monthly_messages", "30d",   "Monthly"),
+        }
+        staff = await self.fetch_one(
+            "SELECT name, on_loa, retired FROM staffs WHERE staff_id = ? AND guild_id = ?",
+            (staff_id, guild_id),
+        )
+        if staff is None or staff["retired"]:
+            return {"success": False, "message": "This user is not an active staff member."}
+
+        quotas = await self.fetch_all(
+            """
+            SELECT q.quota_id, q.role_id, q.min_msg, q.min_ms, q.check_by
+            FROM staff_roles sr
+            JOIN staff_quota q
+                ON q.guild_id = sr.guild_id AND q.role_id = sr.role_id
+            WHERE sr.staff_id = ? AND sr.guild_id = ?
+            ORDER BY q.quota_id
+            """,
+            (staff_id, guild_id),
+        )
+        if not quotas:
+            return {"success": False, "message": "No quota is defined for any of this staff member's roles."}
+
         msg_row = await self.fetch_one(
             """
-            SELECT daily_messages, weekly_messages, monthly_messages, total_messages
-            FROM messages
-            WHERE member_id = ? AND guild_id = ?
+            SELECT daily_messages, weekly_messages, monthly_messages
+            FROM messages WHERE member_id = ? AND guild_id = ?
             """,
             (staff_id, guild_id),
         )
-        if not msg_row:
-            daily = 0
-            weekly = 0
-            monthly = 0
-            total = 0
-        else:
-            daily = msg_row["daily_messages"]
-            weekly = msg_row["weekly_messages"]
-            monthly = msg_row["monthly_messages"]
-            total = msg_row["total_messages"]
-
-        role_row = await self.fetch_one(
-            """
-            SELECT sr.role_id
-            FROM staff_roles sr
-            JOIN roles r
-                ON sr.role_id = r.role_id
-            AND sr.guild_id = r.guild_id
-            LEFT JOIN staff_ranks srk
-                ON srk.role_id = r.role_id
-            AND srk.guild_id = r.guild_id
-            WHERE sr.staff_id = ?
-            AND sr.guild_id = ?
-            AND r.role_type = 'staff'
-            ORDER BY srk.priority ASC
-            LIMIT 1;
-            """,
-            (staff_id, guild_id),
-        )
-        if not role_row:
-            return {"success": False, "message": "Staff role not found"}
-
-        role_id = role_row["role_id"]
-
-        quota_row = await self.fetch_one(
-            "SELECT min_msg, min_ms FROM staff_quota WHERE role_id = ? AND guild_id = ?",
-            (role_id, guild_id),
-        )
-        if not quota_row:
-            return {
-                "success": False,
-                "message": (
-                    "No quota has been defined for any of the staff roles "
-                    "assigned to this user. Please define a quota."
-                ),
-            }
-
         mod_stats = await self.fetch_mod_stats(
             guild_id=guild_id, moderator_id=staff_id, page_start=0, page_end=0
         )
         stats = mod_stats.get("stats") or {}
-        weekly_ms = sum(v.get("7d", 0) for v in stats.values())
 
-        min_msg = int(quota_row["min_msg"] or 0)
-        min_ms = int(quota_row["min_ms"] or 0)
+        results: list[dict[str, Any]] = []
+        for q in quotas:
+            check_by = (q["check_by"] or "7d").strip().lower()
+            msg_col, mod_key, label = _QUOTA_PERIODS.get(check_by, _QUOTA_PERIODS["7d"])
+
+            messages = int((msg_row[msg_col] if msg_row else 0) or 0)
+            ms = sum(v.get(mod_key, 0) for v in stats.values())
+            min_msg = int(q["min_msg"] or 0)
+            min_ms = int(q["min_ms"] or 0)
+
+            failed = []
+            if messages < min_msg:
+                failed.append("messages")
+            if ms < min_ms:
+                failed.append("moderation stats")
+
+            results.append({
+                "quota_id": q["quota_id"],
+                "role_id": q["role_id"],
+                "period": label,
+                "messages": messages, "min_msg": min_msg,
+                "ms": ms, "min_ms": min_ms,
+                "passed": not failed,
+                "failed": failed,
+            })
 
         return {
             "success": True,
-            "message": "Quota fetched successfully.",
-            "staff_id": staff_id,
-            "guild_id": guild_id,
-            "messages": {
-                "daily": daily,
-                "weekly": weekly,
-                "monthly": monthly,
-                "total": total,
-            },
-            "mod_stats_weekly": {"weekly_ms": weekly_ms},
-            "quota": {"min_msg": min_msg, "min_ms": min_ms},
-            "result": {
-                "message_quota_passed": weekly >= min_msg,
-                "ms_quota_passed": weekly_ms >= min_ms,
-            },
+            "staff_name": staff["name"],
+            "on_loa": bool(staff["on_loa"]),
+            "results": results,
         }
 
     async def set_xp_boost(self, guild_id: int, role_id: int, multiplier: float) -> None:
