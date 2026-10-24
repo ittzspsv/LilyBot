@@ -244,12 +244,6 @@ async def quarantine_user(
 
     result = await _validate_moderation_target(ctx, user_input)
     if result is None:
-        if ctx.message is not None:
-            try:
-                await ctx.message.delete()
-            except discord.HTTPException:
-                logger.exception("Failed to delete invalid quarantine command message in guild %s", ctx.guild.id)
-            return
         return
     member, status, _ = result
 
