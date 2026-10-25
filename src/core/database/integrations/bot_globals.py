@@ -710,15 +710,8 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
                 (guild_id, role_id),
             )
 
-    # ------------------------------------------------------------------ #
-    #  Ticket panels: ticket_views + the normalized ticket_view_* tables. #
-    #  Modal fields stay JSON (ticket_view_types.fields_json) so new      #
-    #  field types never need a migration.                                #
-    # ------------------------------------------------------------------ #
-
     @staticmethod
     def validate_ticket_config(config: dict) -> None:
-        """Raise ValueError if `config` can't be stored. Pure, no I/O."""
         tickets = config.get("Tickets")
         if not isinstance(config.get("BasicConfigurations"), dict) or not isinstance(tickets, list) or not tickets:
             raise ValueError("`BasicConfigurations` and a non-empty `Tickets` list are required.")
@@ -747,7 +740,6 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         panel = config.get("PanelConfig") or {}
 
         async with self.transaction() as conn:
-            # config_json is still NOT NULL but nothing reads it anymore: '{}' is a placeholder.
             await conn.execute(
                 """
                 INSERT OR IGNORE INTO ticket_views (guild_id, channel_id, message_id, config_json)
@@ -764,7 +756,6 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
             )
             view_id: int = row["id"]
 
-            # Replace the config (ping roles go with their types via ON DELETE CASCADE).
             for table in (
                 "ticket_view_settings",
                 "ticket_view_panel",
@@ -934,7 +925,6 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         return [row["role_id"] for row in rows]
 
     async def delete_ticket_view(self, message_id: int) -> None:
-        # The normalized tables go with it via ON DELETE CASCADE.
         await self.execute("DELETE FROM ticket_views WHERE message_id = ?", (message_id,))
 
     async def write_log(self, guild_id: int, user_id: int, log_txt: str) -> None:
@@ -4280,3 +4270,97 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
             query,
             (quota_id, staff_id, guild_id, status, timestamp),
         )
+
+    async def get_rank_updates(
+        self,
+        guild_id: int,
+        *,
+        staff_id: int | None = None,
+        updated_by: int | None = None,
+        update_type: str | None = None,
+        old_role_id: int | None = None,
+        new_role_id: int | None = None,
+        after: datetime | None = None,
+        before: datetime | None = None,
+        page: int = 1,
+        page_size: int = 5,
+    ) -> dict[str, Any]:
+        if page < 1:
+            raise ValueError("page must be >= 1")
+        if page_size < 1:
+            raise ValueError("page_size must be >= 1")
+
+        conditions = ["guild_id = ?"]
+        params: list[Any] = [guild_id]
+
+        if staff_id is not None:
+            conditions.append("staff_id = ?")
+            params.append(staff_id)
+
+        if updated_by is not None:
+            conditions.append("updated_by = ?")
+            params.append(updated_by)
+
+        if update_type is not None:
+            conditions.append("update_type = ?")
+            params.append(update_type)
+
+        if old_role_id is not None:
+            conditions.append("old_role_id = ?")
+            params.append(old_role_id)
+
+        if new_role_id is not None:
+            conditions.append("new_role_id = ?")
+            params.append(new_role_id)
+
+        if after is not None:
+            conditions.append("timestamp >= ?")
+            params.append(after.strftime("%Y-%m-%d %H:%M:%S"))
+
+        if before is not None:
+            conditions.append("timestamp < ?")
+            params.append(before.strftime("%Y-%m-%d %H:%M:%S"))
+
+        where_clause = " AND ".join(conditions)
+
+        count_row = await self.fetch_one(
+            f"SELECT COUNT(*) AS total FROM rank_updates WHERE {where_clause}",
+            tuple(params),
+        )
+        total_count = count_row["total"] if count_row is not None else 0
+        max_page = max(1, -(-total_count // page_size))  
+
+        offset = (page - 1) * page_size
+
+        rows = await self.fetch_all(
+            f"""
+            SELECT id, staff_id, updated_by, old_role_id, new_role_id,
+                update_type, reason, timestamp
+            FROM rank_updates
+            WHERE {where_clause}
+            ORDER BY id DESC
+            LIMIT ? OFFSET ?
+            """,
+            tuple(params) + (page_size, offset),
+        )
+
+        return {
+            "results": [
+                {
+                    "id": row["id"],
+                    "staff_id": row["staff_id"],
+                    "updated_by": row["updated_by"],
+                    "old_role_id": row["old_role_id"],
+                    "new_role_id": row["new_role_id"],
+                    "update_type": row["update_type"],
+                    "reason": row["reason"],
+                    "timestamp": row["timestamp"],
+                }
+                for row in rows
+            ],
+            "page": page,
+            "has_prev": page > 1,
+            "has_next": page < max_page,
+            "total_count": total_count,
+            "max_page": max_page,
+        }
