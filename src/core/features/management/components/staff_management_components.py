@@ -4,6 +4,7 @@ import logging
 import discord
 from discord.ext import commands
 import src.core.configs.bot_details as Configs
+from src.core.configs.bot_details import emoji, img
 
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -1170,4 +1171,247 @@ class QuotaEvaluator(discord.ui.LayoutView):
     def __init__(self) -> None:
         super().__init__(timeout=360)
 
-        
+class RankUpdateList(discord.ui.LayoutView):
+    def __init__(
+        self,
+        rank_result: dict[str, Any],
+        *,
+        thumbnail_url: str,
+        staff_id: int | None = None,
+        updated_by: int | None = None,
+        update_type: str | None = None,
+    ) -> None:
+        super().__init__(timeout=None)
+
+        self.page: int = rank_result["page"]
+        self.max_page: int = rank_result["max_page"]
+        self.total_count: int = rank_result["total_count"]
+
+        self.staff_id = staff_id
+        self.updated_by = updated_by
+        self.update_type = update_type
+
+        self.pending_staff_id = staff_id
+        self.pending_updated_by = updated_by
+        self.pending_update_type = update_type
+
+        REASON_MAX = 300
+        _TYPE_DISPLAY = {"promotion": "Promoted", "demotion": "Demoted"}
+
+        entries: list[discord.ui.TextDisplay | discord.ui.Separator] = []
+        for index, result in enumerate(rank_result["results"]):
+            if index:
+                entries.append(
+                    discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small)
+                )
+
+            old_role = f"<@&{result['old_role_id']}>" if result["old_role_id"] else "*None*"
+            new_role = f"<@&{result['new_role_id']}>" if result["new_role_id"] else "*None*"
+
+            reason = discord.utils.escape_markdown(" ".join((result["reason"] or "").split()))
+            if not reason:
+                reason = "*No reason provided*"
+            elif len(reason) > REASON_MAX:
+                reason = reason[: REASON_MAX - 1] + "…"
+
+            unix_ts = int(
+                datetime.fromisoformat(result["timestamp"])
+                .replace(tzinfo=timezone.utc)
+                .timestamp()
+            )
+
+            entries.append(
+                discord.ui.TextDisplay(
+                    content=(
+                        f"### <@{result['updated_by']}> {_TYPE_DISPLAY.get(result['update_type'], 'Rank Update')} <@{result['staff_id']}>\n"
+                        f"- Role: {old_role} → {new_role}\n"
+                        f"- {emoji['clock']} Timestamp: <t:{unix_ts}:f>\n"
+                        f"- Reason: {reason}"
+                    )
+                )
+            )
+
+        if not entries:
+            entries.append(
+                discord.ui.TextDisplay(content="*No rank updates match the current filters.*")
+            )
+
+        self.prev_button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            emoji=emoji["left"],
+            disabled=not rank_result["has_prev"],
+        )
+        self.prev_button.callback = self.on_prev
+
+        self.page_indicator = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label=f"{self.page} / {self.max_page}",
+            disabled=True,
+        )
+
+        self.next_button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            emoji=emoji["right"],
+            disabled=not rank_result["has_next"],
+        )
+        self.next_button.callback = self.on_next
+
+        self.container = discord.ui.Container(
+            discord.ui.Section(
+                discord.ui.TextDisplay(content="## Rank Update History"),
+                discord.ui.TextDisplay(content="- Displaying all rank updates recorded on this server."),
+                discord.ui.TextDisplay(content=f"- Total Updates: {self.total_count}"),
+                accessory=discord.ui.Thumbnail(media=thumbnail_url),
+            ),
+            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+            *entries,
+            discord.ui.ActionRow(self.prev_button, self.page_indicator, self.next_button),
+        )
+
+        self.staff_select = discord.ui.UserSelect(
+            placeholder="Filter based on Staff Member",
+            min_values=0,
+            max_values=1,
+            default_values=(
+                [discord.SelectDefaultValue(id=staff_id, type=discord.SelectDefaultValueType.user)]
+                if staff_id is not None
+                else []
+            ),
+        )
+        self.staff_select.callback = self.on_staff_select
+
+        self.updated_by_select = discord.ui.UserSelect(
+            placeholder="Filter based on Updated By",
+            min_values=0,
+            max_values=1,
+            default_values=(
+                [discord.SelectDefaultValue(id=updated_by, type=discord.SelectDefaultValueType.user)]
+                if updated_by is not None
+                else []
+            ),
+        )
+        self.updated_by_select.callback = self.on_updated_by_select
+
+        self.type_select = discord.ui.Select(
+            placeholder="Filter based on Update Type",
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(label="All Types", value="__all__", default=update_type is None),
+                discord.SelectOption(label="Promotion", value="promotion", default=update_type == "promotion"),
+                discord.SelectOption(label="Demotion", value="demotion", default=update_type == "demotion"),
+            ],
+        )
+        self.type_select.callback = self.on_type_select
+
+        self.apply_filter_btn = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label="Apply Filter",
+        )
+        self.apply_filter_btn.callback = self.on_apply_filter
+
+        self.filter_container = discord.ui.Container(
+            discord.ui.TextDisplay(content="### Rank Update Filters"),
+            discord.ui.ActionRow(self.staff_select),
+            discord.ui.ActionRow(self.updated_by_select),
+            discord.ui.ActionRow(self.type_select),
+            discord.ui.ActionRow(self.apply_filter_btn),
+        )
+
+        self.add_item(self.container)
+        self.add_item(self.filter_container)
+
+    async def on_prev(self, interaction: discord.Interaction) -> None:
+        await self.refresh(
+            interaction,
+            page=self.page - 1,
+            staff_id=self.staff_id,
+            updated_by=self.updated_by,
+            update_type=self.update_type,
+        )
+
+    async def on_next(self, interaction: discord.Interaction) -> None:
+        await self.refresh(
+            interaction,
+            page=self.page + 1,
+            staff_id=self.staff_id,
+            updated_by=self.updated_by,
+            update_type=self.update_type,
+        )
+
+    async def on_staff_select(self, interaction: discord.Interaction) -> None:
+        values = self.staff_select.values
+        self.pending_staff_id = values[0].id if values else None
+        await interaction.response.defer()
+
+    async def on_updated_by_select(self, interaction: discord.Interaction) -> None:
+        values = self.updated_by_select.values
+        self.pending_updated_by = values[0].id if values else None
+        await interaction.response.defer()
+
+    async def on_type_select(self, interaction: discord.Interaction) -> None:
+        chosen = self.type_select.values[0]
+        self.pending_update_type = None if chosen == "__all__" else chosen
+        await interaction.response.defer()
+
+    async def on_apply_filter(self, interaction: discord.Interaction) -> None:
+        await self.refresh(
+            interaction,
+            page=1,
+            staff_id=self.pending_staff_id,
+            updated_by=self.pending_updated_by,
+            update_type=self.pending_update_type,
+        )
+
+    async def refresh(
+        self,
+        interaction: discord.Interaction,
+        *,
+        page: int,
+        staff_id: int | None,
+        updated_by: int | None,
+        update_type: str | None,
+    ) -> None:
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+        assert interaction.guild is not None
+
+        try:
+            rank_result = await bot_db.get_rank_updates(
+                interaction.guild.id,
+                staff_id=staff_id,
+                updated_by=updated_by,
+                update_type=update_type,
+                page=page,
+                page_size=3,
+            )
+        except Exception:
+            logger.exception(
+                "RankUpdateList.refresh: get_rank_updates failed for guild %s (page %s)",
+                interaction.guild.id, page
+            )
+            await interaction.response.send_message(
+                embed=simple_embed("Failed to refresh rank update history due to a database error!", 'cross'),
+                ephemeral=True,
+            )
+            return
+
+        new_view = RankUpdateList(
+            rank_result,
+            thumbnail_url=(
+                interaction.guild.icon.url
+                if interaction.guild.icon
+                else interaction.guild.me.display_avatar.url
+            ),
+            staff_id=staff_id,
+            updated_by=updated_by,
+            update_type=update_type,
+        )
+
+        try:
+            await interaction.response.edit_message(view=new_view, allowed_mentions=discord.AllowedMentions.none())
+        except discord.HTTPException:
+            logger.exception(
+                "RankUpdateList.refresh: failed to edit message with refreshed rank updates for guild %s",
+                interaction.guild.id
+            )
