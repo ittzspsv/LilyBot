@@ -6,8 +6,6 @@ pillow
 word2number
 python-dotenv
 aiohttp
-aiofiles
-lavalink
 asqlite
 apscheduler
 boto3
