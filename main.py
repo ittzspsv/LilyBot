@@ -5,6 +5,7 @@ import logging
 from src.core.backups import ObjectStorageService
 from src.core.bot import set_instance
 from src.lily import Lily
+from src.core.events.event_dispatcher import dispatcher
 
 from dotenv import load_dotenv
 from pathlib import Path
@@ -19,13 +20,16 @@ logger = logging.getLogger("lily")
 
 
 async def lily_bot():
-    bot = Lily()
+    bot = Lily(events=dispatcher)
     set_instance(bot=bot)
 
     token = os.getenv("token")
     if not token:
         raise ValueError("TOKEN environment variable is missing")
 
+
+    logger.info("Starting Lily")
+    await bot.start(token=token)
 
     """ 
     Note: 
@@ -84,8 +88,7 @@ async def lily_bot():
             path,
         )
 
-    logger.info("Starting Lily")
-    await bot.start(token=token)
+    
 
 
 asyncio.run(lily_bot())

@@ -9,6 +9,7 @@ from src.core.utils.embeds.sLilyEmbed import simple_embed
 from src.core.features.moderation.components.lily_moderation_components import AppealButton, AppealHandleButton
 from src.core.configs.path import CONFIG_DB
 from src.core.features.events import on_audit_log_entry_create
+from src.core.events.event_dispatcher import EventDispatcher, EventPayload
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
@@ -18,18 +19,23 @@ import time
 
 
 class Lily(commands.Bot):
-    def __init__(self):
+    def __init__(self, events: EventDispatcher):
         intents = discord.Intents.all() 
         intents.presences = False
         intents.members = False
         intents.message_content = True
 
         self.lily_session = None
+        self.events = events
         self.db: Optional[BotGlobalsDatabaseAccess] = None
         self.scheduler: Optional[AsyncIOScheduler] = None
         self.logging_controller: Optional[LilyLoggingController] = None
 
         super().__init__(command_prefix=self.prefix,intents=intents,help_command=None, owner_ids={1488556914605428988})
+
+
+    async def event_payload(self, guild: discord.Guild) -> EventPayload:
+        return EventPayload(bot=self, guild=guild)
 
     async def setup_hook(self) -> None:
         """ Bot Globals Database """
