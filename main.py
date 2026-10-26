@@ -10,7 +10,7 @@ from src.core.events.event_dispatcher import dispatcher
 from dotenv import load_dotenv
 from pathlib import Path
 
-load_dotenv("token.env")
+load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
