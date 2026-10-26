@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS "staff_roles" (
 
     FOREIGN KEY (staff_id, guild_id)
         REFERENCES staffs(staff_id, guild_id),
+
     FOREIGN KEY (guild_id, role_id)
         REFERENCES roles(guild_id, role_id)
 );
@@ -70,8 +71,10 @@ CREATE TABLE IF NOT EXISTS "leaves" (
     reason     TEXT,
     days       INTEGER,
     issued_by  INTEGER, `started_on` TEXT, `ended_on` TEXT,
+
     FOREIGN KEY (staff_id, guild_id)
         REFERENCES staffs(staff_id, guild_id),
+
     FOREIGN KEY (issued_by, guild_id)
         REFERENCES staffs(staff_id, guild_id)
 );
@@ -91,6 +94,8 @@ CREATE TABLE IF NOT EXISTS "rank_updates" (
 
     FOREIGN KEY (staff_id, guild_id)
         REFERENCES staffs(staff_id, guild_id),
+
+    FOREIGN KEY (updated_by, guild_id)
         REFERENCES staffs(staff_id, guild_id),
 
     FOREIGN KEY (guild_id, old_role_id)
@@ -129,6 +134,26 @@ CREATE TABLE IF NOT EXISTS "messages" (
     FOREIGN KEY (guild_id)
         REFERENCES data(guild_id)
 );
+CREATE TABLE IF NOT EXISTS "ticket_logs" (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+
+    guild_id             INTEGER NOT NULL
+                             REFERENCES data(guild_id),
+
+    opened_user_id       INTEGER NOT NULL,
+    staff_handled        INTEGER,
+
+    reason               TEXT,
+    ticket_type          TEXT,
+    timestamp            TEXT,
+    transcripts_reference INTEGER, logs_channel_id INTEGER,
+
+    FOREIGN KEY (opened_user_id, guild_id)
+        REFERENCES members(member_id, guild_id),
+
+    FOREIGN KEY (staff_handled, guild_id)
+        REFERENCES staffs(staff_id, guild_id)
+);
 CREATE TABLE IF NOT EXISTS "staffs" (
     staff_id        INTEGER NOT NULL,
     guild_id        INTEGER NOT NULL,
@@ -143,6 +168,52 @@ CREATE TABLE IF NOT EXISTS "staffs" (
 
     FOREIGN KEY (staff_id, guild_id)
         REFERENCES members(member_id, guild_id)
+);
+CREATE TABLE IF NOT EXISTS "modlogs" (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id       INTEGER NOT NULL
+                       REFERENCES data(guild_id),
+    moderator_id   INTEGER NOT NULL,
+    target_user_id INTEGER NOT NULL,
+    mod_type       TEXT,
+    reason         TEXT,
+    timestamp      TEXT, deleted INTEGER DEFAULT 0, metadata JSON
+NOT NULL
+DEFAULT '{}',
+
+    FOREIGN KEY (moderator_id, guild_id)
+        REFERENCES staffs(staff_id, guild_id),
+
+    FOREIGN KEY (target_user_id, guild_id)
+        REFERENCES members(member_id, guild_id)
+);
+CREATE TABLE IF NOT EXISTS "mod_logs_queue" (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id       INTEGER NOT NULL
+                       REFERENCES data(guild_id),
+    moderator_id   INTEGER NOT NULL,
+    target_user_id INTEGER NOT NULL,
+    mod_type       TEXT,
+    reason         TEXT,
+    timestamp      TEXT,
+    message_source TEXT,
+
+    FOREIGN KEY (moderator_id, guild_id)
+        REFERENCES staffs(staff_id, guild_id),
+
+    FOREIGN KEY (target_user_id, guild_id)
+        REFERENCES members(member_id, guild_id)
+);
+CREATE TABLE IF NOT EXISTS "proofs" (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    case_id         INTEGER NOT NULL
+                        REFERENCES modlogs(id),
+    proof_reference INTEGER,
+    author          INTEGER NOT NULL,
+    guild_id        INTEGER NOT NULL,
+
+    FOREIGN KEY (author, guild_id)
+        REFERENCES staffs(staff_id, guild_id)
 );
 CREATE TABLE IF NOT EXISTS "staff_ranks" (
     role_id INTEGER,
@@ -180,7 +251,7 @@ CREATE TABLE IF NOT EXISTS "tickets" (
     ticket_type TEXT,
 
     log_channel_id INTEGER,
-    message_id INTEGER, `ticket_details_message_id` INTEGER,
+    message_id INTEGER, ticket_details_message_id INTEGER,
 
     FOREIGN KEY (opened_user_id, guild_id)
         REFERENCES members(member_id, guild_id),
@@ -250,23 +321,68 @@ CREATE TABLE acronyms (
                 FOREIGN KEY (member_id, guild_id)
                     REFERENCES members(member_id, guild_id)
             );
-CREATE TABLE application_questions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      guild_id INTEGER REFERENCES data(guild_id),
-      label TEXT,
-      description TEXT,
-      placeholder TEXT,
-      min_length INTEGER,
-      max_length INTEGER,
-      type TEXT,
-      metadata TEXT
-  );
+CREATE TABLE application (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id INTEGER REFERENCES data(guild_id),
+    name TEXT,
+    description TEXT,
+    active INTEGER,
+    current_wave INTEGER DEFAULT 0,
+    submission_forum_id INTEGER
+, submit_btn_label TEXT DEFAULT 'Submit');
 CREATE TABLE application_groups (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      guild_id INTEGER REFERENCES data(guild_id),
-      name TEXT,
-      description TEXT
-  );
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id INTEGER REFERENCES data(guild_id),
+    name TEXT,
+    description TEXT
+);
+CREATE TABLE application_questions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id INTEGER REFERENCES data(guild_id),
+    label TEXT,
+    description TEXT,
+    placeholder TEXT,
+    min_length INTEGER,
+    max_length INTEGER,
+    type TEXT,
+    metadata TEXT
+);
+CREATE TABLE application_group_assignments (
+    guild_id INTEGER NOT NULL REFERENCES data(guild_id),
+    application_id INTEGER NOT NULL REFERENCES application(id),
+    group_id INTEGER NOT NULL REFERENCES application_groups(id),
+    position INTEGER NOT NULL,
+    PRIMARY KEY (application_id, group_id)
+);
+CREATE TABLE application_submissions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id INTEGER NOT NULL,
+    application_id INTEGER NOT NULL REFERENCES application(id),
+    member_id INTEGER NOT NULL,
+    wave INTEGER,
+    submitted_at TEXT NOT NULL DEFAULT (datetime('now')),
+    status TEXT DEFAULT 'in_progress',
+    verification_status TEXT DEFAULT 'pending', submission_thread_reference INTEGER,
+    FOREIGN KEY (member_id, guild_id)
+        REFERENCES members(member_id, guild_id),
+    UNIQUE(guild_id, application_id, member_id, wave)
+);
+CREATE TABLE application_submission_answers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    submission_id INTEGER NOT NULL
+        REFERENCES application_submissions(id) ON DELETE CASCADE,
+    group_id INTEGER REFERENCES application_groups(id),
+    question_id INTEGER NOT NULL
+        REFERENCES application_questions(id),
+    answer_value TEXT,
+    UNIQUE (submission_id, question_id)
+);
+CREATE TABLE application_views (
+    guild_id INTEGER REFERENCES data(guild_id),
+    channel_id INTEGER NOT NULL,
+    application_id INTEGER REFERENCES application(id),
+    message_id INTEGER NOT NULL
+);
 CREATE TABLE application_group_questions (
         guild_id INTEGER NOT NULL REFERENCES data(guild_id),
         group_id INTEGER NOT NULL REFERENCES application_groups(id),
@@ -274,128 +390,33 @@ CREATE TABLE application_group_questions (
         position INTEGER NOT NULL,
         PRIMARY KEY (group_id, question_id)
     );
-CREATE TABLE IF NOT EXISTS "application_group_assignments" (
-        guild_id INTEGER NOT NULL REFERENCES data(guild_id),
-        application_id INTEGER NOT NULL REFERENCES application(id),
-        group_id INTEGER NOT NULL REFERENCES application_groups(id),
-        position INTEGER NOT NULL,
-        PRIMARY KEY (application_id, group_id)
-    );
-CREATE TABLE `application_views` (`guild_id` INTEGER REFERENCES `data`(`guild_id`), `channel_id` INTEGER NOT NULL, `application_id` INTEGER REFERENCES `application`(`id`), `message_id` INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS "application_submission_answers" (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        submission_id INTEGER NOT NULL
-            REFERENCES application_submissions(id) ON DELETE CASCADE, `group_id` INTEGER REFERENCES `application_groups`(`id`),
-        question_id INTEGER NOT NULL
-            REFERENCES application_questions(id),
-        answer_value TEXT,
-        UNIQUE (submission_id, question_id)
-    );
-CREATE TABLE IF NOT EXISTS "application_submissions" (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        guild_id INTEGER NOT NULL,
-        application_id INTEGER NOT NULL REFERENCES application(id),
-        member_id INTEGER NOT NULL,
-        wave INTEGER,
-        submitted_at TEXT NOT NULL DEFAULT (datetime('now')), `status` TEXT DEFAULT 'in_progress', `verification_status` TEXT DEFAULT 'pending', `submission_thread_reference` INTEGER,
-        FOREIGN KEY (member_id, guild_id)
-            REFERENCES members(member_id, guild_id)
-        UNIQUE(guild_id, application_id, member_id, wave)
-    );
-CREATE TABLE IF NOT EXISTS "application_blocked_users" (
-    guild_id INTEGER NOT NULL,
-    member_id INTEGER NOT NULL,
-    reason TEXT,
-    blocked_by INTEGER,
-    blocked_at TEXT NOT NULL DEFAULT (datetime('now')),
-
-    PRIMARY KEY (guild_id, member_id),
-
-    FOREIGN KEY (member_id, guild_id)
-        REFERENCES members(member_id, guild_id)
-        ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "application" (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        guild_id INTEGER REFERENCES data(guild_id),
-        name TEXT,
-        description TEXT, `submit_btn_label` TEXT,
-        active INTEGER,
-        current_wave INTEGER DEFAULT 0,
-        submission_forum_id INTEGER
-    );
-CREATE TABLE `mod_appeal` (`case_id` INTEGER REFERENCES `modlogs`(`id`), `status` TEXT, "thread_id" INTEGER);
-CREATE TABLE IF NOT EXISTS "mod_appeal_forum" (`guild_id` INTEGER UNIQUE REFERENCES `data`(`guild_id`), `config` TEXT);
-CREATE TABLE IF NOT EXISTS "modlogs" (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    guild_id       INTEGER NOT NULL
-                       REFERENCES data(guild_id),
-    moderator_id   INTEGER NOT NULL,
-    target_user_id INTEGER NOT NULL,
-    mod_type       TEXT,
-    reason         TEXT,
-    timestamp      TEXT, deleted INTEGER DEFAULT 0, `metadata` JSON DEFAULT '{}',
-
-    FOREIGN KEY (moderator_id, guild_id)
-        REFERENCES staffs(staff_id, guild_id),
-
-    FOREIGN KEY (target_user_id, guild_id)
-        REFERENCES members(member_id, guild_id)
-);
-CREATE TABLE IF NOT EXISTS "proofs" (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    case_id         INTEGER NOT NULL
-                        REFERENCES modlogs(id),
-    proof_reference INTEGER,
-    author          INTEGER NOT NULL,
-    guild_id        INTEGER NOT NULL,
-
-    FOREIGN KEY (author, guild_id)
-        REFERENCES staffs(staff_id, guild_id)
-);
-CREATE TABLE IF NOT EXISTS "ticket_logs" (
-    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-
-    guild_id             INTEGER NOT NULL
-                             REFERENCES data(guild_id),
-
-    opened_user_id       INTEGER NOT NULL,
-    staff_handled        INTEGER,
-
-    reason               TEXT,
-    ticket_type          TEXT,
-    timestamp            TEXT,
-    transcripts_reference INTEGER, `logs_channel_id` INTEGER,
-
-    FOREIGN KEY (opened_user_id, guild_id)
-        REFERENCES members(member_id, guild_id),
-
-    FOREIGN KEY (staff_handled, guild_id)
-        REFERENCES staffs(staff_id, guild_id)
-);
+CREATE TABLE application_blocked_users (
+      guild_id INTEGER NOT NULL,
+      member_id INTEGER NOT NULL,
+      reason TEXT,
+      blocked_by INTEGER,
+      blocked_at TEXT NOT NULL DEFAULT (datetime('now')),
+  
+      PRIMARY KEY (guild_id, member_id),
+  
+      FOREIGN KEY (member_id, guild_id)
+          REFERENCES members(member_id, guild_id)
+          ON DELETE CASCADE
+  );
+CREATE TABLE mod_appeal (case_id INTEGER REFERENCES modlogs(id), status TEXT, appeal_thread INTEGER, thread_id INTEGER);
+CREATE TABLE mod_appeal_forum (guild_id INTEGER UNIQUE REFERENCES data(guild_id), config TEXT);
 CREATE UNIQUE INDEX idx_guild_webhooks_guild_channel
-    ON guild_webhooks (guild_id, channel_type);
-CREATE TABLE IF NOT EXISTS "afk" (
-    `member_id` INTEGER REFERENCES `members`(`member_id`),
-    `guild_id` INTEGER REFERENCES `members`(`guild_id`),
-    `timestamp` TEXT,
-    `display_name` TEXT DEFAULT 'AFK',
-    reason TEXT,
-    PRIMARY KEY (`member_id`, `guild_id`)
-);
-CREATE TABLE IF NOT EXISTS "tasks" (
-    `id`         INTEGER PRIMARY KEY AUTOINCREMENT,
-    `guild_id`   INTEGER NOT NULL,
-    `member_id`  INTEGER NOT NULL,
-    `task_name`  TEXT NOT NULL,
-    `job_type`   TEXT NOT NULL,
-    `payload`    TEXT,
-    `status`     TEXT NOT NULL DEFAULT 'pending',
-    `run_at`     TEXT NOT NULL,
-    `created_at` TEXT NOT NULL DEFAULT (datetime('now')),
-    `updated_at` TEXT,
-    FOREIGN KEY (`guild_id`, `member_id`) REFERENCES `members`(`guild_id`, `member_id`)
-);
+    ON guild_webhooks (guild_id, channel_type)
+    ;
+CREATE TABLE afk (
+      member_id INTEGER,
+      guild_id INTEGER,
+      timestamp TEXT,
+      display_name TEXT,
+      reason TEXT,
+      PRIMARY KEY (member_id, guild_id),
+      FOREIGN KEY (member_id, guild_id) REFERENCES members(member_id, guild_id)
+  );
 CREATE TABLE apscheduler_jobs (
 	id VARCHAR(191) NOT NULL, 
 	next_run_time FLOAT, 
@@ -409,4 +430,80 @@ CREATE TABLE xp_boosts (
     multiplier REAL NOT NULL,
     PRIMARY KEY (guild_id, role_id),
     FOREIGN KEY (guild_id) REFERENCES data(guild_id)
+);
+CREATE TABLE leveling (
+    id INTEGER PRIMARY KEY,
+    guild_id INTEGER NOT NULL REFERENCES data(guild_id),
+    role_id INTEGER NOT NULL,
+    level INTEGER NOT NULL CHECK (level >= 1),
+
+    UNIQUE (guild_id, role_id)
+);
+CREATE TABLE ticket_view_settings (
+    view_id            INTEGER PRIMARY KEY
+                           REFERENCES ticket_views(id) ON DELETE CASCADE,
+    spawn_channel_id   INTEGER,
+    logging_channel_id INTEGER,
+    ticket_type        TEXT
+);
+CREATE TABLE ticket_view_panel (
+    view_id       INTEGER PRIMARY KEY
+                      REFERENCES ticket_views(id) ON DELETE CASCADE,
+    title         TEXT,
+    description   TEXT,
+    footer_text   TEXT,
+    thumbnail_url TEXT
+);
+CREATE TABLE ticket_view_staff_roles (
+    view_id INTEGER NOT NULL REFERENCES ticket_views(id) ON DELETE CASCADE,
+    role_id INTEGER NOT NULL,
+    PRIMARY KEY (view_id, role_id)
+);
+CREATE TABLE ticket_view_types (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    view_id          INTEGER NOT NULL REFERENCES ticket_views(id) ON DELETE CASCADE,
+    position         INTEGER NOT NULL,
+    label            TEXT NOT NULL,
+    description      TEXT,
+    emoji            TEXT,
+    channel_id       INTEGER,
+    channel_emoji    TEXT,
+    ticket_base_name TEXT NOT NULL,
+    fields_json      TEXT NOT NULL DEFAULT '[]'
+        CHECK (json_valid(fields_json) AND json_type(fields_json) = 'array'),
+    UNIQUE (view_id, position),
+    UNIQUE (view_id, ticket_base_name)
+);
+CREATE TABLE ticket_view_type_ping_roles (
+    type_id INTEGER NOT NULL REFERENCES ticket_view_types(id) ON DELETE CASCADE,
+    role_id INTEGER NOT NULL,
+    PRIMARY KEY (type_id, role_id)
+);
+CREATE INDEX idx_ticket_view_types_view ON ticket_view_types(view_id);
+CREATE TABLE IF NOT EXISTS "tags" (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL,
+    content TEXT,
+    created_by INTEGER NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS "staff_quota_history" (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+    quota_id INTEGER NOT NULL
+        REFERENCES staff_quota(quota_id)
+        ON DELETE CASCADE,
+
+    staff_id INTEGER NOT NULL
+        REFERENCES members(member_id),
+
+    guild_id INTEGER NOT NULL,
+
+    status TEXT NOT NULL
+        CHECK (status IN ('pass', 'fail')),
+
+    timestamp TEXT NOT NULL,
+
+    FOREIGN KEY (guild_id, staff_id)
+        REFERENCES members(guild_id, member_id)
 );
