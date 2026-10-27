@@ -1,6 +1,6 @@
 from ..access import LilyDatabaseAccess
 
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Set
 
 class ApplicationManagement:
     def __init__(self, db: LilyDatabaseAccess):
@@ -1214,12 +1214,21 @@ class ApplicationManagement:
             "groups": [groups[gid] for gid in group_order],
         }
     
-    async def update_submission_verification_status(self, thread_id: int, tag: str):
-        await self.db.execute(
-            "UPDATE application_submissions SET verification_status = ? WHERE submission_thread_reference = ?"
-        , (tag.lower(), thread_id) 
+    async def update_submission_verification_status(
+        self, thread_id: int, tag: str
+    ) -> bool:
+        rows_updated = await self.db.execute(
+            """
+            UPDATE application_submissions
+            SET verification_status = ?
+            WHERE submission_thread_reference = ?
+            """,
+            (tag.lower(), thread_id),
+            row_count=True,
         )
 
+        return (rows_updated or 0) > 0
+    
     async def get_submission_thread_reference(self, thread_id: int):
         row = await self.db.fetch_one(
             "SELECT * FROM application_submissions WHERE submission_thread_reference = ?",
