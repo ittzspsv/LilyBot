@@ -2,61 +2,17 @@ from discord import app_commands, Interaction, TextChannel
 
 from src.core.features.permissions.lily_permissions import app_permission
 from src.core.features.application.controller import lily_application_controller as controller
+from src.core.features.application.components.lily_application_components import ApplicationMain
 from ..autocomplete import applications_autocomplete
 from .applicant import ApplicantCommands
-from .question import QuestionCommands
 from .wave import WaveCommands
-from .group import GroupCommands
 
 
 class ApplicationCommands(app_commands.Group):
     def __init__(self):
         super().__init__(name="application", description="Lily Application Management System")
         self.add_command(ApplicantCommands())
-        self.add_command(QuestionCommands())
         self.add_command(WaveCommands())
-        self.add_command(GroupCommands())
-
-    @app_permission(
-        command_name="application_management",
-        permissions={"manage_guild"},
-    )
-    @app_commands.command(name="new", description="Create a new application form")
-    async def new(self, interaction: Interaction):
-        await controller.create_application(interaction)
-
-    @app_permission(
-        command_name="application_management",
-        permissions={"manage_guild"},
-    )
-    @app_commands.command(name="update", description="Update an application")
-    @app_commands.describe(application="The application to update")
-    @app_commands.autocomplete(application=applications_autocomplete)
-    async def update(self, interaction: Interaction, application: int) -> None:
-        await controller.update_application(interaction, application)
-
-    @app_permission(
-        command_name="application_management",
-        permissions={"manage_guild"},
-    )
-    @app_commands.command(name="send", description="Send an application view")
-    @app_commands.describe(
-        application="The application to send",
-        channel="The channel to send the application view in",
-    )
-    @app_commands.autocomplete(application=applications_autocomplete)
-    async def send(self, interaction: Interaction, application: int, channel: TextChannel):
-        await controller.send_application_view(interaction, application, channel)
-
-    @app_permission(
-        command_name="application_management",
-        permissions={"manage_guild"},
-    )
-    @app_commands.command(name="delete", description="Delete an application")
-    @app_commands.describe(application="The application to delete")
-    @app_commands.autocomplete(application=applications_autocomplete)
-    async def delete(self, interaction: Interaction, application: int) -> None:
-        await controller.delete_application(interaction, application)
 
     @app_permission(
         command_name="application_management",
@@ -96,3 +52,17 @@ class ApplicationCommands(app_commands.Group):
     @app_commands.autocomplete(application=applications_autocomplete)
     async def flush(self, interaction: Interaction, application: int, wave: int):
         await controller.flush_submission(interaction, application, wave)
+
+
+    @app_permission(command_name="application_dashboard", restrict=True)
+    @app_commands.command(
+        name="dashboard",
+        description="Open the application panel to setup"
+    )
+    @app_commands.guild_only()
+    async def application_panel(self, interaction: Interaction):
+        assert interaction.guild is not None
+        await interaction.response.send_message(
+            view=ApplicationMain(avatar_url=interaction.guild.me.display_avatar.url, in_place=True),
+            ephemeral=True
+        )
