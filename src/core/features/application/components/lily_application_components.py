@@ -1,13 +1,1141 @@
+from __future__ import annotations
+
 import discord
 import json
 import logging
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, cast,TYPE_CHECKING
 
 from ....database.integrations.bot_globals import BotGlobalsDatabaseAccess
 from src.core.utils.embeds.sLilyEmbed import simple_embed
+from src.core.configs.bot_details import emoji
+
+if TYPE_CHECKING:
+    from src.lily import Lily
 
 logger = logging.getLogger("lily")
+
+
+""" Application Dashboard """
+
+class ApplicationMain(discord.ui.LayoutView):
+    def __init__(self, avatar_url: str, in_place: bool = False) -> None:
+        super().__init__(timeout=300 if in_place else None)
+
+        self.in_place = in_place
+
+        self.view_applications = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label="Manage",
+            emoji=emoji["pencil"],
+            custom_id="applications:view"
+        )
+
+        self.application_questions = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label="Manage",
+            emoji=emoji["pencil"],
+            custom_id="applications:questions"
+        )
+
+        self.application_groups = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label="Manage",
+            emoji=emoji["pencil"],
+            custom_id="applications:groups"
+        )
+
+        self.view_applications.callback = self.view_applications_callback
+        self.application_questions.callback = self.application_questions_callback
+        self.application_groups.callback = self.application_groups_callback
+
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.Section(
+                    discord.ui.TextDisplay(content="## Application System Panel"),
+                    discord.ui.TextDisplay(
+                        content=(
+                            "Create and manage staff applications in three steps:\n"
+                            "- Create questions\n"
+                            "- Organize questions into groups\n"
+                            "- Create applications using selected groups"
+                        )
+                    ),
+                    accessory=discord.ui.Thumbnail(media=avatar_url)
+                ),
+
+                discord.ui.Separator(),
+
+                discord.ui.Section(
+                    discord.ui.TextDisplay(content="### Application Questions"),
+                    discord.ui.TextDisplay(
+                        content="Create reusable questions for all applications."
+                    ),
+                    accessory=self.application_questions
+                ),
+
+                discord.ui.Separator(),
+
+                discord.ui.Section(
+                    discord.ui.TextDisplay(content="### Application Groups"),
+                    discord.ui.TextDisplay(
+                        content="Organize questions into groups with a title and description."
+                    ),
+                    accessory=self.application_groups
+                ),
+
+                discord.ui.Separator(),
+
+                discord.ui.Section(
+                    discord.ui.TextDisplay(content="### Applications"),
+                    discord.ui.TextDisplay(
+                        content="View and manage staff applications submitted on this server."
+                    ),
+                    accessory=self.view_applications
+                )
+            )
+        )
+
+    async def view_applications_callback(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+
+        data = await bot_db.app_management_db.get_applications_page(interaction.guild.id, 1)
+        view = ApplicationsList(interaction.guild.id, data)
+
+        if self.in_place:
+            await interaction.response.edit_message(view=view)
+        else:
+            await interaction.response.send_message(view=view, ephemeral=True)
+
+    async def application_questions_callback(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+
+        data = await bot_db.app_management_db.get_questions_page(interaction.guild.id, 1)
+        view = ApplicationsQuestionList(interaction.guild.id, data)
+
+        if self.in_place:
+            await interaction.response.edit_message(view=view)
+        else:
+            await interaction.response.send_message(view=view, ephemeral=True)
+
+    async def application_groups_callback(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+
+        data = await bot_db.app_management_db.get_groups_page(interaction.guild.id, 1)
+        view = ApplicationsGroupList(interaction.guild.id, data)
+
+        if self.in_place:
+            await interaction.response.edit_message(view=view)
+        else:
+            await interaction.response.send_message(view=view, ephemeral=True)
+
+class ApplicationsQuestionList(discord.ui.LayoutView):
+    def __init__(self, guild_id: int, data: Dict[str, Any]) -> None:
+        super().__init__(timeout=None)
+
+        self.guild_id = guild_id
+        self.page = data["page"]
+        self.max_page = data["max_page"]
+        self.questions = data["results"]
+
+        items: List[discord.ui.Item] = []
+
+        for question in self.questions:
+            edit_button: discord.ui.Button = discord.ui.Button(
+                style=discord.ButtonStyle.secondary,
+                emoji=emoji["pencil"],
+                custom_id=str(question["id"]),
+            )
+            edit_button.callback = self.edit_callback
+
+            items.append(
+                discord.ui.Section(
+                    discord.ui.TextDisplay(content=f'**{question["label"]}**'),
+                    discord.ui.TextDisplay(content=f'> {question["description"] or "No description provided"}'),
+                    accessory=edit_button,
+                )
+            )
+
+        if not items:
+            items.append(discord.ui.TextDisplay(content="*No questions yet.*"))
+
+        prev_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            emoji=emoji["left"],
+            disabled=not data["has_prev"],
+        )
+        prev_button.callback = self.previous_callback
+
+        page_indicator: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label=f"Page {self.page}/{self.max_page}",
+            disabled=True,
+        )
+
+        next_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            emoji=emoji["right"],
+            disabled=not data["has_next"],
+        )
+        next_button.callback = self.next_callback
+
+        back_button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label="Back"
+        )
+
+        back_button.callback = self.back_callback
+
+        self.add_item(discord.ui.Container(
+            discord.ui.Section(
+                discord.ui.TextDisplay(content="### Application Questions\n- Create and manage questions that are shared"),
+                accessory=back_button
+            ),
+            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+            *items,
+            discord.ui.ActionRow(prev_button, page_indicator, next_button)
+        ))
+
+
+        add_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label="Add",
+            emoji=emoji["plus"]
+        )
+        add_button.callback = self.add_callback
+
+        remove_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label="Remove",
+            disabled=not self.questions,
+            emoji=emoji["trash"]
+        )
+        remove_button.callback = self.remove_callback
+
+        self.add_item(discord.ui.ActionRow(add_button, remove_button))
+
+    async def refresh(self, interaction: discord.Interaction, page: int) -> None:
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+
+        data = await bot_db.app_management_db.get_questions_page(self.guild_id, page)
+        await interaction.response.edit_message(view=ApplicationsQuestionList(self.guild_id, data))
+
+    async def previous_callback(self, interaction: discord.Interaction) -> None:
+        await self.refresh(interaction, self.page - 1)
+
+    async def next_callback(self, interaction: discord.Interaction) -> None:
+        await self.refresh(interaction, self.page + 1)
+
+    async def add_callback(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(QuestionModal(self))
+
+    async def remove_callback(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(RemoveQuestionModal(self))
+
+    async def edit_callback(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+        assert interaction.custom_id is not None
+
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+
+        question = await bot_db.app_management_db.get_question(interaction.guild.id, int(interaction.custom_id))
+        if question is None:
+            await interaction.response.send_message(embed=simple_embed("Question not found", 'cross'), ephemeral=True)
+            return
+
+        await interaction.response.send_modal(QuestionModal(self, question))
+
+    async def back_callback(self, interaction: discord.Interaction) -> None:
+        assert interaction.client.user is not None
+
+        await interaction.response.edit_message(
+            view=ApplicationMain(interaction.client.user.display_avatar.url, in_place=True)
+        )
+
+class QuestionModal(discord.ui.Modal):
+    def __init__(self, list_view: ApplicationsQuestionList, question: Dict[str, Any] | None = None) -> None:
+        super().__init__(title="Edit Question" if question else "Add Question")
+
+        self.list_view = list_view
+        self.question = question
+        q = question or {}
+
+        self.label_input = discord.ui.TextInput(
+            label="Label",
+            max_length=1000,
+            default=q.get("label"),
+        )
+        self.description_input = discord.ui.TextInput(
+            label="Description",
+            required=False,
+            style=discord.TextStyle.paragraph,
+            max_length=1000,
+            default=q.get("description"),
+        )
+        self.placeholder_input = discord.ui.TextInput(
+            label="Placeholder",
+            required=False,
+            max_length=1000,
+            default=q.get("placeholder"),
+        )
+        self.min_length_input = discord.ui.TextInput(
+            label="Min Length",
+            required=False,
+            max_length=4,
+            default=str(q["min_length"]) if q.get("min_length") is not None else None,
+        )
+        self.max_length_input = discord.ui.TextInput(
+            label="Max Length",
+            required=False,
+            max_length=4,
+            default=str(q["max_length"]) if q.get("max_length") is not None else None,
+        )
+
+        self.add_item(self.label_input)
+        self.add_item(self.description_input)
+        self.add_item(self.placeholder_input)
+        self.add_item(self.min_length_input)
+        self.add_item(self.max_length_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+
+        min_text = self.min_length_input.value.strip()
+        max_text = self.max_length_input.value.strip()
+
+        if (min_text and not min_text.isdigit()) or (max_text and not max_text.isdigit()):
+            await interaction.response.send_message(embed=simple_embed("Min and max length must be numbers.", 'cross'), ephemeral=True)
+            return
+
+        min_length = int(min_text) if min_text else None
+        max_length = int(max_text) if max_text else None
+
+        if min_length is not None and max_length is not None and min_length > max_length:
+            await interaction.response.send_message(embed=simple_embed("Min length cannot be greater than max length.", 'cross'), ephemeral=True)
+            return
+
+        if self.question is None:
+            await bot_db.app_management_db.create_question(
+                interaction.guild.id,
+                label=self.label_input.value,
+                type="text",
+                description=self.description_input.value or None,
+                placeholder=self.placeholder_input.value or None,
+                min_length=min_length,
+                max_length=max_length,
+            )
+            # Out-of-range pages are clamped by the db, so this lands on the last page
+            page = self.list_view.max_page + 1
+        else:
+            await bot_db.app_management_db.update_question(
+                interaction.guild.id,
+                self.question["id"],
+                label=self.label_input.value,
+                description=self.description_input.value,
+                placeholder=self.placeholder_input.value,
+                min_length=min_length,
+                max_length=max_length,
+            )
+            page = self.list_view.page
+
+        await self.list_view.refresh(interaction, page)
+
+class RemoveQuestionModal(discord.ui.Modal):
+    def __init__(self, list_view: ApplicationsQuestionList) -> None:
+        super().__init__(title="Remove Question")
+
+        self.list_view = list_view
+        self.select = discord.ui.Select(
+            placeholder="Select a question",
+            options=[
+                discord.SelectOption(label=q["label"][:100], value=str(q["id"]))
+                for q in list_view.questions
+            ],
+        )
+        self.add_item(discord.ui.Label(text="Question to remove", component=self.select))
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+
+        await bot_db.app_management_db.delete_question(interaction.guild.id, int(self.select.values[0]))
+
+        # A now-empty last page is clamped back by the db
+        await self.list_view.refresh(interaction, self.list_view.page)
+
+class ApplicationsGroupList(discord.ui.LayoutView):
+    def __init__(self, guild_id: int, data: Dict[str, Any]) -> None:
+        super().__init__(timeout=None)
+
+        self.guild_id = guild_id
+        self.page = data["page"]
+        self.max_page = data["max_page"]
+        self.groups = data["results"]
+
+        items: List[discord.ui.Item] = []
+
+        for group in self.groups:
+            edit_button: discord.ui.Button = discord.ui.Button(
+                style=discord.ButtonStyle.secondary,
+                emoji=emoji["pencil"],
+                custom_id=str(group["id"]),
+            )
+            edit_button.callback = self.edit_callback
+
+            content = f"**{group['name']}**"
+            if group["description"]:
+                content += f"\n> {group['description']}"
+
+            items.append(
+                discord.ui.Section(
+                    discord.ui.TextDisplay(content=content),
+                    accessory=edit_button,
+                )
+            )
+
+        if not items:
+            items.append(discord.ui.TextDisplay(content="*No groups yet.*"))
+
+        prev_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            emoji=emoji["left"],
+            disabled=not data["has_prev"],
+        )
+        prev_button.callback = self.previous_callback
+
+        page_indicator: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label=f"Page {self.page}/{self.max_page}",
+            disabled=True,
+        )
+
+        next_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            emoji=emoji["right"],
+            disabled=not data["has_next"],
+        )
+        next_button.callback = self.next_callback
+
+        back_button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label="Back"
+        )
+
+        back_button.callback = self.back_callback
+
+
+        self.add_item(discord.ui.Container(
+            discord.ui.Section(
+                discord.ui.TextDisplay(content="### Application Groups\n- Create and manage groups of questions"),
+                accessory=back_button
+            ),
+            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+            *items,
+            discord.ui.ActionRow(prev_button, page_indicator, next_button)
+
+        ))
+
+        add_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label="Add",
+            emoji=emoji["plus"]
+        )
+        add_button.callback = self.add_callback
+
+        remove_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label="Remove",
+            disabled=not self.groups,
+            emoji=emoji["trash"]
+        )
+        remove_button.callback = self.remove_callback
+        self.add_item(discord.ui.ActionRow(add_button, remove_button))
+
+    async def refresh(self, interaction: discord.Interaction, page: int) -> None:
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+
+        data = await bot_db.app_management_db.get_groups_page(self.guild_id, page)
+        await interaction.response.edit_message(view=ApplicationsGroupList(self.guild_id, data))
+
+    async def previous_callback(self, interaction: discord.Interaction) -> None:
+        await self.refresh(interaction, self.page - 1)
+
+    async def next_callback(self, interaction: discord.Interaction) -> None:
+        await self.refresh(interaction, self.page + 1)
+
+    async def add_callback(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+
+        questions = await bot_db.app_management_db.get_questions_by_guild(interaction.guild.id)
+        if not questions:
+            await interaction.response.send_message(embed=simple_embed("Create a question first.", 'cross'), ephemeral=True)
+            return
+
+        await interaction.response.send_modal(GroupModal(self, questions[:25]))
+
+    async def remove_callback(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(RemoveGroupModal(self))
+
+    async def edit_callback(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+        assert interaction.custom_id is not None
+
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+
+        group = await bot_db.app_management_db.get_group(interaction.guild.id, int(interaction.custom_id))
+        if group is None:
+            await interaction.response.send_message(embed=simple_embed("Group not found", 'cross'), ephemeral=True)
+            return
+
+        current_ids = {q["id"] for q in group["questions"]}
+        questions = await bot_db.app_management_db.get_questions_by_guild(interaction.guild.id)
+        questions.sort(key=lambda q: q["id"] not in current_ids)
+
+        await interaction.response.send_modal(GroupModal(self, questions[:25], group))
+
+    async def back_callback(self, interaction: discord.Interaction) -> None:
+        assert interaction.client.user is not None
+
+        await interaction.response.edit_message(
+            view=ApplicationMain(interaction.client.user.display_avatar.url, in_place=True)
+        )
+
+class GroupModal(discord.ui.Modal):
+    def __init__(
+        self,
+        list_view: ApplicationsGroupList,
+        questions: List[Dict[str, Any]],
+        group: Dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(title="Edit Group" if group else "Add Group")
+
+        self.list_view = list_view
+        self.questions = questions
+        self.group = group
+
+        current_ids = {q["id"] for q in group["questions"]} if group else set()
+
+        self.name_input = discord.ui.TextInput(
+            label="Name",
+            max_length=100,
+            default=group["name"] if group else None,
+        )
+        self.description_input = discord.ui.TextInput(
+            label="Description",
+            required=False,
+            style=discord.TextStyle.paragraph,
+            max_length=300,
+            default=group["description"] if group else None,
+        )
+        self.select = discord.ui.Select(
+            placeholder="Select 1 to 5 questions",
+            min_values=1,
+            max_values=min(5, len(questions)),
+            options=[
+                discord.SelectOption(
+                    label=q["label"][:100],
+                    value=str(q["id"]),
+                    default=q["id"] in current_ids,
+                )
+                for q in questions
+            ],
+        )
+
+        self.add_item(self.name_input)
+        self.add_item(self.description_input)
+        self.add_item(discord.ui.Label(text="Questions", component=self.select))
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+
+        selected = {int(value) for value in self.select.values}
+        question_ids = [q["id"] for q in self.questions if q["id"] in selected]
+
+        if self.group is None:
+            await bot_db.app_management_db.create_group(
+                interaction.guild.id,
+                self.name_input.value,
+                self.description_input.value,
+                question_ids,
+            )
+            page = self.list_view.max_page + 1
+        else:
+            await bot_db.app_management_db.update_group(
+                interaction.guild.id,
+                self.group["id"],
+                name=self.name_input.value,
+                description=self.description_input.value,
+            )
+            await bot_db.app_management_db.set_group_questions(
+                interaction.guild.id,
+                self.group["id"],
+                question_ids,
+            )
+            page = self.list_view.page
+
+        await self.list_view.refresh(interaction, page)
+
+class RemoveGroupModal(discord.ui.Modal):
+    def __init__(self, list_view: ApplicationsGroupList) -> None:
+        super().__init__(title="Remove Group")
+
+        self.list_view = list_view
+        self.select = discord.ui.Select(
+            placeholder="Select a group",
+            options=[
+                discord.SelectOption(label=g["name"][:100], value=str(g["id"]))
+                for g in list_view.groups
+            ],
+        )
+        self.add_item(discord.ui.Label(text="Group to remove", component=self.select))
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+
+        await bot_db.app_management_db.delete_group(interaction.guild.id, int(self.select.values[0]))
+
+        await self.list_view.refresh(interaction, self.list_view.page)
+
+class ApplicationsList(discord.ui.LayoutView):
+    def __init__(self, guild_id: int, data: Dict[str, Any]) -> None:
+        super().__init__(timeout=None)
+
+        self.guild_id = guild_id
+        self.page = data["page"]
+        self.max_page = data["max_page"]
+        self.applications = data["results"]
+
+        items: List[discord.ui.Item] = []
+
+        for application in self.applications:
+            edit_button: discord.ui.Button = discord.ui.Button(
+                style=discord.ButtonStyle.secondary,
+                label="Edit",
+                custom_id=str(application["id"]),
+            )
+            edit_button.callback = self.edit_callback
+
+            items.append(
+                discord.ui.Section(
+                    discord.ui.TextDisplay(
+                        content=(
+                            f"**#{application['id']}** {application['name']}\n"
+                            f"-# Active: {bool(application['active'])} | Wave: {application['current_wave'] + 1}"
+                        )
+                    ),
+                    accessory=edit_button,
+                )
+            )
+
+        if not items:
+            items.append(discord.ui.TextDisplay(content="*No applications yet.*"))
+
+        prev_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            emoji=emoji["left"],
+            disabled=not data["has_prev"],
+        )
+        prev_button.callback = self.previous_callback
+
+        page_indicator: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label=f"Page {self.page}/{self.max_page}",
+            disabled=True,
+        )
+
+        next_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            emoji=emoji["right"],
+            disabled=not data["has_next"],
+        )
+        next_button.callback = self.next_callback
+
+        back_button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label="Back"
+        )
+
+        back_button.callback = self.back_callback
+
+        self.add_item(discord.ui.Container(
+            discord.ui.Section(
+                discord.ui.TextDisplay(content="### Applications\n- Create and manage applications"),
+                accessory=back_button
+            ),
+            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+            *items,
+            discord.ui.ActionRow(prev_button, page_indicator, next_button)
+
+        ))
+
+        add_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label="Add",
+            emoji=emoji["plus"]
+        )
+        add_button.callback = self.add_callback
+
+        remove_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label="Remove",
+            emoji=emoji["trash"],
+            disabled=not self.applications,
+        )
+        remove_button.callback = self.remove_callback
+        
+        self.add_item(discord.ui.ActionRow(add_button, remove_button))
+
+    async def refresh(self, interaction: discord.Interaction, page: int) -> None:
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+
+        data = await bot_db.app_management_db.get_applications_page(self.guild_id, page)
+
+
+        view = ApplicationsList(self.guild_id, data)
+
+        if interaction.response.is_done():
+            await interaction.edit_original_response(view=view)
+        else:
+            await interaction.response.edit_message(view=view)
+
+    async def previous_callback(self, interaction: discord.Interaction) -> None:
+        await self.refresh(interaction, self.page - 1)
+
+    async def next_callback(self, interaction: discord.Interaction) -> None:
+        await self.refresh(interaction, self.page + 1)
+
+    async def add_callback(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+
+        groups = await bot_db.app_management_db.get_groups_by_guild(interaction.guild.id)
+        if not groups:
+            await interaction.response.send_message(embed=simple_embed("Create a group first.", 'cross'), ephemeral=True)
+            return
+
+        await interaction.response.send_modal(ApplicationModal(self, groups[:25]))
+
+    async def remove_callback(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(RemoveApplicationModal(self))
+
+    async def edit_callback(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+        assert interaction.custom_id is not None
+
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+
+        application_id = int(interaction.custom_id)
+
+        application = await bot_db.app_management_db.get_application(interaction.guild.id, application_id)
+        if application is None:
+            await interaction.response.send_message(embed=simple_embed("Application not found", 'cross'), ephemeral=True)
+            return
+
+        assigned = await bot_db.app_management_db.get_application_groups(interaction.guild.id, application_id)
+        assigned_ids = [g["id"] for g in assigned]
+
+        groups = await bot_db.app_management_db.get_groups_by_guild(interaction.guild.id)
+        groups.sort(key=lambda g: assigned_ids.index(g["id"]) if g["id"] in assigned_ids else len(assigned_ids))
+
+        await interaction.response.send_modal(ApplicationModal(self, groups[:25], application, assigned_ids))
+
+    async def back_callback(self, interaction: discord.Interaction) -> None:
+        assert interaction.client.user is not None
+
+        await interaction.response.edit_message(
+            view=ApplicationMain(interaction.client.user.display_avatar.url, in_place=True)
+        )   
+
+class ApplicationModal(discord.ui.Modal):
+    def __init__(
+        self,
+        list_view: ApplicationsList,
+        groups: List[Dict[str, Any]],
+        application: Dict[str, Any] | None = None,
+        assigned_ids: List[int] | None = None,
+    ) -> None:
+        super().__init__(title="Edit Application" if application else "Add Application")
+
+        self.list_view = list_view
+        self.groups = groups
+        self.application = application
+
+        self.name_input = discord.ui.TextInput(
+            label="Name",
+            max_length=100,
+            default=application["name"] if application else None,
+        )
+        self.description_input = discord.ui.TextInput(
+            label="Description",
+            style=discord.TextStyle.paragraph,
+            max_length=1000,
+            default=application["description"] if application else None,
+        )
+        self.button_input = discord.ui.TextInput(
+            label="Submit Button Label",
+            max_length=80,
+            default=application["submit_btn_label"] if application else "Apply",
+        )
+        self.group_select = discord.ui.Select(
+            placeholder="Select the question groups",
+            min_values=1,
+            max_values=len(groups),
+            options=[
+                discord.SelectOption(
+                    label=g["name"][:100],
+                    value=str(g["id"]),
+                    default=g["id"] in (assigned_ids or []),
+                )
+                for g in groups
+            ],
+        )
+
+        self.add_item(self.name_input)
+        self.add_item(self.description_input)
+        self.add_item(self.button_input)
+        self.add_item(discord.ui.Label(text="Groups", component=self.group_select))
+
+        if application is None:
+            self.forum_select = discord.ui.ChannelSelect(
+                channel_types=[discord.ChannelType.forum],
+                placeholder="Select the submission forum",
+                min_values=1,
+                max_values=1,
+            )
+            self.add_item(discord.ui.Label(text="Submission Forum", component=self.forum_select))
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            logger.warning(
+                "ApplicationModal.on_submit called outside of a guild (user_id=%s)",
+                interaction.user.id if interaction.user else None,
+            )
+            raise discord.app_commands.CheckFailure("This command can only be executed inside a guild")
+
+        await interaction.response.defer()
+
+        bot_db = cast("Lily", interaction.client).db
+        if bot_db is None:
+            logger.error("Database is not available (guild_id=%s)", interaction.guild.id)
+            await interaction.followup.send(
+                embed=simple_embed("Database is not available. Please try again later.", 'cross'),
+                ephemeral=True,
+            )
+            return
+
+        guild_id = interaction.guild.id
+
+        try:
+            selected = {int(value) for value in self.group_select.values}
+        except (TypeError, ValueError):
+            logger.exception(
+                "Failed to parse selected application group ids: %s",
+                self.group_select.values,
+            )
+            await interaction.followup.send(
+                embed=simple_embed("Invalid application group selection.", 'cross'),
+                ephemeral=True,
+            )
+            return
+
+        group_ids = [g["id"] for g in self.groups if g["id"] in selected]
+
+        if self.application is None:
+            forum = self.forum_select.values[0]
+
+            try:
+                application = await bot_db.app_management_db.create_application(
+                    guild_id,
+                    self.name_input.value,
+                    self.description_input.value,
+                    forum.id,
+                    self.button_input.value,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to create application record in database for guild_id=%s",
+                    guild_id,
+                )
+                await interaction.followup.send(
+                    embed=simple_embed("Failed to save the application. Please try again later.", 'cross'),
+                    ephemeral=True,
+                )
+                return
+
+            try:
+                await bot_db.app_management_db.assign_groups(
+                    guild_id,
+                    application["id"],
+                    group_ids,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to assign groups %s to application_id=%s in guild_id=%s",
+                    group_ids,
+                    application["id"],
+                    guild_id,
+                )
+                await interaction.followup.send(
+                    embed=simple_embed(
+                        "Application was created, but assigning question groups failed. "
+                        "Edit the application to assign them again.",
+                        'cross',
+                    ),
+                    ephemeral=True,
+                )
+
+            page = self.list_view.max_page + 1
+
+        else:
+            application_id = self.application["id"]
+
+            try:
+                success = await bot_db.app_management_db.update_application(
+                    guild_id,
+                    application_id,
+                    application_name=self.name_input.value,
+                    application_description=self.description_input.value,
+                    submit_btn_label=self.button_input.value,
+                    application_group_assignments=group_ids,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to update application_id=%s in guild_id=%s",
+                    application_id,
+                    guild_id,
+                )
+                await interaction.followup.send(
+                    embed=simple_embed("Failed to update the application.", 'cross'),
+                    ephemeral=True,
+                )
+                return
+
+            if not success:
+                logger.warning(
+                    "update_application returned falsy success for application_id=%s in guild_id=%s",
+                    application_id,
+                    guild_id,
+                )
+                await interaction.followup.send(
+                    embed=simple_embed("Failed to update the application.", 'cross'),
+                    ephemeral=True,
+                )
+                return
+
+            try:
+                application_view = await bot_db.app_management_db.get_application_with_view(
+                    guild_id, application_id
+                )
+                updated_application = await bot_db.app_management_db.get_application(
+                    guild_id, application_id
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to fetch application/view data for application_id=%s in guild_id=%s after update",
+                    application_id,
+                    guild_id,
+                )
+                application_view = None
+                updated_application = None
+                await interaction.followup.send(
+                    embed=simple_embed(
+                        "Application was updated, but refreshing the application message failed.",
+                        'cross',
+                    ),
+                    ephemeral=True,
+                )
+
+            if application_view is not None and updated_application is not None:
+                updated_view = ApplicationView(
+                    bot_db,
+                    application_view["channel_id"],
+                    updated_application["id"],
+                    updated_application,
+                )
+
+                try:
+                    channel = interaction.guild.get_channel(application_view["channel_id"])
+                    if channel is None:
+                        channel = await interaction.guild.fetch_channel(application_view["channel_id"])
+
+                    if not isinstance(channel, discord.TextChannel):
+                        raise discord.NotFound(
+                            response=None,  # type: ignore[arg-type]
+                            message="Channel is not a text channel",
+                        )
+
+                    message = await channel.fetch_message(application_view["message_id"])
+                    await message.edit(view=updated_view)
+                except discord.NotFound:
+                    logger.exception(
+                        "Application channel/message no longer exists (channel_id=%s, message_id=%s, application_id=%s)",
+                        application_view["channel_id"],
+                        application_view["message_id"],
+                        application_id,
+                    )
+                    await interaction.followup.send(
+                        embed=simple_embed(
+                            "Application was updated, but its posted message no longer exists.",
+                            'cross',
+                        ),
+                        ephemeral=True,
+                    )
+                except discord.Forbidden:
+                    logger.exception(
+                        "Missing permissions to update message_id=%s in channel_id=%s for application_id=%s",
+                        application_view["message_id"],
+                        application_view["channel_id"],
+                        application_id,
+                    )
+                    await interaction.followup.send(
+                        embed=simple_embed(
+                            "Application was updated, but I don't have permission to edit its message.",
+                            'cross',
+                        ),
+                        ephemeral=True,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Unexpected error editing message_id=%s in channel_id=%s for application_id=%s",
+                        application_view["message_id"],
+                        application_view["channel_id"],
+                        application_id,
+                    )
+                    await interaction.followup.send(
+                        embed=simple_embed("Failed to update the application message.", 'cross'),
+                        ephemeral=True,
+                    )
+
+            page = self.list_view.page
+
+        try:
+            await self.list_view.refresh(interaction, page)
+        except Exception:
+            logger.exception(
+                "Failed to refresh applications list (guild_id=%s, page=%s)",
+                guild_id,
+                page,
+            )
+            try:
+                await interaction.followup.send(
+                    embed=simple_embed(
+                        "Saved successfully, but refreshing the list failed. Please reopen the list.",
+                        'cross',
+                    ),
+                    ephemeral=True,
+                )
+            except Exception:
+                logger.exception("Failed to send list refresh failure notice (guild_id=%s)", guild_id)
+
+class RemoveApplicationModal(discord.ui.Modal):
+    def __init__(self, list_view: ApplicationsList) -> None:
+        super().__init__(title="Remove Application")
+
+        self.list_view = list_view
+        self.select = discord.ui.Select(
+            placeholder="Select an application",
+            options=[
+                discord.SelectOption(label=a["name"][:100], value=str(a["id"]))
+                for a in list_view.applications
+            ],
+        )
+        self.add_item(discord.ui.Label(text="Application to remove", component=self.select))
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+
+        application_id = int(self.select.values[0])
+
+        preview = await bot_db.app_management_db.get_delete_preview(interaction.guild.id, application_id)
+        if preview is None:
+            await self.list_view.refresh(interaction, self.list_view.page)
+            return
+
+        name, submission_count = preview
+        await interaction.response.edit_message(
+            view=ApplicationDeleteConfirm(self.list_view, application_id, name, submission_count)
+        )
+
+class ApplicationDeleteConfirm(discord.ui.LayoutView):
+    def __init__(self, list_view: ApplicationsList, application_id: int, name: str, submission_count: int) -> None:
+        super().__init__(timeout=300)
+
+        self.list_view = list_view
+        self.application_id = application_id
+
+        delete_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.danger,
+            label="Delete",
+        )
+        delete_button.callback = self.delete_callback
+
+        cancel_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label="Cancel",
+        )
+        cancel_button.callback = self.cancel_callback
+
+        self.add_item(discord.ui.Container(
+            discord.ui.TextDisplay(
+                content=(
+                    f"### Delete {name}?\n"
+                    f"This permanently deletes the application, its **{submission_count}** submission(s) "
+                    f"with all answers, and its group assignments. This cannot be undone.\n"
+                    f"-# Panel messages and submission threads in Discord are not removed automatically."
+                )
+            ),
+            discord.ui.ActionRow(delete_button, cancel_button),
+        ))
+
+    async def delete_callback(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+
+        await bot_db.app_management_db.delete_application(interaction.guild.id, self.application_id)
+        await self.list_view.refresh(interaction, self.list_view.page)
+
+    async def cancel_callback(self, interaction: discord.Interaction) -> None:
+        await self.list_view.refresh(interaction, self.list_view.page)
+
+
+
+
 
 
 class CreateApplicationModal(discord.ui.Modal, title="Create Application"):
