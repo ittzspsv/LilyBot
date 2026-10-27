@@ -10,6 +10,7 @@ from src.core.features.application.controller import lily_application_controller
 from src.core.features.application.components.lily_application_components import (
     ApplicationView,
     ApplicationQuestionView,
+    ApplicationMain
 )
 from .groups.application import ApplicationCommands
 
@@ -226,29 +227,70 @@ class LilyApplications(commands.Cog):
         await self.handle_application_answer(message=message)
 
         
-
     @commands.Cog.listener()
-    async def on_thread_update(self, before: Thread, after: Thread):
+    async def on_audit_log_entry_create(self, entry: discord.AuditLogEntry):
         if self.db is None:
             return
 
-        before_tags = set(before.applied_tags)
-        after_tags = set(after.applied_tags)
+        if entry.action is not discord.AuditLogAction.thread_update:
+            return
 
-        added = after_tags - before_tags
+        if entry.user_id == self.bot.user.id:
+            return
 
-        if added:
-            for tag in added:
-                status = tag.name.lower().replace(" ", "_")
-                await self.db.app_management_db.update_submission_verification_status(
-                    after.id,
-                    status,
+        target = entry.target
+        thread: discord.Thread | None = None
+
+        if isinstance(target, discord.Thread):
+            thread = target
+        elif isinstance(target, discord.Object):
+            try:
+                fetched = await entry.guild.fetch_channel(target.id)
+            except (discord.NotFound, discord.Forbidden):
+                return
+            if isinstance(fetched, discord.Thread):
+                thread = fetched
+
+        if thread is None:
+            return
+
+        if not isinstance(thread.parent, discord.ForumChannel):
+            return
+
+        before_tags = {t.id for t in getattr(entry.before, "applied_tags", [])}
+        after_tags = {t.id for t in getattr(entry.after, "applied_tags", [])}
+
+        added_ids = after_tags - before_tags
+        if not added_ids:
+            return
+
+        for tag_id in added_ids:
+            tag = thread.parent.get_tag(tag_id)
+            if tag is None:
+                continue
+
+            status = tag.name.lower().replace(" ", "_")
+            success = await self.db.app_management_db.update_submission_verification_status(
+                thread.id,
+                status,
+            )
+
+            if success:
+                await thread.send(
+                    content=(
+                        f"<@{entry.user_id}> You changed the tag to **{tag.name}**. "
+                        "Please leave a remark for the applicant. Mention me to DM them the remark."
+                    )
                 )
 
     @commands.Cog.listener()
     async def on_app_command_error(self, interaction, error):
         print("App command error:", error)
 
+
+    @commands.command(name="app_dashboard")
+    async def dashboard_spawn(self, ctx: commands.Context):
+        await ctx.reply(view=ApplicationMain(avatar_url=ctx.guild.me.display_avatar.url))
 
 async def setup(bot):
     cog = LilyApplications(bot)
