@@ -10,6 +10,7 @@ STORAGE_DIR: Final[Path] = PROJECT_ROOT / "storage"
 CONFIG_DIR: Final[Path] = STORAGE_DIR / "configs"
 
 CONFIG_DB: Final[Path] = CONFIG_DIR / "Configs.db"
+ARCHIVE_DB: Final[Path] = CONFIG_DIR / "archive.db"
 VALUE_DB: Final[Path] = CONFIG_DIR / "ValueData.db"
 
 

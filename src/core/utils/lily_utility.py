@@ -1,4 +1,6 @@
-from typing import Union, Optional
+from __future__ import annotations
+
+from typing import Union, Optional, cast, TYPE_CHECKING, Tuple
 import os
 import json
 
@@ -6,7 +8,14 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import discord
+import logging
 from discord.ext import commands
+
+if TYPE_CHECKING:
+    from src.lily import Lily
+
+
+logger = logging.getLogger("lily")
 
 # Constants
 UTC = timezone.utc
@@ -134,3 +143,57 @@ def truncate(text: str, limit: int = 1024) -> str:
     truncated = encoded[:max_text_length * 2]
 
     return truncated.decode("utf-16-le", errors="ignore") + suffix
+
+async def purge_messages_by_user(
+    interaction: discord.Interaction,
+    user: discord.Member,
+) -> Tuple[int, int]:
+    limit = 500
+    adb = cast("Lily", interaction.client).adb
+    assert adb is not None
+
+    guild = interaction.guild
+    invoker = interaction.user
+    assert guild is not None and isinstance(invoker, discord.Member)
+
+    await interaction.response.defer(ephemeral=True)
+
+    batches = await adb.get_user_message_ids(guild.id, user.id, limit)
+
+    deleted = 0
+    skipped = 0
+    for channel_id, ids in batches.items():
+        channel = guild.get_channel_or_thread(channel_id)
+        if not isinstance(channel, (discord.TextChannel, discord.Thread, discord.VoiceChannel)):
+            skipped += 1
+            continue
+
+        if not (
+            channel.permissions_for(invoker).manage_messages
+            and channel.permissions_for(guild.me).manage_messages
+        ):
+            skipped += 1
+            continue
+
+        for i in range(0, len(ids), 100):
+            chunk = ids[i : i + 100]
+            if len(chunk) < 2:
+                break
+            try:
+                await channel.delete_messages(
+                    [discord.Object(id=m) for m in chunk]
+                )
+            except discord.NotFound:
+                break
+            except discord.HTTPException:
+                logger.exception(
+                    "bulk delete failed in channel %s",
+                    channel_id,
+                )
+                break
+            await adb.remove_messages(chunk)
+            deleted += len(chunk)
+
+    
+
+    return (deleted, skipped)

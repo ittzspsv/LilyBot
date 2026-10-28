@@ -4,10 +4,11 @@ import discord
 from discord.ext import commands, tasks
 
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
+from src.core.database.integrations.archive import ArchiveAccess
 from src.core.logging.lily_logging import LilyLoggingController
 from src.core.utils.embeds.sLilyEmbed import simple_embed
 from src.core.features.moderation.components.lily_moderation_components import AppealButton, AppealHandleButton
-from src.core.configs.path import CONFIG_DB
+from src.core.configs.path import CONFIG_DB, ARCHIVE_DB
 from src.core.features.events import on_audit_log_entry_create
 from src.core.events.event_dispatcher import EventDispatcher, EventPayload
 
@@ -15,7 +16,10 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 
 import re
+import logging
 import time
+
+logger = logging.getLogger("lily")
 
 
 class Lily(commands.Bot):
@@ -28,6 +32,7 @@ class Lily(commands.Bot):
         self.lily_session = None
         self.events = events
         self.db: Optional[BotGlobalsDatabaseAccess] = None
+        self.adb: Optional[ArchiveAccess] = None
         self.scheduler: Optional[AsyncIOScheduler] = None
         self.logging_controller: Optional[LilyLoggingController] = None
 
@@ -40,6 +45,7 @@ class Lily(commands.Bot):
     async def setup_hook(self) -> None:
         """ Bot Globals Database """
         self.db = await BotGlobalsDatabaseAccess.connect(str(CONFIG_DB))
+        self.adb = await ArchiveAccess.connect(str(ARCHIVE_DB))
         self.logging_controller = LilyLoggingController(self.db)
 
 
@@ -144,10 +150,31 @@ class Lily(commands.Bot):
         )
         await self.change_presence(activity=activity)
 
-    async def on_message(self, message:discord.Message): 
-        if message.author == self.user:
-              return
+    async def on_message(self, message: discord.Message):
+        if (
+            self.adb is not None
+            and message.guild is not None
+            and message.author != self.user
+        ):
+            try:
+                await self.adb.record_message(
+                    message_id=message.id, 
+                    channel_id=message.channel.id, 
+                    guild_id=message.guild.id,
+                    author_id=message.author.id
+                )
+            except Exception:
+                logger.exception("failed to record message %s", message.id)
+
         await self.process_commands(message)
+
+    async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent):
+        if self.adb is not None and payload.guild_id is not None:
+            await self.adb.remove_messages([payload.message_id])
+
+    async def on_raw_bulk_message_delete(self, payload: discord.RawBulkMessageDeleteEvent):
+        if self.adb is not None and payload.guild_id is not None:
+            await self.adb.remove_messages(list(payload.message_ids))
 
     async def on_command_error(self, ctx: commands.Context, error):
         if isinstance(error, commands.CheckFailure):
