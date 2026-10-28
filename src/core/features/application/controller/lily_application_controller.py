@@ -1,7 +1,7 @@
 from src.core.utils.embeds.sLilyEmbed import simple_embed
 from src.core.utils.lily_utility import length, truncate
 from src.core.features.application.types.lily_application_types import QuestionType
-from ..components.lily_application_components import CreateApplicationModal, ApplicationView, UpdateApplicationModal, Confirm
+from ..components.lily_application_components import ApplicationView, Confirm
 
 from discord import Interaction, app_commands, TextChannel, User, ForumChannel
 import discord
@@ -19,37 +19,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("lily")
 
-
-async def create_application(interaction: Interaction):
-    if interaction.guild is None:
-        raise app_commands.CheckFailure("This command can be only executed inside an guild")
-
-    bot_db = cast("Lily", interaction.client).db
-    assert bot_db is not None
-
-    try:
-        application_groups: List[Dict[str, Any]] = await bot_db.app_management_db.get_groups_by_guild(interaction.guild.id)
-        if len(application_groups) <= 0:
-            await interaction.response.send_message(
-                embed=simple_embed("Please create application question groups first.  Use /application group new to proceed", 'cross'),
-                ephemeral=True
-            )
-            return
-    except Exception:
-        logger.exception(
-            "Failed to fetch application groups for guild %s while opening create_application modal",
-            interaction.guild.id,
-        )
-        raise
-
-    try:
-        await interaction.response.send_modal(CreateApplicationModal(bot_db, application_groups[:25]))
-    except Exception:
-        logger.exception(
-            "Failed to send CreateApplicationModal for guild %s",
-            interaction.guild.id,
-        )
-        raise
 
 async def send_application_view(
         interaction: Interaction, 
@@ -118,42 +87,6 @@ async def send_application_view(
         raise
 
     await interaction.response.send_message(embed=simple_embed(f"Successfully sent application to {channel.mention}"), ephemeral=True)
-
-async def update_application(
-        interaction: Interaction,
-        application_id: int
-    ):
-    if interaction.guild is None:
-        raise app_commands.CheckFailure("This command can be only executed inside an guild")
-
-    bot_db = cast("Lily", interaction.client).db
-    assert bot_db is not None
-
-    try:
-        application_groups = await bot_db.app_management_db.get_groups_by_guild(interaction.guild.id)
-        application = await bot_db.app_management_db.get_application(interaction.guild.id, application_id)
-    except Exception:
-        logger.exception(
-            "Failed to fetch application %s for guild %s in update_application",
-            application_id, interaction.guild.id,
-        )
-        raise
-
-    if application is None:
-        logger.warning(
-            "update_application: application %s not found in guild %s",
-            application_id, interaction.guild.id,
-        )
-        raise app_commands.CheckFailure("Application not found.")
-
-    try:
-        await interaction.response.send_modal(UpdateApplicationModal(bot_db, application, application_groups))
-    except Exception:
-        logger.exception(
-            "Failed to send UpdateApplicationModal for application %s (guild %s)",
-            application_id, interaction.guild.id,
-        )
-        raise
 
 async def get_application(interaction: Interaction, application_id: int):
     if interaction.guild is None:
