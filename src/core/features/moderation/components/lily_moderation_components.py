@@ -13,6 +13,7 @@ import src.core.configs.bot_details as Config
 import json
 import io
 from src.core.configs.bot_details import img, emoji
+from src.core.utils.lily_utility import purge_messages_by_user
 import re
 import logging
 
@@ -1341,7 +1342,7 @@ class AppealRequestView(discord.ui.LayoutView):
 
         appeal_container = discord.ui.Container(
             discord.ui.Section(
-                discord.ui.TextDisplay(f"## Case Appeal • @[{appealer.name}](https://discord.com/users/{appealer.id})"),
+                discord.ui.TextDisplay(f"## Case Appeal • [@{appealer.name}](https://discord.com/users/{appealer.id})"),
                 discord.ui.TextDisplay(f"ID: `{appealer.id}`"),
                 discord.ui.TextDisplay(answers_text),
                 accessory=discord.ui.Thumbnail(media=appealer.display_avatar.url),
@@ -1662,12 +1663,23 @@ class AppealButton(discord.ui.DynamicItem[discord.ui.Button], template=r'button:
                 await interaction.response.send_message(embed=simple_embed("Something went wrong while processing your appeal request.", 'cross'), ephemeral=True)
 
 class CaseProofsView(discord.ui.View):
-    def __init__(self, case_id: int, controller, message: Optional[discord.Message]):
+    def __init__(
+        self,
+        interaction_user: discord.Member,
+        case_id: int,
+        message: Optional[discord.Message],
+    ):
         super().__init__(timeout=300)
 
         self.case_id = case_id
-        self.controller = controller
         self.message = message
+        self.interaction_user = interaction_user
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.interaction_user.id:
+            await interaction.response.send_message(ephemeral=True, content="Permission Denied!")
+            return False
+        return True
 
     @discord.ui.button(
         label="Attach Proofs",
@@ -1680,11 +1692,16 @@ class CaseProofsView(discord.ui.View):
     ):
         try:
             assert isinstance(self.message, discord.Message)
-            await interaction.response.send_modal(ProofsComponentCommandModal(controller=self.controller, case_id=self.case_id, cmd_view=self, msg=self.message))
+            await interaction.response.send_modal(
+                ProofsComponentCommandModal(case_id=self.case_id, cmd_view=self, msg=self.message)
+            )
         except Exception:
             logger.exception("Failed to open proofs attachment modal for case_id=%s", self.case_id)
             if not interaction.response.is_done():
-                await interaction.response.send_message(embed=simple_embed("Something went wrong opening the proofs form.", 'cross'), ephemeral=True)
+                await interaction.response.send_message(
+                    embed=simple_embed("Something went wrong opening the proofs form.", 'cross'),
+                    ephemeral=True,
+                )
 
     async def on_timeout(self):
         for item in self.children:
@@ -1699,6 +1716,84 @@ class CaseProofsView(discord.ui.View):
                     "Failed to disable proofs button after timeout for case_id=%s",
                     self.case_id
                 )
+
+class CaseProofsPurgeView(CaseProofsView):
+    def __init__(
+        self,
+        interaction_user: discord.Member,
+        case_id: int,
+        message: Optional[discord.Message],
+        target_user: discord.Member,
+    ):
+        super().__init__(interaction_user, case_id, message)
+        self.target_user = target_user
+
+    @discord.ui.button(
+        label="Purge",
+        style=discord.ButtonStyle.danger
+    )
+    async def purge_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):  
+        deleted, skipped = await purge_messages_by_user(interaction, self.target_user)
+
+        button.label = f"Deleted {deleted} message(s)"
+        button.style = discord.ButtonStyle.secondary
+        button.disabled = True
+
+        await interaction.followup.send(
+            f"Deleted {deleted} message(s) from {self.target_user.mention}. Skipped {skipped} channel(s).",
+            ephemeral=True,
+        )
+
+        try:
+            await interaction.edit_original_response(view=self)
+        except discord.HTTPException:
+            logger.exception("Failed to update purge button for case_id=%s", self.case_id)
+
+class CaseProofsPurgeViewAbsolute(discord.ui.View):
+    def __init__(
+        self,
+        interaction_user: discord.Member,
+        target_user: discord.Member,
+    ):
+        super().__init__()
+
+        self.target_user = target_user
+        self.interaction_user = interaction_user
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.interaction_user.id:
+            await interaction.response.send_message(ephemeral=True, content="Permission Denied!")
+            return False
+        return True
+
+    @discord.ui.button(
+        label="Purge",
+        style=discord.ButtonStyle.danger
+    )
+    async def purge_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):  
+        deleted, skipped = await purge_messages_by_user(interaction, self.target_user)
+
+        button.label = f"Deleted {deleted} message(s)"
+        button.style = discord.ButtonStyle.secondary
+        button.disabled = True
+
+        await interaction.followup.send(
+            f"Deleted {deleted} message(s) from {self.target_user.mention}. Skipped {skipped} channel(s).",
+            ephemeral=True,
+        )
+
+        try:
+            await interaction.edit_original_response(view=self)
+        except discord.HTTPException:
+            logger.exception("Failed to update purge button for case_id")
 
 class AppealMessageView(discord.ui.LayoutView):
     def __init__(self, message: str, server: str, attachments: List[discord.Attachment]) -> None:

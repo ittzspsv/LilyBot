@@ -18,6 +18,8 @@ from src.core.database.integrations.bot_globals import BanLimitStatus
 from src.core.features.moderation.components.lily_moderation_components import (
     CaseListView,
     CaseProofsView,
+    CaseProofsPurgeView,
+    CaseProofsPurgeViewAbsolute,
     build_ms_embed,
     ModerationInsights
 )
@@ -211,7 +213,7 @@ async def ban_user(
                 ctx, author, member, "ban", reason, proofs.copy()
             )
             if case_id:
-                view = CaseProofsView(case_id, logging_controller, None)
+                view = CaseProofsView(author, case_id, None)
                 msg = await bot.send(ctx, embed=simple_embed(ban_message), view=view)
                 view.message = msg
             else:
@@ -225,14 +227,15 @@ async def quarantine_user(
     ctx: commands.Context | discord.Interaction,
     user_input: discord.User | discord.Member,
     reason="No reason provided",
-    proofs: list = [],
+    proofs: list | None = None,
     _force_no_proofs: bool = False
 ):
+    proofs = proofs or []
+
     if isinstance(ctx, commands.Context):
         bot = cast("Lily", ctx.bot)
     else:
         bot = cast("Lily", ctx.client)
-
 
     if ctx.guild is None:
         await bot.send(ctx, embed=simple_embed("This command can only be executed inside an guild", 'cross'))
@@ -251,7 +254,6 @@ async def quarantine_user(
         await bot.send(ctx, embed=simple_embed("User should be in the guild inorder to quarantine them", 'cross'))
         return
 
-
     assert bot.db is not None
     quarantine_role_id = await bot.db.get_role_of_type(ctx.guild.id, "quarantine")
     if len(quarantine_role_id) <= 0:
@@ -269,7 +271,7 @@ async def quarantine_user(
     if quarantine_role >= ctx.guild.me.top_role:
         return await bot.send(
             ctx,
-            embed=simple_embed("I cannot Quarantine the user because the role is above or equal than my top role " , 'cross'),
+            embed=simple_embed("I cannot Quarantine the user because the role is above or equal than my top role ", 'cross'),
         )
 
     if quarantine_role in member.roles:
@@ -279,7 +281,6 @@ async def quarantine_user(
         )
 
     author = ctx.author if isinstance(ctx, commands.Context) else ctx.user
-
 
     roles_before_quarantine = [
         role.id
@@ -318,28 +319,43 @@ async def quarantine_user(
         await bot.send(ctx, embed=simple_embed("Failed to quarantine this user due to a Discord API error.", "cross"))
         return
 
-    remaining_message = f"**Remaining:** {max(0, status.remaining_count - 1)}" # Not used for now
+    remaining_message = f"**Remaining:** {max(0, status.remaining_count - 1)}"  
     quarantine_message: str = f"Quarantined <@{member.id}>\n"
+    log_metadata = {"roles_before_quarantine": roles_before_quarantine}
+
     try:
-        if proofs:
-            await bot.send(ctx, embed=simple_embed(quarantine_message))
+        if _force_no_proofs:
             await logging_controller.log_moderation_action(
-                ctx, author, member, "quarantine", reason, proofs.copy(), metadata={
-                    "roles_before_quarantine": roles_before_quarantine
-                }
+                ctx, author, member, "quarantine", reason, proofs.copy(), metadata=log_metadata
             )
+            await bot.send(ctx, embed=simple_embed(quarantine_message))
+
+        elif proofs:
+            assert isinstance(author, discord.Member)
+            await bot.send(
+                ctx,
+                embed=simple_embed(quarantine_message),
+                view=CaseProofsPurgeViewAbsolute(author, member),
+            )
+            await logging_controller.log_moderation_action(
+                ctx, author, member, "quarantine", reason, proofs.copy(), metadata=log_metadata
+            )
+
         else:
+            assert isinstance(author, discord.Member)
             case_id = await logging_controller.log_moderation_action(
-                ctx, author, member, "quarantine", reason, proofs.copy(), metadata={
-                    "roles_before_quarantine": roles_before_quarantine
-                }
+                ctx, author, member, "quarantine", reason, [], metadata=log_metadata
             )
-            if case_id and not _force_no_proofs:
-                view = CaseProofsView(case_id, logging_controller, None)
+            if case_id:
+                view = CaseProofsPurgeView(author, case_id, None, target_user=member)
                 msg = await bot.send(ctx, embed=simple_embed(quarantine_message), view=view)
                 view.message = msg
             else:
-                await bot.send(ctx, embed=simple_embed(quarantine_message))
+                await bot.send(
+                    ctx,
+                    embed=simple_embed(quarantine_message),
+                    view=CaseProofsPurgeViewAbsolute(author, member),
+                )
     except Exception:
         logger.exception("Failed to log/send quarantine confirmation for user %s in guild %s", member.id, ctx.guild.id)
 
@@ -412,7 +428,7 @@ async def mute_user(
         case_id: int | None = await logging_controller.log_moderation_action(ctx, author, user, "mute", reason, proofs, {"duration": seconds})
 
         if case_id and len(proofs) <= 0:
-            view = CaseProofsView(case_id, logging_controller, None)
+            view = CaseProofsView(author, case_id, None)
             msg = await bot.send(
                 ctx,
                 embed=simple_embed(
@@ -659,7 +675,7 @@ async def warn(
         case_id: int | None = await logging_controller.log_moderation_action(ctx, author, member, "warn", reason, proofs)
 
         if case_id and len(proofs) <= 0:
-            view = CaseProofsView(case_id, logging_controller, None)
+            view = CaseProofsView(author, case_id, None)
             msg = await bot.send(ctx, embed=simple_embed(f"{member.mention} has been warned"), view=view)
             view.message = msg
     except Exception:
