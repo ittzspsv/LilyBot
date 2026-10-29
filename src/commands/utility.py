@@ -11,7 +11,7 @@ from src.core.utils.embeds.sLilyEmbed import simple_embed
 from src.core.utils.lily_utility import *
 from src.core.features.permissions.lily_permissions import app_permission, permission, registered_permissions
 from src.core.utils.components.sLIlyGlobalComponents import CommandInfo as CI
-from src.core.utils.embeds.sLilyEmbed import ParseAdvancedEmbed
+from src.core.utils.lily_utility import purge_messages_by_user
 from src.core.utils.types.types import ChannelEnum
 from zoneinfo import available_timezones, ZoneInfo, ZoneInfoNotFoundError
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
@@ -252,13 +252,29 @@ class LilyUtility(commands.Cog):
         if amount > 1000:
             return await ctx.reply(embed=simple_embed("You cannot purge more than 1000 messages!", 'cross'), ephemeral=True)
 
-        def check(msg):
-            return True if member is None else msg.author == member
+        if member is not None and amount > 500:
+            return await ctx.reply(
+                embed=simple_embed(
+                    f"You cannot purge more than {500} messages from a specific member!",
+                    'cross',
+                ),
+                ephemeral=True,
+            )
 
         await ctx.defer()
         try:
+            if member is not None:
+                deleted, skipped = await purge_messages_by_user(ctx, member, limit=amount)
+                text = f"Deleted {deleted} message(s) from {member.mention}."
+                if skipped:
+                    text += f" Skipped {skipped} channel(s) due to missing access or permissions."
+                return await ctx.reply(embed=simple_embed(text))
+
             if not isinstance(ctx.channel, discord.TextChannel):
                 return await ctx.reply(embed=simple_embed("Failed to purge", 'cross'))
+
+            def check(msg):
+                return True
 
             cutoff = discord.utils.utcnow() - timedelta(days=14)
             deleted = await ctx.channel.purge(
