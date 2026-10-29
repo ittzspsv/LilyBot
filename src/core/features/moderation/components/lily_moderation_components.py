@@ -442,6 +442,10 @@ class CaseView(discord.ui.LayoutView):
 
                     metadata_lines += f"- **Duration**: {duration}\n"
 
+                elif key == "command_message_reference":
+                    jump_url = f"https://discord.com/channels/{self.guild_id}/{value[0]}/{value[1]}"
+                    metadata_lines += f"**Command Message Reference**: [Jump to Message]({jump_url})"
+
                 else:
                     metadata_lines += (
                         f"- **{key.replace('_', ' ').title()}**: {value}\n"
@@ -1737,6 +1741,8 @@ class CaseProofsPurgeView(CaseProofsView):
         interaction: discord.Interaction,
         button: discord.ui.Button
     ):  
+
+        await interaction.response.defer(ephemeral=True)
         deleted, skipped = await purge_messages_by_user(interaction, self.target_user)
 
         button.label = f"Deleted {deleted} message(s)"
@@ -1779,6 +1785,7 @@ class CaseProofsPurgeViewAbsolute(discord.ui.View):
         interaction: discord.Interaction,
         button: discord.ui.Button
     ):  
+        await interaction.response.defer(ephemeral=True)
         deleted, skipped = await purge_messages_by_user(interaction, self.target_user)
 
         button.label = f"Deleted {deleted} message(s)"

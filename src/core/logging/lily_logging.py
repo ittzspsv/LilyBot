@@ -87,6 +87,9 @@ class LilyLoggingController:
             reason
         )
 
+        if isinstance(ctx, commands.Context):
+            metadata["command_message_reference"] = [ctx.channel.id, ctx.message.id]
+
         case_id = await self.bot_db.log_moderation_action(
             ctx.guild.id,
             moderator.id,
