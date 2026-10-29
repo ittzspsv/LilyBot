@@ -9,3 +9,4 @@ class ChannelEnum(str, Enum):
     STAFF_UPDATES = "staff_updates"
     VALID_CHANNEL = "valid_channel"
     LOA_REQUEST_CHANNEL = "loa_request"
+    LEVELING_NOTIFICATION = "leveling_notification"
