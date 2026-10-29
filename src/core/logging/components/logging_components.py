@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import discord
 import re
-from typing import Any, cast, Optional, TYPE_CHECKING
+from typing import cast, TYPE_CHECKING
 
 from src.core.utils.embeds.sLilyEmbed import simple_embed
-from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
 
 if TYPE_CHECKING:
     from ....lily import Lily
@@ -36,9 +35,8 @@ class ProofComponentModal(discord.ui.Modal):
         'Please ensure that every proof you have attached here is valid!'
     )
 
-    def __init__(self, controller) -> None:
+    def __init__(self) -> None:
         super().__init__(title="Case Proofs")
-        self.controller = controller
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
 
@@ -48,7 +46,9 @@ class ProofComponentModal(discord.ui.Modal):
         assert isinstance(self.case_id.component, discord.ui.TextInput)
 
         files = self.images.component.values
-        success = await self.controller.send_proofs(interaction, files, int(self.case_id.component.value))
+        logging_controller = cast("Lily", interaction.client).logging_controller
+        assert logging_controller is not None
+        success = await logging_controller.send_proofs(interaction, files, int(self.case_id.component.value))
 
         if success:
             await interaction.followup.send(embed=simple_embed(f"Successfully appended proofs for •{self.case_id.component.value}"))
@@ -70,9 +70,8 @@ class ProofsComponentCommandModal(discord.ui.Modal):
         'Please ensure that every proof you have attached here is valid!'
     )
 
-    def __init__(self, controller, case_id: int, cmd_view: discord.ui.View, msg: discord.Message) -> None:
+    def __init__(self, case_id: int, cmd_view: discord.ui.View, msg: discord.Message) -> None:
         super().__init__(title="Case Proofs")
-        self.controller = controller
         self.case_id = case_id
         self.cmd_view = cmd_view
         self.msg = msg
@@ -83,13 +82,9 @@ class ProofsComponentCommandModal(discord.ui.Modal):
         assert isinstance(self.images.component, discord.ui.FileUpload)
 
         files = self.images.component.values
-        success = await self.controller.send_proofs(interaction, files, self.case_id)
-
-        for child in self.cmd_view.children:
-            if isinstance(child, discord.ui.Button):
-                child.disabled = True
-
-        await self.msg.edit(view=self.cmd_view)
+        logging_controller = cast("Lily", interaction.client).logging_controller
+        assert logging_controller is not None
+        success = await logging_controller.send_proofs(interaction, files, self.case_id)
 
         if success:
             await interaction.followup.send(
