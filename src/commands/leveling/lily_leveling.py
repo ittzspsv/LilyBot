@@ -6,6 +6,7 @@ from typing import cast, TYPE_CHECKING
 
 from src.core.features.leveling.controller.lily_leveling_controller import show_level
 from src.core.features.permissions.lily_permissions import app_permission
+from src.core.events.event_dispatcher import Events, EventPayload
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
 
 
@@ -288,10 +289,17 @@ class LilyLeveling(commands.Cog):
                         f"in guild {message.guild.id}"
                     )
 
-            return
-
-            await message.channel.send(
-                f"🎉 {message.author.mention} leveled up to **level {new_level}**!"
+            bot: "Lily" = self.bot
+            await bot.events.invoke(
+                Events.LEVEL_UP, 
+                EventPayload(
+                    bot,
+                    message.guild
+                ),
+                user=message.author,
+                new_level=new_level,
+                roles_awarded=roles_to_add
+            
             )
 
         except Exception:
