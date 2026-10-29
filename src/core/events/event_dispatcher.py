@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional, Set
 
 from discord import Guild
+from enum import Enum
 from discord.ext.commands import Bot
 
 log = logging.getLogger("lily")
@@ -16,6 +17,9 @@ log = logging.getLogger("lily")
 class EventPayload:
     bot: Bot
     guild: Guild
+
+class Events(str, Enum):
+    LEVEL_UP = "on_level_up"
 
 
 class EventDispatcher:
@@ -29,8 +33,10 @@ class EventDispatcher:
     def register(self, event_name: str, handler: Callable) -> None:
         if event_name not in self._events:
             raise ValueError(f"Invalid event: {event_name}")
+
         if handler in self._handlers[event_name]:
             return
+
         self._handlers[event_name].append(handler)
 
     @staticmethod
@@ -50,8 +56,10 @@ class EventDispatcher:
     def event(self, func: Optional[Callable] = None, *, name: Optional[str] = None):
         def decorator(fn: Callable) -> Callable:
             self._validate_handler(fn)
-            self.register(name or fn.__name__, fn)
-            return fn  
+            event_name = name or fn.__name__
+            self.register(event_name, fn)
+            log.info("Registered event handler %s for event %r", fn.__qualname__, event_name)
+            return fn
 
         if func is not None:     
             return decorator(func)
@@ -80,5 +88,5 @@ class EventDispatcher:
 
 
 dispatcher = EventDispatcher()
-dispatcher.preload_events({"on_event_name"})
+dispatcher.preload_events({event.value for event in Events})
 event = dispatcher.event
