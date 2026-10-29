@@ -145,18 +145,23 @@ def truncate(text: str, limit: int = 1024) -> str:
     return truncated.decode("utf-16-le", errors="ignore") + suffix
 
 async def purge_messages_by_user(
-    interaction: discord.Interaction,
+    ctx: discord.Interaction | commands.Context,
     user: discord.Member,
+    limit=500
 ) -> Tuple[int, int]:
-    limit = 500
-    adb = cast("Lily", interaction.client).adb
+
+    if isinstance(ctx, discord.Interaction):
+        bot = ctx.client
+        invoker = ctx.user
+    else:
+        bot = ctx.bot
+        invoker = ctx.author
+
+    adb = cast("Lily", bot).adb
     assert adb is not None
 
-    guild = interaction.guild
-    invoker = interaction.user
+    guild = ctx.guild
     assert guild is not None and isinstance(invoker, discord.Member)
-
-    await interaction.response.defer(ephemeral=True)
 
     batches = await adb.get_user_message_ids(guild.id, user.id, limit)
 
@@ -177,8 +182,24 @@ async def purge_messages_by_user(
 
         for i in range(0, len(ids), 100):
             chunk = ids[i : i + 100]
+
             if len(chunk) < 2:
-                break
+                message_id = chunk[0]
+                try:
+                    await channel.get_partial_message(message_id).delete()
+                except discord.NotFound:
+                    await adb.remove_messages(chunk)
+                except discord.HTTPException:
+                    logger.exception(
+                        "single delete failed for %s in channel %s",
+                        message_id,
+                        channel_id,
+                    )
+                else:
+                    await adb.remove_messages(chunk)
+                    deleted += 1
+                continue
+
             try:
                 await channel.delete_messages(
                     [discord.Object(id=m) for m in chunk]
@@ -193,7 +214,5 @@ async def purge_messages_by_user(
                 break
             await adb.remove_messages(chunk)
             deleted += len(chunk)
-
-    
 
     return (deleted, skipped)
