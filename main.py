@@ -6,6 +6,7 @@ from src.core.backups import ObjectStorageService
 from src.core.bot import set_instance
 from src.lily import Lily
 from src.core.events.event_dispatcher import dispatcher
+import src.core.events
 
 from dotenv import load_dotenv
 from pathlib import Path
