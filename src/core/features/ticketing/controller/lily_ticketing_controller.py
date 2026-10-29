@@ -16,16 +16,14 @@ from src.core.utils.embeds.sLilyEmbed import (
     simple_embed,
 )
 
-from ..classes.ticketing_classes import (
-    DatabaseAccess,
-)
 from ..components.lily_ticket_tool_components import (
     TicketComponentEmbed,
     TicketOpenerComponent,
     TicketSelectComponent,
     TicketLogComponent,
     TicketLogDirectMessage,
-    build_ticket_summary
+    build_ticket_summary,
+    resolve_ticket_roles,
 )
 
 from ..transcript import transcript
@@ -36,28 +34,60 @@ if TYPE_CHECKING:
 logger = logging.getLogger("lily")
 
 
+async def _restore_guild_tickets(bot, bot_db, guild_id: int) -> None:
+    """Re-register the persistent views of every open ticket in a guild."""
+    try:
+        tickets = await bot_db.get_guild_tickets(guild_id)
+    except Exception:
+        logger.exception("[Ticket Component Restore ERROR] guild_id=%s", guild_id)
+        return
+
+    for ticket_id, _, submission_json, ticket_message_id, ticket_details_message_id in tickets:
+        try:
+            if not submission_json:
+                continue
+
+            submission = json.loads(submission_json)
+
+            # The views only carry this ticket's own submission. Panel config
+            # (staff roles, ping roles, ...) is read on demand when a button is pressed.
+            details_view = TicketComponentEmbed(ticket_id, submission)
+            opener_view = TicketOpenerComponent(submission, ticket_id)
+
+            if ticket_details_message_id:
+                bot.add_view(details_view, message_id=ticket_details_message_id)
+
+            if ticket_message_id:
+                bot.add_view(opener_view, message_id=ticket_message_id)
+
+        except Exception:
+            logger.exception(
+                "[Ticket Component Restore ERROR] guild_id=%s ticket_id=%s", guild_id, ticket_id
+            )
+
+
 async def initialize_ticket_view(bot):
     try:
         _bot = cast("Lily", bot)
         bot_db = _bot.db
-        logging_controller = _bot.logging_controller
-
         assert bot_db is not None
-        assert logging_controller is not None
-        panels = await bot_db.get_ticket_views()
+
+        panels = await bot_db.get_ticket_view_refs()
 
         if not panels:
             logger.info("[InitializeTicketView] No ticket panels found.")
             return
 
+        # Open tickets first (once per guild): their buttons must work right
+        # away instead of waiting behind the per-panel delay below.
+        for guild_id in dict.fromkeys(panel["guild_id"] for panel in panels):
+            await _restore_guild_tickets(bot, bot_db, guild_id)
+
         for panel in panels:
             try:
-                guild_id, channel_id, message_id, config_json = panel
-
-                config = json.loads(config_json)
-
-                if not config:
-                    continue
+                view_id: int = panel["id"]
+                channel_id: int = panel["channel_id"]
+                message_id: int = panel["message_id"]
 
                 channel = _bot.get_channel(channel_id)
 
@@ -70,72 +100,35 @@ async def initialize_ticket_view(bot):
                         )
                         continue
 
-                selector_view = TicketSelectComponent(config, DatabaseAccess(bot_db, logging_controller))
-                bot.add_view(selector_view)
+                try:
+                    selector_view = await TicketSelectComponent.from_db(bot_db, view_id)
+                except Exception:
+                    logger.exception(
+                        "[InitializeTicketView] Could not build panel %s (channel %s)",
+                        view_id, channel_id
+                    )
+                    continue
+
+                # Scoped to the panel message: a single global "ticket_selector_main"
+                # view would only ever route interactions to the last panel registered.
+                bot.add_view(selector_view, message_id=message_id)
 
                 try:
                     if not isinstance(channel, discord.TextChannel):
                         continue
-                    if message_id:
-                        
-                        message = await channel.fetch_message(message_id)
-                        await message.edit(
-                            content=None,
-                            embeds=[],
-                            view=selector_view
-                        )
 
-                    else:
-                        message = await channel.send(
-                            view=selector_view,
-                            allowed_mentions = discord.AllowedMentions.none()
-                        )
-
-                        await bot_db.save_ticket_view(
-                            guild_id=guild_id,
-                            channel_id=channel_id,
-                            message_id=message.id,
-                            config=config
-                        )
+                    message = await channel.fetch_message(message_id)
+                    await message.edit(
+                        content=None,
+                        embeds=[],
+                        view=selector_view
+                    )
 
                 except (discord.NotFound, discord.Forbidden):
                     logger.warning(
                         "[InitializeTicketView] Panel message missing in %s", channel_id
                     )
                     continue
-
-                try:
-                    tickets = await bot_db.get_guild_tickets(guild_id)
-
-                    for ticket_id, _, submission_json, ticket_message_id, ticket_details_message_id in tickets:
-                        view = TicketComponentEmbed(
-                            ticket_id,
-                            json.loads(submission_json),
-                            config,
-                            DatabaseAccess(bot_db, logging_controller)
-                        )
-
-                        opener_view = TicketOpenerComponent(
-                            json.loads(submission_json),
-                            config,
-                            ticket_id,
-                            DatabaseAccess(bot_db, logging_controller)
-                        )
-
-                        bot.add_view(
-                            view,
-                            message_id=ticket_details_message_id
-                        )
-
-                        bot.add_view(
-                            opener_view,
-                            message_id=ticket_message_id
-                        )
-
-                except Exception:
-                    logger.exception(
-                        "[Ticket Component Restore ERROR] guild_id=%s", guild_id
-                    )
 
                 await asyncio.sleep(1)
 
@@ -152,12 +145,13 @@ async def spawn_ticket(ctx: commands.Context, json_data: dict) -> None:
         return
 
     bot_db = cast("Lily", ctx.bot).db
-    logging_controller = cast("Lily", ctx.bot).logging_controller
     assert bot_db is not None
-    assert logging_controller is not None
 
     try:
-        channel_id = json_data["BasicConfigurations"]["TicketPanelSpawnChannel"]
+        # Reject a bad config BEFORE anything is posted to the channel.
+        bot_db.validate_ticket_config(json_data)
+
+        channel_id = int(json_data["BasicConfigurations"]["TicketPanelSpawnChannel"])
 
         channel_obj = (
             ctx.guild.get_channel(channel_id)
@@ -167,16 +161,17 @@ async def spawn_ticket(ctx: commands.Context, json_data: dict) -> None:
         if not isinstance(channel_obj, discord.TextChannel):
             raise RuntimeError("Invalid ticket panel channel.")
 
-
-        selector_view = TicketSelectComponent(json_data, DatabaseAccess(bot_db, logging_controller))
-
-        ctx.bot.add_view(selector_view)
-
+        # The row can't exist before the message does (message_id is NOT NULL),
+        # so the very first render comes straight from the config being saved.
+        selector_view = TicketSelectComponent.from_config(json_data)
 
         message_obj = await channel_obj.send(
             view=selector_view,
             allowed_mentions=discord.AllowedMentions.none()
         )
+
+        # Scoped to the panel message so several panels never fight over one custom_id.
+        ctx.bot.add_view(selector_view, message_id=message_obj.id)
 
         await bot_db.save_ticket_view(
             guild_id=ctx.guild.id,
@@ -185,6 +180,8 @@ async def spawn_ticket(ctx: commands.Context, json_data: dict) -> None:
             config=json_data
         )
 
+    except ValueError as exc:
+        await ctx.reply(f"Invalid ticket configuration: {exc}")
 
     except Exception:
         logger.exception("[SPAWN TICKET ERROR] guild_id=%s", ctx.guild.id)
@@ -454,7 +451,10 @@ async def ticket_close(interaction: discord.Interaction, reason: str="No reason 
         opened_user_id, ticket_type, logs_channel_id, submission_json_raw, claimer_user_id = row
         submission_json = json.loads(submission_json_raw)
 
-        higher_staffs_roles_id: List[int] = submission_json.get("higher_staff_role_ids", [])
+        # Read on demand: staff roles edited since the ticket was opened apply immediately.
+        _, higher_staffs_roles_id = await resolve_ticket_roles(
+            bot_db, interaction.guild.id, submission_json
+        )
         is_higher_staff = any(role.id in higher_staffs_roles_id for role in interaction.user.roles)
 
         if (
