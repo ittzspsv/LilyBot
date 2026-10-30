@@ -121,11 +121,6 @@ class LilyModeration(commands.Cog):
             if appeal is None:
                 return
 
-            ctx = await self.bot.get_context(message)
-            if appeal["moderator_id"] != message.author.id and has_permission(ctx, "mod_appeal_management") is False:
-                await message.add_reaction("❌")
-                return
-
             member: discord.Member | None = self.cached_members.get(appeal["target_user_id"])
             if member is None:
                 try:

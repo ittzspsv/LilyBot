@@ -1099,6 +1099,41 @@ class AppealHandleButton(
                 "Failed to archive thread after appeal %s (case %s)", self.action, appeal["case_id"]
             )
 
+    def _build_dm_embed(
+        self,
+        guild: discord.Guild,
+        case: Any | None,
+        *,
+        accepted: bool,
+        reason: str | None = None,
+    ) -> discord.Embed:
+        if accepted:
+            embed = discord.Embed(
+                title="Your appeal has been accepted",
+                description="Action has been lifted",
+                color=discord.Color(0xFFF5F5),
+            )
+        else:
+            embed = discord.Embed(
+                title="Your appeal has been rejected",
+                description=reason or "No reason provided",
+                color=discord.Color(0xFFF5F5),
+            )
+
+        embed.set_image(url=img["border"])
+
+        embed.add_field(name="Case ID", value=f"#{self.case_id}", inline=False)
+        if case is not None:
+            embed.add_field(name="Case Type", value=str(case["mod_type"]).title(), inline=False)
+            embed.add_field(
+                name="Case Reason",
+                value=(case.get("reason") or "No reason provided")[:1024],
+                inline=False,
+            )
+
+        embed.set_footer(text=guild.name, icon_url=guild.icon.url if guild.icon else None)
+        return embed
+
     async def _accept(
         self,
         interaction: discord.Interaction,
@@ -1193,9 +1228,7 @@ class AppealHandleButton(
 
         if member is not None:
             try:
-                await member.send(
-                    content=f"Your {mod_type.title()} appeal has been accepted and the action has been lifted."
-                )
+                await member.send(embed=self._build_dm_embed(guild, case, accepted=True))
             except discord.HTTPException:
                 pass
 
@@ -1217,13 +1250,16 @@ class AppealHandleButton(
             return
 
         if member is not None:
+            guild = interaction.guild
+            assert guild is not None
             try:
-                await member.send(
-                    embed=simple_embed(
-                        f"Your appeal has been denied. Sorry\n- Reason: {reason or 'No reason provided'}",
-                        "cross",
-                    )
-                )
+                case = await bot_db.get_case(appeal["case_id"], guild.id)
+            except Exception:
+                logger.exception("Failed to fetch case %s for rejection DM", appeal["case_id"])
+                case = None
+
+            try:
+                await member.send(embed=self._build_dm_embed(guild, case, accepted=False, reason=reason))
             except discord.HTTPException:
                 pass
 
@@ -1269,18 +1305,6 @@ class AppealHandleButton(
 
         if case is None:
             await self._reply(interaction, "Unable to find the case", "cross")
-            return
-
-        moderator = case["moderator_id"]
-        if (
-            interaction.user.id != moderator
-            and has_app_permission(interaction, "mod_appeal_management") is False
-        ):
-            await self._reply(
-                interaction,
-                f"This action has been denied. Only <@{moderator}> can initiate it.",
-                "cross",
-            )
             return
 
         try:
