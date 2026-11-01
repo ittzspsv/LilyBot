@@ -2100,8 +2100,9 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         staff_id: int,
         updated_by: int,
         guild_id: int,
-    ) -> bool:
-        """Returns True if the updater's role hierarchy priority is higher than the target user's role hierarchy priority."""
+        ) -> Tuple[bool, str]:
+        """Checks whether the updater has sufficient role hierarchy priority."""
+
         current_role_row = await self.fetch_one(
             """
             SELECT sr.role_id, srk.priority
@@ -2122,7 +2123,7 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         )
 
         if not current_role_row:
-            return False
+            return False, f"Target user <@{staff_id}> has no assigned staff roles."
 
         updater_row = await self.fetch_one(
             """
@@ -2144,9 +2145,12 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         )
 
         if not updater_row:
-            return False
+            return False, f"Updater <@{updated_by}> has no assigned staff roles."
 
-        return current_role_row["priority"] >= updater_row["priority"]
+        if current_role_row["priority"] >= updater_row["priority"]:
+            return False, "You cannot perform this action on a staff member with an equal or higher rank."
+
+        return True, "Success"
 
     async def add_staff(
         self, 
@@ -2365,10 +2369,12 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         await self.ensure_staff(issued_by, guild_id)
         await self.ensure_staff(staff_id, guild_id)
 
-        has_permission: bool = await self.assert_staff_role_permission(staff_id, issued_by, guild_id)
+        has_permission, message = await self.assert_staff_role_permission(staff_id, issued_by, guild_id)
         if not has_permission:
-            return {"success": False, "message": f"Action has been denied due to <@{staff_id}> having higher rank than you"}
-
+            return {
+                "success": False,
+                "message": f"Action denied: {message}",
+            }
 
         if expiry_date == "none":
             iso_string = None
@@ -2584,9 +2590,12 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         if row and row["on_loa"] == 1:
             return {"success": False, "message": "Staff is already on LOA"}
         
-        has_permission: bool = await self.assert_staff_role_permission(staff_id, loa_issued_by, guild_id)
+        has_permission, message = await self.assert_staff_role_permission(staff_id, loa_issued_by, guild_id)
         if not has_permission:
-            return {"success": False, "message": f"Action has been denied due to <@{staff_id}> having higher rank than you"}
+            return {
+                "success": False,
+                "message": f"Action denied: {message}",
+            }
 
         try:
             await self.execute(
