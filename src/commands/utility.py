@@ -831,49 +831,6 @@ class LilyUtility(commands.Cog):
     async def _avatar(self, ctx: commands.Context, member: discord.Member | None):
         await ctx.reply(view=Avatar(member or ctx.author))
 
-    @app_commands.command(name="evaluate", description="Evaluates an expression in any form")
-    @app_permission(command_name="evaluate")
-    async def message(
-        self,
-        interaction: discord.Interaction,
-        message: str,
-        snowflake: str | None = None
-    ):
-        channel = interaction.channel
-
-        if not isinstance(channel, (discord.Thread, discord.TextChannel)):
-            await interaction.response.send_message(
-                "Cannot send messages here.",
-                ephemeral=True
-            )
-            return
-
-        message = message.replace("@everyone", "").replace("@here", "").strip()
-
-        if snowflake is not None:
-            try:
-                msg = await channel.fetch_message(int(snowflake))
-                msg = await msg.reply(content=message)
-            except discord.NotFound:
-                await interaction.response.send_message(
-                    "Message not found.",
-                    ephemeral=True
-                )
-                return
-        else:
-            msg = await channel.send(content=message, allowed_mentions=discord.AllowedMentions(roles=False, everyone=False))
-
-
-        print(f"Message Sent By {interaction.user.id} reference {msg.jump_url}")
-        with open("bot.log", "a", encoding="utf-8") as f:
-            f.write(
-                f"Message Sent By {interaction.user.id} reference {msg.jump_url}\n"
-            )
-        await interaction.response.send_message(
-            "Successfully sent!",
-            ephemeral=True
-        )
-
     @timezone.command(name="get", description="Get a timezone of a user")
     async def get_timezone(
         self,
