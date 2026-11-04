@@ -251,6 +251,30 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
             return False
         allowed_roles = guild_cache["permissions"].get(command, [])
         return any(role_id in allowed_roles for role_id in roles)
+
+    async def get_all_permissions(
+        self: LilyDatabaseAccess,
+        guild_id: int,
+        role_id: List[int]
+    ) -> Set[str]:
+        if not role_id:
+            return set()
+
+        placeholders = ", ".join("?" for _ in role_id)
+
+        query = f"""
+            SELECT DISTINCT command
+            FROM permissions
+            WHERE guild_id = ?
+            AND role_id IN ({placeholders})
+        """
+
+        rows = await self.fetch_all(
+            query,
+            (guild_id, *role_id)
+        )
+
+        return {row["command"] for row in rows}
     
     def get_permission_roles(
         self, guild_id: int, command: str | None
@@ -2100,10 +2124,13 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         staff_id: int,
         updated_by: int,
         guild_id: int,
-        ) -> Tuple[bool, str]:
-        """Checks whether the updater has sufficient role hierarchy priority."""
+    ) -> Tuple[bool, str]:
+        """Checks whether the updater outranks the target.
 
-        current_role_row = await self.fetch_one(
+        Lower priority number = higher rank (0 = management).
+        """
+
+        target_rows = await self.fetch_all(
             """
             SELECT sr.role_id, srk.priority
             FROM staff_roles sr
@@ -2115,15 +2142,22 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
                 AND srk.guild_id = r.guild_id
             WHERE sr.staff_id = ?
                 AND sr.guild_id = ?
-                AND r.role_type = 'staff'
-            ORDER BY srk.priority ASC
-            LIMIT 1;
+                AND r.role_type = 'staff';
             """,
             (staff_id, guild_id),
         )
 
-        if not current_role_row:
+        if not target_rows:
             return False, f"Target user <@{staff_id}> has no assigned staff roles."
+
+        target_priorities = [
+            row["priority"] for row in target_rows if row["priority"] is not None
+        ]
+        if not target_priorities:
+            return False, (
+                f"Target user <@{staff_id}> has staff roles, but none of them "
+                "have a rank configured."
+            )
 
         updater_row = await self.fetch_one(
             """
@@ -2145,9 +2179,12 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
         )
 
         if not updater_row:
-            return False, f"Updater <@{updated_by}> has no assigned staff roles."
+            return False, f"Updater <@{updated_by}> has no ranked staff roles."
 
-        if current_role_row["priority"] >= updater_row["priority"]:
+        target_priority = min(target_priorities)
+        updater_priority = updater_row["priority"]
+
+        if target_priority <= updater_priority:
             return False, "You cannot perform this action on a staff member with an equal or higher rank."
 
         return True, "Success"
