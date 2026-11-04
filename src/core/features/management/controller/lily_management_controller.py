@@ -1103,6 +1103,18 @@ async def check_staff_quota(interaction: discord.Interaction, staff: discord.Mem
             return f"{emoji['checked']} Passed ({current}/{required})"
         return f"{emoji['cross']} Failed ({current}/{required}, need {required - current} more)"
 
+    def _progress(messages: int, min_msg: int, ms: int, min_ms: int) -> float:
+        parts = [
+            min(current / required, 1)
+            for current, required in ((messages, min_msg), (ms, min_ms))
+            if required > 0
+        ]
+        return sum(parts) / len(parts) if parts else 1.0
+
+    def _bar(ratio: float, width: int = 10) -> str:
+        filled = int(ratio * width)
+        return "█" * filled + "░" * (width - filled)
+
     if interaction.guild is None:
         embed = discord.Embed(
             title=f"{emoji['cross']} Error",
@@ -1135,6 +1147,9 @@ async def check_staff_quota(interaction: discord.Interaction, staff: discord.Mem
             role = interaction.guild.get_role(r["role_id"])
             role_mention = role.mention if role else f"`{r['role_id']}`"
 
+            ratio = _progress(r["messages"], r["min_msg"], r["ms"], r["min_ms"])
+            progress = f"{_bar(ratio)} {int(ratio * 100)}%"
+
             if on_loa:
                 colour, status = 0xFFF0F3, "## On LOA (exempt)"
             elif r["passed"]:
@@ -1148,7 +1163,8 @@ async def check_staff_quota(interaction: discord.Interaction, staff: discord.Mem
                     f"{status}\n"
                     f"- **Role:** {role_mention}\n"
                     f"- **Messages:** {_line(r['messages'], r['min_msg'])}\n"
-                    f"- **Moderation:** {_line(r['ms'], r['min_ms'])}"
+                    f"- **Moderation:** {_line(r['ms'], r['min_ms'])}\n"
+                    f"- **Progress:** {progress}"
                 ),
                 color=colour
             )
