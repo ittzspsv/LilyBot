@@ -30,7 +30,6 @@ async def lily_bot():
 
 
     logger.info("Starting Lily")
-    await bot.start(token=token)
 
     """ 
     Note: 
@@ -88,6 +87,8 @@ async def lily_bot():
             "Backup scheduling started. %s will be backed up every 6 hours.",
             path,
         )
+
+    await bot.start(token=token)
 
     
 
