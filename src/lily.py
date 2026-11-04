@@ -81,6 +81,8 @@ class Lily(commands.Bot):
             except Exception as e:
                 print(f"Load failed {ext}: {e}")
 
+        self.modify_status.start()
+
         self.tree.on_error = self.on_app_command_error
             
     def prefix(self, bot: commands.Bot, message: discord.Message):
@@ -127,8 +129,6 @@ class Lily(commands.Bot):
 
     async def on_ready(self):
         print('Logged on as', self.user)
-
-        await self.modify_status.start()
         
 
     async def on_guild_join(self, guild: discord.Guild):
@@ -149,6 +149,10 @@ class Lily(commands.Bot):
             },
         )
         await self.change_presence(activity=activity)
+
+    @modify_status.before_loop
+    async def before_modify_status(self):
+        await self.wait_until_ready()
 
     async def on_message(self, message: discord.Message):
         if (
