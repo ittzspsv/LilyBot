@@ -165,7 +165,7 @@ class ModCommands(app_commands.Group):
             "setup_mod_appeal_existing_channel": setup_mod_appeal_existing_channel
         }, prefill_values={
             "logs_channel": logs_channel,
-            "quarantine_role_id": quarantine_role_id[0],
+            "quarantine_role_id": quarantine_role_id[0] if quarantine_role_id else None,
             "appeal_channel": appeal_forum_channel
         })
 
