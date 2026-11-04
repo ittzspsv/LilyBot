@@ -9,6 +9,7 @@ import logging
 from io import BytesIO
 from src.core.utils.embeds.sLilyEmbed import simple_embed
 from src.core.utils.lily_utility import *
+from src.core.configs.bot_details import img
 from src.core.features.permissions.lily_permissions import app_permission, permission, registered_permissions
 from src.core.utils.components.sLIlyGlobalComponents import CommandInfo as CI
 from src.core.utils.lily_utility import purge_messages_by_user
@@ -1381,6 +1382,71 @@ class LilyUtility(commands.Cog):
 
         await bot_db.delete_tag(tag)
         await ctx.send(f"Tag `{tag}` deleted.")
+
+
+    @commands.hybrid_command(name="whois", description="Get member information", aliases=["wis", "w"])
+    async def whois(self, ctx: commands.Context, user: discord.Member):
+        if not ctx.guild:
+            await ctx.reply("This command should only be executed inside a guild")
+            return
+
+        bot_db = cast("Lily", ctx.bot).db
+        assert bot_db is not None
+
+        lily_permissions = await bot_db.get_all_permissions(
+            ctx.guild.id,
+            [role.id for role in user.roles]
+        )
+
+        formatted_permissions = ", ".join(
+            permission.replace("_", " ").title()
+            for permission in sorted(lily_permissions)
+        ) or "None"
+
+        discord_permissions = [
+            permission.replace("_", " ").title()
+            for permission, value in user.guild_permissions
+            if value
+        ]
+
+        discord_permissions_text = ", ".join(discord_permissions) or "None"
+
+        joined_at = (
+            discord.utils.format_dt(user.joined_at, style="R")
+            if user.joined_at else "Unknown"
+        )
+
+        embed = discord.Embed(
+            color=0xFFFFFF,
+            title=user.display_name,
+            description=(
+                f"**Joined Server:** {joined_at}\n"
+            )
+        )
+
+        embed.set_author(
+            name=user.name,
+            icon_url=user.display_avatar.url
+        )
+
+        embed.set_thumbnail(url=user.display_avatar.url)
+        embed.set_image(url=img["border"])
+
+        embed.add_field(
+            name=f"Discord Permissions",
+            value=discord_permissions_text,
+            inline=False
+        )
+
+        embed.add_field(
+            name=f"{ctx.guild.me.name.title()}'s Permissions",
+            value=formatted_permissions,
+            inline=False
+        )
+
+        embed.set_footer(text="Only useful informations are shown")
+
+        await ctx.reply(content=f"[@{user.display_name}](https://discord.com/users/{user.id})", embed=embed)
 
 async def setup(bot):
     await bot.add_cog(LilyUtility(bot))
