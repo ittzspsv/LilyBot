@@ -140,46 +140,6 @@ class ModerationInsights(discord.ui.LayoutView):
             except discord.HTTPException:
                 logger.exception("Failed to disable ms_leaderboard_options on timeout for message_id=%s", self.message.id)
 
-def action_log(
-    action: str,
-    reason: Optional[str],
-    guild_name: str,
-) -> discord.Embed:
-    action = action.lower()
-
-    titles = {
-        "ban": f"{Config.emoji['arrow']} You Have Been Banned!",
-        "mute": f"{Config.emoji['arrow']} You Have Been Muted!",
-        "quarantine": f"{Config.emoji['arrow']} You Have Been Quarantined!",
-        "warn": f"{Config.emoji['arrow']} You Have Been Warned!",
-    }
-
-    if action not in titles:
-        logger.error("action_log called with unknown action '%s' (guild_name=%s)", action, guild_name)
-        raise ValueError(f"Unknown action '{action}'. Must be one of {list(titles)}.")
-
-    embed = discord.Embed(
-        color=0xFFFFFF,
-        title=titles[action],
-    )
-    if action == "warn":
-        embed.set_thumbnail(url=Config.img['warn'])
-    else:
-        embed.set_image(url=Config.img.get(action, Config.img['border']))
-
-    embed.add_field(
-        name=f"{Config.emoji['bookmark']} Reason",
-        value=reason,
-        inline=False,
-    )
-    embed.add_field(
-        name=f"{Config.emoji['bot']} Server",
-        value=guild_name,
-        inline=False,
-    )
-
-    return embed
-
 def build_ms_embed(
     moderator: discord.Member | discord.User,
     logs: list[dict],
