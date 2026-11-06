@@ -454,6 +454,14 @@ class ModLog:
     def is_active(self) -> bool:
         return not self.deleted
 
+    def diff(self, other: ModLog) -> dict[str, tuple[Any, Any]]:
+        return {
+            name: (getattr(self, name), getattr(other, name))
+            for name in self.__dataclass_fields__
+            if name not in {"id", "guild_id"}
+            and getattr(self, name) != getattr(other, name)
+        }
+
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> ModLog:
         raw = row["metadata"]
