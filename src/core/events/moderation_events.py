@@ -21,6 +21,7 @@ import discord
 
 from src.core.configs.bot_details import emoji, img
 from src.core.features.moderation.components.lily_moderation_components import AppealButton
+from src.core.database.integrations.models import ModLog
 
 from .event_dispatcher import EventPayload, Events, event
 
@@ -172,3 +173,22 @@ async def log_moderation_to_channel(payload: EventPayload, action: ModerationAct
         await channel.send(
             content=f"{len(failed_proofs)} proof(s) could not be fetched (link expired or inaccessible)."
         )
+
+
+
+@event
+async def on_case_update(
+    payload: EventPayload, 
+    before: ModLog, 
+    after: ModLog, 
+    user: discord.Member
+):
+    ...
+
+@event
+async def on_case_delete(
+    payload: EventPayload, 
+    case: ModLog, 
+    user: discord.Member
+):
+    ...
