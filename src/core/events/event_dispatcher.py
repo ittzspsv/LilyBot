@@ -26,6 +26,9 @@ class Events(str, Enum):
 
     MODERATION_ACTION = "on_moderation_action"
 
+    APPEAL_REQUESTED = "on_appeal_requested"
+    APPEAL_HANDLED = "on_appeal_handled"
+
 
 class EventDispatcher:
     def __init__(self) -> None:
