@@ -8,6 +8,7 @@ from datetime import datetime
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
 from src.core.logging.components.logging_components import ProofsComponentCommandModal
 from src.core.features.permissions.lily_permissions import has_app_permission
+from src.core.events.event_dispatcher import EventPayload, Events
 
 import src.core.configs.bot_details as Config
 import json
@@ -266,7 +267,8 @@ class EditCaseModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         try:
-            bot_db = cast("Lily", interaction.client).db
+            bot = cast("Lily", interaction.client)
+            bot_db = bot.db
             assert bot_db is not None
 
             assert isinstance(self.reason.component, discord.ui.TextInput)
@@ -284,6 +286,15 @@ class EditCaseModal(discord.ui.Modal):
 
             assert interaction.guild is not None
             updated_case_data = await bot_db.get_case(self.case_id, interaction.guild.id)
+
+            await bot.events.invoke(
+                name=Events.CASE_UPDATE,
+                payload=EventPayload(
+                    bot=bot,
+                    guild=interaction.guild
+                )
+            )
+
 
             if updated_case_data is None:
                 await interaction.response.send_message(embed=simple_embed(result["message"]), ephemeral=True)
@@ -662,10 +673,10 @@ class CaseView(discord.ui.LayoutView):
             else:
                 await interaction.followup.send(embed=simple_embed("Something went wrong while fetching proofs.", 'cross'), ephemeral=True)
 
-    
     async def delete_case_callback(self, interaction: discord.Interaction) -> None:
         try:
-            bot_db = cast("Lily", interaction.client).db
+            bot = cast("Lily", interaction.client)
+            bot_db = bot.db
             assert bot_db is not None
 
             view = Confirm()
@@ -683,6 +694,13 @@ class CaseView(discord.ui.LayoutView):
             assert interaction.guild is not None
 
             await bot_db.delete_case(self.case_id, interaction.guild.id)
+            await bot.events.invoke(
+                name=Events.CASE_DELETE,
+                payload=EventPayload(
+                    bot=bot,
+                    guild=interaction.guild
+                )
+            )
 
             await self.case_list_view.refresh()
 
@@ -1106,6 +1124,8 @@ class AppealHandleButton(
         assert guild is not None
         mod_type = case["mod_type"]
 
+        bot = cast("Lily", interaction.client)
+
         if member is not None:
             try:
                 if mod_type == "mute":
@@ -1192,6 +1212,19 @@ class AppealHandleButton(
             except discord.HTTPException:
                 pass
 
+    
+        await bot.events.invoke(
+            name=Events.APPEAL_HANDLED,
+            payload=EventPayload(
+                bot=bot,
+                guild=guild
+            ),
+            type="accepted",
+            user=member,
+            moderator=interaction.user,
+            case_id=self.case_id,
+            reason=f"Appeal accepted by {interaction.user}"
+        )
         await self._finalize(interaction, appeal)
 
     async def _reject(
@@ -1209,9 +1242,12 @@ class AppealHandleButton(
             await self._reply(interaction, "Failed to update the appeal status. Please try again.", "cross")
             return
 
+        bot = cast("Lily", interaction.client)
+
+        guild = interaction.guild
+        assert guild is not None
         if member is not None:
-            guild = interaction.guild
-            assert guild is not None
+            
             try:
                 case = await bot_db.get_case(appeal["case_id"], guild.id)
             except Exception:
@@ -1222,6 +1258,19 @@ class AppealHandleButton(
                 await member.send(embed=self._build_dm_embed(guild, case, accepted=False, reason=reason))
             except discord.HTTPException:
                 pass
+
+        await bot.events.invoke(
+            name=Events.APPEAL_HANDLED,
+            payload=EventPayload(
+                bot=bot,
+                guild=guild
+            ),
+            type="rejected",
+            user=member,
+            moderator=interaction.user,
+            case_id=self.case_id,
+            reason=reason
+        )
 
         await self._finalize(interaction, appeal)
 
@@ -1480,6 +1529,19 @@ class AppealModal(discord.ui.Modal):
             await self.db.create_appeal(
                 self.case_id,
                 thread.id
+            )
+
+            bot = cast("Lily", interaction.client)
+            await bot.events.invoke(
+                Events.APPEAL_REQUESTED,
+                payload=EventPayload(
+                    bot=bot,
+                    guild=guild
+                ),
+                user=interaction.user,
+                case_id=self.case_id,
+                appeal_response=answers,
+                thread=thread
             )
 
             """ Get Proofs """
