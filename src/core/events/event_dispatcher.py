@@ -21,6 +21,11 @@ class EventPayload:
 class Events(str, Enum):
     LEVEL_UP = "on_level_up"
 
+    QUOTA_COMPLETE = "on_quota_complete"
+    QUOTA_EVALUATE = "on_quota_evaluate"
+
+    MODERATION_ACTION = "on_moderation_action"
+
 
 class EventDispatcher:
     def __init__(self) -> None:
