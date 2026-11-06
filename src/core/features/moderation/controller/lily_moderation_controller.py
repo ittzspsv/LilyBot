@@ -680,53 +680,6 @@ async def warn(
         logger.exception("Failed to warn user %s in guild %s", member.id, ctx.guild.id)
         await bot.send(ctx, embed=simple_embed("Failed to warn this user due to an unexpected error.", 'cross'))
 
-async def case_edit(
-    interaction: discord.Interaction,
-    case_id: int,
-    case_statement: str,
-    absolute: bool = False
-):
-    bot = cast("Lily", interaction.client)
-
-    assert bot.db is not None
-    bot_db = bot.db
-
-    assert bot_db is not None
-
-    try:
-        await bot_db.edit_case(**{"staff_id": interaction.user.id, "case_id": case_id, "case_statement": case_statement, "absolute": absolute})
-    except LilyError as e:
-        await interaction.response.send_message(embed=simple_embed(str(e), 'cross'))
-        return
-    except Exception:
-        logger.exception("Failed to edit case %s", case_id)
-        await interaction.response.send_message(embed=simple_embed("An unexpected error occurred while editing this case.", 'cross'))
-        return
-
-    await interaction.response.send_message(embed=simple_embed(f"Successfully edited case #{case_id}."))
-
-async def case_delete(
-    interaction: discord.Interaction,
-    case_id: int
-):
-    bot = cast("Lily", interaction.client)
-
-    assert bot.db is not None
-    bot_db = bot.db
-
-    try:
-        assert interaction.guild is not None
-        await bot_db.delete_case(case_id, interaction.guild.id)
-    except LilyError as e:
-        await interaction.response.send_message(embed=simple_embed(str(e), 'cross'))
-        return
-    except Exception:
-        logger.exception("Failed to delete case %s", case_id)
-        await interaction.response.send_message(embed=simple_embed("An unexpected error occurred while deleting this case.", 'cross'))
-        return
-
-    await interaction.response.send_message(embed=simple_embed(f"Successfully deleted case #{case_id}."))
-
 async def ms(
     ctx: discord.Interaction | commands.Context,
     moderator: discord.Member | discord.User,
