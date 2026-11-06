@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from ..database.integrations.bot_globals import BotGlobalsDatabaseAccess
 
 from discord.ext import commands
@@ -13,8 +15,6 @@ import discord
 import io
 import re
 import logging
-import aiohttp
-import asyncio
 
 if TYPE_CHECKING:
     from src.lily import Lily
@@ -81,7 +81,7 @@ class LilyLoggingController:
                 await ctx.response.send_message(content)
             return None
 
-        bot = cast(Lily, ctx.client if isinstance(ctx, discord.Interaction) else ctx.bot)
+        bot = cast("Lily", ctx.client if isinstance(ctx, discord.Interaction) else ctx.bot)
 
         acronyms: dict[str, str] = await self.bot_db.get_moderation_acronyms(moderator.id, guild.id)
         reason = re.sub(
