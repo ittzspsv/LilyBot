@@ -290,7 +290,10 @@ class EditCaseModal(discord.ui.Modal):
                 payload=EventPayload(
                     bot=bot,
                     guild=interaction.guild
-                )
+                ),
+                before=edit.before,
+                after=edit.after,
+                user=interaction.user
             )
 
             new_view = CaseView(self.case_id, edit.after, self.case_list_view, appeal)
@@ -671,13 +674,15 @@ class CaseView(discord.ui.LayoutView):
 
             assert interaction.guild is not None
 
-            await bot_db.delete_case(self.case_id, interaction.guild.id)
+            case = await bot_db.delete_case(self.case_id, interaction.guild.id)
             await bot.events.invoke(
                 name=Events.CASE_DELETE,
                 payload=EventPayload(
                     bot=bot,
                     guild=interaction.guild
-                )
+                ),
+                user=interaction.user,
+                case=case
             )
 
             await self.case_list_view.refresh()
