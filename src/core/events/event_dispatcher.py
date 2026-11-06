@@ -26,6 +26,9 @@ class Events(str, Enum):
 
     MODERATION_ACTION = "on_moderation_action"
 
+    CASE_UPDATE = "on_case_update"
+    CASE_DELETE = "on_case_delete"
+
     APPEAL_REQUESTED = "on_appeal_requested"
     APPEAL_HANDLED = "on_appeal_handled"
 
