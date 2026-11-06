@@ -26,38 +26,6 @@ class LilyLoggingController:
     def __init__(self, bot_db: BotGlobalsDatabaseAccess) -> None:
         self.bot_db = bot_db
 
-    async def write_log(
-        self,
-        ctx: commands.Context | discord.Interaction,
-        user_id: int,
-        log_txt: str,
-    ) -> None:
-        guild = ctx.guild
-        if guild is None:
-            return
-
-        await self.bot_db.write_log(guild.id, user_id, log_txt)
-
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        logs_channel = self.bot_db.get_channel(guild.id, "logs_channel")
-        if logs_channel is None:
-            return
-
-        if isinstance(ctx, commands.Context):
-            channel = ctx.bot.get_channel(logs_channel)
-        elif isinstance(ctx, discord.Interaction):
-            channel = ctx.client.get_channel(logs_channel)
-        if channel is None:
-            try:
-                channel = await guild.fetch_channel(logs_channel)
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                return
-
-        if isinstance(channel, discord.TextChannel):
-            embed = write_log_embed(timestamp, user_id, log_txt)
-            await channel.send(embed=embed)
-
     async def log_moderation_action(
         self,
         ctx: commands.Context | discord.Interaction,
@@ -93,16 +61,16 @@ class LilyLoggingController:
         if isinstance(ctx, commands.Context):
             metadata["command_message_reference"] = [ctx.channel.id, ctx.message.id]
 
-        case_id = await self.bot_db.log_moderation_action(
+        modlog = await self.bot_db.log_moderation_action(
             guild.id, moderator.id, target_user.id, mod_type, reason, metadata
         )
 
-        if case_id is not None:
+        if modlog is not None:
             await bot.events.invoke(
                 name=Events.MODERATION_ACTION.value,
                 payload=EventPayload(bot=bot, guild=guild),
                 action=ModerationAction(
-                    case_id=case_id,
+                    case_id=modlog.id,
                     type=mod_type,
                     user=moderator,
                     target=target_user,
@@ -112,7 +80,7 @@ class LilyLoggingController:
                 )
             )
 
-        return case_id
+        return modlog.id
 
     async def post_log(
         self,
@@ -159,8 +127,8 @@ class LilyLoggingController:
         if interaction.guild is None:
             return False
         
-        case_exists = await self.bot_db.case_exists(case_id, interaction.guild.id)
-        if not case_exists:
+        case = await self.bot_db.get_case(case_id, interaction.guild.id)
+        if not case:
             return False
 
         logs_channel_id = self.bot_db.get_channel(interaction.guild.id, "logs_channel")
@@ -215,8 +183,8 @@ class LilyLoggingController:
             return
 
         """ Check the validity of the case """
-        validity = await self.bot_db.case_exists(case_id, interaction.guild.id)
-        if not validity:
+        case = await self.bot_db.get_case(case_id, interaction.guild.id)
+        if not case:
             await interaction.response.send_message(
                 embed=simple_embed(
                     "Case doesn't exists!",
@@ -225,7 +193,7 @@ class LilyLoggingController:
             )
             return
 
-        message_ids = await self.bot_db.retrieve_proofs(case_id)
+        message_ids = await self.bot_db.get_proof_references(case_id)
 
         if not message_ids:
             await interaction.response.send_message(
