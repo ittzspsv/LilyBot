@@ -1824,31 +1824,6 @@ class AppealMessageView(discord.ui.LayoutView):
         self.container1 = discord.ui.Container(*components)
         self.add_item(self.container1)
 
-commands_list: Dict[str, Dict[str, str]] = {
-    "ban": {"app_permission": "ban"},
-    "quarantine": {"app_permission": "quarantine"},
-    "unban": {"app_permission": "unban"},
-    "release": {"app_permission": "unban"},
-    "mute": {"app_permission": "mute"},
-    "warn": {"app_permission": "warn"},
-    "unmute": {"app_permission": "unmute"},
-    "mod_stats": {"app_permission": "ms"},
-    "case_list": {"app_permission": "modlogs"},
-    "mod_insights": {"app_permission": "moderation_insights"},
-    "case_edit": {"app_permission": "case_edit"},
-    "case_edit_absolute": {"app_permission": "case_edit_absolute"},
-    "case_delete": {"app_permission": "case_delete"},
-    "mod_acronym_add": {"app_permission": "mod_acronym_add"},
-    "mod_acronym_remove": {"app_permission": "mod_acronym_remove"},
-    "mod_acronym_update": {"app_permission": "mod_acronym_update"},
-    "mod_acronyms": {"app_permission": "mod_acronyms"},
-    "mod_acronym_transfer": {"app_permission": "mod_acronym_transfer"},
-    "appeal_setup": {"app_permission": "mod_appeal_management"},
-    "appeal_forum": {"app_permission": "mod_appeal_management"},
-    "appeal_accept": {"app_permission": "mod_appeal_handlers"},
-    "appeal_reject": {"app_permission": "mod_appeal_handlers"},
-}
-
 class PermissionConfigureModal(discord.ui.Modal):
     def __init__(self, command_name: str, app_permission: str, roles: List[int]) -> None:
         super().__init__(title="Permission Configure")
@@ -1915,18 +1890,6 @@ class ModerationDashboard(discord.ui.LayoutView):
         super().__init__(timeout=None)
 
         self.functions: Dict[str, Callable] = functions
-        
-        self.commands_select = discord.ui.Select(
-            options=[
-                discord.SelectOption(
-                    label=name.replace("_", " ").title()[:45],
-                    value=name,
-                )
-                for name in commands_list
-            ],
-        )
-
-        self.commands_select.callback = self.commands_select_callback
 
         self.appeal_handling_btn = discord.ui.Button(
             style=discord.ButtonStyle.secondary,
@@ -1983,9 +1946,6 @@ class ModerationDashboard(discord.ui.LayoutView):
                 "### Command Permission Systems\n"
                 "- Setup Command permissions for roles (for administrator / guild owner no setup needed)"
             )),
-            discord.ui.ActionRow(
-                self.commands_select
-            ),
 
             discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
 
@@ -2129,28 +2089,6 @@ class ModerationDashboard(discord.ui.LayoutView):
                 )
             except discord.HTTPException:
                 logger.exception("Failed to edit original response after quarantine role setup error")
-
-    async def commands_select_callback(self, interaction: discord.Interaction):
-        try:
-            command_name = self.commands_select.values[0]
-            app_permission = commands_list[command_name]["app_permission"]
-
-            """ Send the prefilled values """
-            bot_db = cast("Lily", interaction.client).db
-            assert bot_db is not None
-            assert interaction.guild is not None
-
-            roles = bot_db.get_permission_roles(interaction.guild.id, app_permission)
-            
-            await interaction.response.send_modal(PermissionConfigureModal(command_name, app_permission, roles))
-        except Exception:
-            logger.exception(
-                "Failed to open permission configure modal for command='%s' guild_id=%s",
-                self.commands_select.values[0] if self.commands_select.values else None,
-                getattr(interaction.guild, "id", None),
-            )
-            if not interaction.response.is_done():
-                await interaction.response.send_message(embed=simple_embed("Something went wrong opening the permission configuration.", 'cross'), ephemeral=True)
 
     async def appeal_channel_select_callback(self, interaction: discord.Interaction):
         """ Configure appeal handling using an existing forum channel """
