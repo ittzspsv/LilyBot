@@ -1,14 +1,13 @@
 from ..database.integrations.bot_globals import BotGlobalsDatabaseAccess
-from .embeds.logging_embeds import write_log_embed, moderation_embed
-from ..features.moderation.components.lily_moderation_components import action_log
 
 from discord.ext import commands
 from datetime import datetime
-from typing import Optional, Union, Sequence, List, Dict, Any
+from typing import Optional, Union, Sequence, List, Dict, Any, cast, TYPE_CHECKING
 from src.core.utils.embeds.sLilyEmbed import simple_embed
 from src.core.utils.lily_utility import utcnow
 from .components.logging_components import ProofComponentModal
-from src.core.features.moderation.components.lily_moderation_components import AppealButton
+from src.core.events.event_dispatcher import EventPayload, Events
+from src.core.events.moderation_events import ModerationAction, ModerationType
 
 import discord
 import io
@@ -16,6 +15,9 @@ import re
 import logging
 import aiohttp
 import asyncio
+
+if TYPE_CHECKING:
+    from src.lily import Lily
 
 logger = logging.getLogger("lily")
 
@@ -61,138 +63,54 @@ class LilyLoggingController:
         ctx: commands.Context | discord.Interaction,
         moderator: discord.Member | discord.User,
         target_user: discord.Member | discord.User,
-        mod_type: str,
+        mod_type: ModerationType,
         reason: str = "No reason provided",
         proofs: Optional[Sequence[Union[discord.Attachment, str]]] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> int | None:
-        if metadata is None:
-            metadata = {}
+        metadata = dict(metadata) if metadata else {}
 
-        if ctx.guild is None:
+        guild = ctx.guild
+        if guild is None:
             content = "Guild object is required for this command to be executed"
             if isinstance(ctx, commands.Context):
                 await ctx.reply(content)
-            elif isinstance(ctx, discord.Interaction):
-                if ctx.response.is_done():
-                    await ctx.followup.send(content)
-                else:
-                    await ctx.response.send_message(content)
+            elif ctx.response.is_done():
+                await ctx.followup.send(content)
+            else:
+                await ctx.response.send_message(content)
             return None
 
-        acronyms: dict[str, str] = await self.bot_db.get_moderation_acronyms(moderator.id, ctx.guild.id)
+        bot = cast(Lily, ctx.client if isinstance(ctx, discord.Interaction) else ctx.bot)
+
+        acronyms: dict[str, str] = await self.bot_db.get_moderation_acronyms(moderator.id, guild.id)
         reason = re.sub(
             r"\b\w+\b",
             lambda m: acronyms.get(m.group(0).lower(), m.group(0)),
-            reason
+            reason,
         )
 
         if isinstance(ctx, commands.Context):
             metadata["command_message_reference"] = [ctx.channel.id, ctx.message.id]
 
         case_id = await self.bot_db.log_moderation_action(
-            ctx.guild.id,
-            moderator.id,
-            target_user.id,
-            mod_type,
-            reason,
-            metadata
+            guild.id, moderator.id, target_user.id, mod_type, reason, metadata
         )
 
-        a_log = None
-        if mod_type in ('ban', 'mute', 'quarantine', 'warn'):
-            a_log = action_log(mod_type, reason, ctx.guild.name)
-
-        try:
-            view = discord.ui.View(timeout=None)
-            view.add_item(AppealButton(case_id))
-            if a_log:
-                await target_user.send(embed=a_log, view=view)
-        except Exception:
-            pass
-
-        embeds_to_send = moderation_embed(
-            moderator.id,
-            target_user.id,
-            mod_type,
-            reason,
-            utcnow()
-        )
-
-        logs_channel_id = self.bot_db.get_channel(ctx.guild.id, "logs_channel")
-        if not logs_channel_id:
-            return case_id
-
-        channel = ctx.guild.get_channel(logs_channel_id)
-
-        if channel is None:
-            try:
-                channel = await ctx.guild.fetch_channel(logs_channel_id)
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                return case_id
-
-        if not isinstance(channel, discord.TextChannel):
-            return case_id
-
-        await channel.send(
-            content=f"{target_user.mention}",
-            embeds=embeds_to_send
-        )
-
-        if proofs and case_id:
-            files: List[discord.File] = []
-            failed_proofs: List[str] = []
-
-            timeout = aiohttp.ClientTimeout(total=15)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                for proof in proofs:
-                    if isinstance(proof, discord.Attachment):
-                        try:
-                            data = await proof.read()
-                        except (discord.NotFound, discord.HTTPException) as e:
-                            logger.warning(f"Failed to read attachment {proof.filename} for case {case_id}: {e}")
-                            failed_proofs.append(proof.filename)
-                            continue
-
-                        files.append(discord.File(fp=io.BytesIO(data), filename=proof.filename))
-
-                    elif isinstance(proof, str):
-                        try:
-                            async with session.get(proof) as resp:
-                                if resp.status != 200:
-                                    logger.warning(
-                                        f"Failed to fetch proof image for case {case_id}: "
-                                        f"{proof} returned status {resp.status}"
-                                    )
-                                    failed_proofs.append(proof)
-                                    continue
-
-                                data = await resp.read()
-                        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                            logger.warning(f"Failed to fetch proof image for case {case_id}: {proof} ({e})")
-                            failed_proofs.append(proof)
-                            continue
-
-                        filename = proof.split("?")[0].split("/")[-1]
-                        if not filename.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
-                            filename += ".png"
-
-                        files.append(discord.File(fp=io.BytesIO(data), filename=filename))
-
-            if files:
-                message = await channel.send(
-                    content=f"Proofs {target_user.mention}",
-                    files=files
+        if case_id is not None:
+            await bot.events.invoke(
+                name=Events.MODERATION_ACTION.value,
+                payload=EventPayload(bot=bot, guild=guild),
+                action=ModerationAction(
+                    case_id=case_id,
+                    type=mod_type,
+                    user=moderator,
+                    target=target_user,
+                    reason=reason,
+                    proofs=proofs,
+                    metadata=metadata,
                 )
-
-                if isinstance(ctx, commands.Context):
-                    await self.bot_db.log_proof_action(ctx.guild.id, case_id, message.id, ctx.author.id)
-                elif isinstance(ctx, discord.Interaction):
-                    await self.bot_db.log_proof_action(ctx.guild.id, case_id, message.id, ctx.user.id)
-
-            if failed_proofs:
-                note = f"{len(failed_proofs)} proof(s) could not be fetched (link expired or inaccessible)."
-                await channel.send(content=note)
+            )
 
         return case_id
 
@@ -393,5 +311,5 @@ class LilyLoggingController:
     async def log_proofs(self, interaction: discord.Interaction):
         if interaction.guild is None:
             return
-        modal = ProofComponentModal(self)
+        modal = ProofComponentModal()
         await interaction.response.send_modal(modal)
