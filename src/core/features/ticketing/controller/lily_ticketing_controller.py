@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import io
-import json
 import logging
 
 import discord
@@ -11,6 +10,7 @@ from discord.ext import commands
 from typing import List, TYPE_CHECKING, cast
 
 from src.core.configs.bot_details import img
+from src.core.database.integrations.bot_globals import LilyError
 from src.core.utils.embeds.sLilyEmbed import (
     ParseAdvancedEmbed,
     simple_embed,
@@ -42,27 +42,28 @@ async def _restore_guild_tickets(bot, bot_db, guild_id: int) -> None:
         logger.exception("[Ticket Component Restore ERROR] guild_id=%s", guild_id)
         return
 
-    for ticket_id, _, submission_json, ticket_message_id, ticket_details_message_id in tickets:
+    for ticket in tickets:
         try:
-            if not submission_json:
+            # `ticket.submission` is already a dict (empty if nothing was stored).
+            if not ticket.submission:
                 continue
 
-            submission = json.loads(submission_json)
+            submission = ticket.submission
 
             # The views only carry this ticket's own submission. Panel config
             # (staff roles, ping roles, ...) is read on demand when a button is pressed.
-            details_view = TicketComponentEmbed(ticket_id, submission)
-            opener_view = TicketOpenerComponent(submission, ticket_id)
+            details_view = TicketComponentEmbed(ticket.id, submission)
+            opener_view = TicketOpenerComponent(submission, ticket.id)
 
-            if ticket_details_message_id:
-                bot.add_view(details_view, message_id=ticket_details_message_id)
+            if ticket.ticket_details_message_id:
+                bot.add_view(details_view, message_id=ticket.ticket_details_message_id)
 
-            if ticket_message_id:
-                bot.add_view(opener_view, message_id=ticket_message_id)
+            if ticket.message_id:
+                bot.add_view(opener_view, message_id=ticket.message_id)
 
         except Exception:
             logger.exception(
-                "[Ticket Component Restore ERROR] guild_id=%s ticket_id=%s", guild_id, ticket_id
+                "[Ticket Component Restore ERROR] guild_id=%s ticket_id=%s", guild_id, ticket.id
             )
 
 
@@ -72,22 +73,20 @@ async def initialize_ticket_view(bot):
         bot_db = _bot.db
         assert bot_db is not None
 
-        panels = await bot_db.get_ticket_view_refs()
+        panels = await bot_db.get_ticket_views()
 
         if not panels:
             logger.info("[InitializeTicketView] No ticket panels found.")
             return
-
-        # Open tickets first (once per guild): their buttons must work right
-        # away instead of waiting behind the per-panel delay below.
-        for guild_id in dict.fromkeys(panel["guild_id"] for panel in panels):
+        
+        for guild_id in dict.fromkeys(panel.guild_id for panel in panels):
             await _restore_guild_tickets(bot, bot_db, guild_id)
 
         for panel in panels:
             try:
-                view_id: int = panel["id"]
-                channel_id: int = panel["channel_id"]
-                message_id: int = panel["message_id"]
+                view_id: int = panel.id
+                channel_id: int = panel.channel_id
+                message_id: int = panel.message_id
 
                 channel = _bot.get_channel(channel_id)
 
@@ -101,7 +100,7 @@ async def initialize_ticket_view(bot):
                         continue
 
                 try:
-                    selector_view = await TicketSelectComponent.from_db(bot_db, view_id)
+                    selector_view = TicketSelectComponent(panel.panel, panel.types)
                 except Exception:
                     logger.exception(
                         "[InitializeTicketView] Could not build panel %s (channel %s)",
@@ -109,8 +108,6 @@ async def initialize_ticket_view(bot):
                     )
                     continue
 
-                # Scoped to the panel message: a single global "ticket_selector_main"
-                # view would only ever route interactions to the last panel registered.
                 bot.add_view(selector_view, message_id=message_id)
 
                 try:
@@ -133,7 +130,7 @@ async def initialize_ticket_view(bot):
                 await asyncio.sleep(1)
 
             except Exception:
-                logger.exception("[TicketPanel Restore ERROR] panel=%s", panel)
+                logger.exception("[TicketPanel Restore ERROR] panel=%s", panel.id)
                 continue
 
     except Exception:
@@ -148,7 +145,6 @@ async def spawn_ticket(ctx: commands.Context, json_data: dict) -> None:
     assert bot_db is not None
 
     try:
-        # Reject a bad config BEFORE anything is posted to the channel.
         bot_db.validate_ticket_config(json_data)
 
         channel_id = int(json_data["BasicConfigurations"]["TicketPanelSpawnChannel"])
@@ -161,8 +157,6 @@ async def spawn_ticket(ctx: commands.Context, json_data: dict) -> None:
         if not isinstance(channel_obj, discord.TextChannel):
             raise RuntimeError("Invalid ticket panel channel.")
 
-        # The row can't exist before the message does (message_id is NOT NULL),
-        # so the very first render comes straight from the config being saved.
         selector_view = TicketSelectComponent.from_config(json_data)
 
         message_obj = await channel_obj.send(
@@ -170,7 +164,6 @@ async def spawn_ticket(ctx: commands.Context, json_data: dict) -> None:
             allowed_mentions=discord.AllowedMentions.none()
         )
 
-        # Scoped to the panel message so several panels never fight over one custom_id.
         ctx.bot.add_view(selector_view, message_id=message_obj.id)
 
         await bot_db.save_ticket_view(
@@ -180,7 +173,7 @@ async def spawn_ticket(ctx: commands.Context, json_data: dict) -> None:
             config=json_data
         )
 
-    except ValueError as exc:
+    except (LilyError, ValueError) as exc:
         await ctx.reply(f"Invalid ticket configuration: {exc}")
 
     except Exception:
@@ -221,8 +214,8 @@ async def rename_ticket(interaction: discord.Interaction, name: str):
     assert bot_db is not None
 
     try:
-        owner = await bot_db.get_ticket_owner(interaction.channel.id)
-        if owner:
+        ticket = await bot_db.get_ticket_by_id(interaction.channel.id)
+        if ticket is not None:
             await interaction.channel.edit(name=name.replace(" ", "_"), reason=f"Ticket renamed by {interaction.user}")
             await interaction.response.send_message(embed=simple_embed("Ticket renamed successfully!"))
         else:
@@ -262,9 +255,9 @@ async def ticket_add_user(
     assert bot_db is not None
 
     try:
-        owner = await bot_db.get_ticket_owner(interaction.channel.id)
+        ticket = await bot_db.get_ticket_by_id(interaction.channel.id)
 
-        if not owner:
+        if ticket is None:
             await interaction.response.send_message(
                 embed=simple_embed(
                     "Attempted to add a member to an invalid instigator ticket.",
@@ -341,9 +334,9 @@ async def ticket_remove_user(
     try:
         bot_db = cast("Lily", interaction.client).db
         assert bot_db is not None
-        owner = await bot_db.get_ticket_owner(interaction.channel.id)
+        ticket = await bot_db.get_ticket_by_id(interaction.channel.id)
 
-        if not owner:
+        if ticket is None:
             await interaction.response.send_message(
                 embed=simple_embed(
                     "Attempted to remove a member to an invalid instigator ticket.",
@@ -444,14 +437,16 @@ async def ticket_close(interaction: discord.Interaction, reason: str="No reason 
     try:
         bot_db = cast("Lily", interaction.client).db
         assert bot_db is not None
-        row = await bot_db.get_ticket_by_id(ticket_id)
-        if not row:
+        ticket = await bot_db.get_ticket_by_id(ticket_id)
+        if ticket is None:
             raise RuntimeError("Ticket data not found")
 
-        opened_user_id, ticket_type, logs_channel_id, submission_json_raw, claimer_user_id = row
-        submission_json = json.loads(submission_json_raw)
+        opened_user_id = ticket.opened_user_id
+        ticket_type = ticket.ticket_type or "unknown"
+        logs_channel_id = ticket.log_channel_id or 0
+        submission_json = ticket.submission
+        claimer_user_id = ticket.claimer_user_id
 
-        # Read on demand: staff roles edited since the ticket was opened apply immediately.
         _, higher_staffs_roles_id = await resolve_ticket_roles(
             bot_db, interaction.guild.id, submission_json
         )

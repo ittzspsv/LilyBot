@@ -6,14 +6,22 @@ from discord.ext import commands
 import src.core.configs.bot_details as Configs
 from src.core.configs.bot_details import emoji, img
 
-from datetime import datetime, timezone
+from datetime import datetime
 from zoneinfo import ZoneInfo
 from src.core.utils.embeds.sLilyEmbed import simple_embed
 from ..embeds.staff_management_embed import loa_accept_embed, loa_reject_embed, infraction_embed
-from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
+from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess, LilyError
+from src.core.database.integrations.models import (
+    Page,
+    RankUpdate,
+    Staff,
+    StaffCounts,
+    StaffProfile,
+    Strike,
+)
 
 
-from typing import List, Any, Tuple, Dict, Optional, cast, TYPE_CHECKING
+from typing import List, Tuple, Optional, cast, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.lily import Lily
@@ -22,21 +30,22 @@ logger = logging.getLogger("lily")
 
 
 class StaffDataView(discord.ui.LayoutView):
-    def __init__(self, member: discord.Member | discord.User, data: dict) -> None:
+    def __init__(self, member: discord.Member | discord.User, profile: StaffProfile) -> None:
         super().__init__(timeout=None)
 
+        staff = profile.staff
         name = member.display_name
-        role_ids = data.get("role_ids")
-        is_loa = data.get("is_loa")
-        strikes_count = data.get("strikes_count")
-        joined_on = data.get("joined_on")
-        timezone = data.get("timezone")
-        responsibility = data.get("responsibility")
-        retired = data.get("retired")
+        role_ids = profile.role_ids
+        timezone = profile.timezone
 
-        if is_loa == 1:
+        joined = staff.joined
+        joined_ts = int(joined.timestamp()) if joined else None
+        join_date = f"<t:{joined_ts}:D>" if joined_ts else "N/A"
+        experience = f"<t:{joined_ts}:R>" if joined_ts else "N/A"
+
+        if staff.on_loa:
             status_display = f"{Configs.emoji['dnd']} On Leave"
-        elif retired == 1:
+        elif staff.retired:
             status_display = f"{Configs.emoji['invisible']} Retired"
         else:
             status_display = f"{Configs.emoji['online']} Active"
@@ -62,8 +71,8 @@ class StaffDataView(discord.ui.LayoutView):
                 discord.ui.TextDisplay(
                     "### Basic Information\n"
                     f"{Configs.emoji['staff']} **Role:** {', '.join(f'<@&{rid}>' for rid in role_ids) if role_ids else 'N/A'}\n"
-                    f"{Configs.emoji['pencil']} **Responsibilities:** {responsibility or 'N/A'}\n"
-                    f"{Configs.emoji['calender']} **Join Date:** <t:{joined_on}:D>"
+                    f"{Configs.emoji['pencil']} **Responsibilities:** {staff.responsibility or 'N/A'}\n"
+                    f"{Configs.emoji['calender']} **Join Date:** {join_date}"
                 ),
                 accessory=discord.ui.Thumbnail(media=avatar_url),
             )
@@ -84,7 +93,7 @@ class StaffDataView(discord.ui.LayoutView):
         container.add_item(
             discord.ui.TextDisplay(
                 "### Experience Information\n"
-                f"{Configs.emoji['clock']} **Evaluated Experience:** <t:{joined_on}:R>"
+                f"{Configs.emoji['clock']} **Evaluated Experience:** {experience}"
             )
         )
 
@@ -93,7 +102,7 @@ class StaffDataView(discord.ui.LayoutView):
         container.add_item(
             discord.ui.TextDisplay(
                 "### Strikes Information\n"
-                f"{Configs.emoji['warn']} **Strike Count:** **{strikes_count}**"
+                f"{Configs.emoji['warn']} **Strike Count:** **{profile.strikes_count}**"
             )
         )
 
@@ -108,7 +117,7 @@ class StaffListView(discord.ui.LayoutView):
         self,
         interaction: discord.Interaction,
         role_id: int,
-        staff_list_data: Dict[str, Any],
+        staff_list_data: Page[StaffProfile],
         db: BotGlobalsDatabaseAccess,
         *,
         guild_id: int,
@@ -124,10 +133,10 @@ class StaffListView(discord.ui.LayoutView):
 
         self.message: discord.Message | None = None
 
-        self.page = staff_list_data["page"]
-        self.max_page = staff_list_data["max_page"]
-        self.total_staff = staff_list_data["total_count"]
-        staffs = staff_list_data["results"]
+        self.page = staff_list_data.page
+        self.max_page = staff_list_data.max_page
+        self.total_staff = staff_list_data.total_count
+        staffs = staff_list_data.items
 
         assert isinstance(interaction.guild, discord.Guild)
 
@@ -136,16 +145,18 @@ class StaffListView(discord.ui.LayoutView):
 
         staff_sections = []
 
-        for i, staff in enumerate(staffs):
-            avatar = staff.get('avatar_profile') or interaction.guild.me.display_avatar.url
+        for i, profile in enumerate(staffs):
+            avatar = profile.staff.avatar_url or interaction.guild.me.display_avatar.url
+            joined = profile.staff.joined
+            joined_display = f"<t:{int(joined.timestamp())}:R>" if joined else "N/A"
 
             staff_sections.append(
                 discord.ui.Section(
                     discord.ui.TextDisplay(
                         content=(
-                            f"### <@{staff.get('id','Unknown')}>\n"
-                            f"- Timezone : {staff.get('timezone','Default')}\n"
-                            f"- Joined : <t:{staff.get('joined_on')}:R>"
+                            f"### {profile.staff.mention}\n"
+                            f"- Timezone : {profile.timezone or 'Default'}\n"
+                            f"- Joined : {joined_display}"
                         )
                     ),
                     accessory=discord.ui.Thumbnail(media=avatar)
@@ -195,7 +206,7 @@ class StaffListView(discord.ui.LayoutView):
         left = discord.ui.Button(
             style=discord.ButtonStyle.secondary,
             emoji=Configs.emoji["left"],
-            disabled=not self.staff_list_data["has_prev"],
+            disabled=not self.staff_list_data.has_prev,
         )
         left.callback = self.left_paginator_callback
         row.add_item(left)
@@ -210,7 +221,7 @@ class StaffListView(discord.ui.LayoutView):
         right = discord.ui.Button(
             style=discord.ButtonStyle.secondary,
             emoji=Configs.emoji["right"],
-            disabled=not self.staff_list_data["has_next"],
+            disabled=not self.staff_list_data.has_next,
         )
         right.callback = self.right_paginator_callback
         row.add_item(right)
@@ -254,15 +265,12 @@ class StaffListView(discord.ui.LayoutView):
         await self._refresh_page(interaction, self.page + 1)
 
 class LOAStaffsView(discord.ui.LayoutView):
-    def __init__(self, interaction: discord.Interaction, staff_datas: List[Dict[str, Any]]):
+    def __init__(self, interaction: discord.Interaction, staff_datas: List[Staff]):
         super().__init__()
 
         self.staff_datas = staff_datas
         self.interaction = interaction
-        self.staff_ids = ""
-
-        for staff_data in staff_datas:
-            self.staff_ids += f'<@{staff_data.get("staff_id")}>\n'
+        self.staff_ids = "".join(f"{staff.mention}\n" for staff in staff_datas)
 
         if not self.staff_ids:
             self.staff_ids = "No Staffs Returned"
@@ -288,7 +296,7 @@ class LOAStaffsView(discord.ui.LayoutView):
         self.add_item(self.container)
 
 class StaffsView(discord.ui.LayoutView):
-    def __init__(self, interaction: discord.Interaction | commands.Context, ranks: List[int], overall_details: Dict[str, Dict[str, int]]):
+    def __init__(self, interaction: discord.Interaction | commands.Context, ranks: List[int], overall_details: StaffCounts):
         super().__init__(timeout=None)
 
         assert interaction.guild is not None
@@ -333,9 +341,9 @@ class StaffsView(discord.ui.LayoutView):
             discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
             discord.ui.TextDisplay(content="### Server Staff Team\n- List of Role Category who has **Moderation/Administration/Management** Authority"),
             discord.ui.TextDisplay(content=f"### __Overall Details__\n"
-                        f"- **ON LOA** - `{overall_details['staff']['loa']}`\n"
-                        f"- **Active Staffs** - `{overall_details['staff']['active']}`\n"
-                        f"- **Total Staffs** - `{overall_details['staff']['total']}`"),
+                        f"- **ON LOA** - `{overall_details.loa}`\n"
+                        f"- **Active Staffs** - `{overall_details.active}`\n"
+                        f"- **Total Staffs** - `{overall_details.total}`"),
             discord.ui.ActionRow(self.roles_selector),
             discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
             discord.ui.Section(
@@ -387,7 +395,7 @@ class StaffsView(discord.ui.LayoutView):
         try:
             bot_db = cast("Lily", interaction.client).db
             assert bot_db is not None
-            staff_datas: List[Dict[str, Any]] = await bot_db.fetch_loa_staffs(interaction.guild.id, "staff")
+            staff_datas = await bot_db.fetch_loa_staffs(interaction.guild.id, "staff")
             view = LOAStaffsView(interaction, staff_datas)
             await interaction.response.send_message(view=view, ephemeral=True)
         except discord.HTTPException:
@@ -478,12 +486,15 @@ class LOARequestView(discord.ui.LayoutView):
             return
 
         try:
-            result = await self.bot_db.add_loa(
+            changes = await self.bot_db.add_loa(
                 interaction.guild.id,
                 self.staff_id,
                 self.reason,
                 interaction.user.id
             )
+        except LilyError as e:
+            await self._safe_followup(interaction, str(e), is_error=True)
+            return
         except Exception:
             logger.exception(
                 "LOARequestView.accept_button_callback: add_loa DB call failed (guild_id=%s, staff_id=%s)",
@@ -492,82 +503,75 @@ class LOARequestView(discord.ui.LayoutView):
             await self._safe_followup(interaction, "Failed to add LOA due to an internal error.")
             return
 
-        if result.get("success"):
-            """ Removing the pending from LOA """
+        """ Removing the pending from LOA """
+        try:
+            await self.bot_db.delete_loa_pending(self.staff_id, interaction.guild.id)
+        except Exception:
+            logger.exception(
+                "LOARequestView.accept_button_callback: delete_loa_pending failed (staff_id=%s, guild_id=%s)",
+                self.staff_id, interaction.guild.id,
+            )
+
+        staff_member: Optional[discord.Member] = interaction.guild.get_member(self.staff_id)
+        if staff_member is None:
             try:
-                await self.bot_db.delete_loa_pending(self.staff_id, interaction.guild.id)
+                staff_member = await interaction.guild.fetch_member(self.staff_id)
+            except discord.HTTPException:
+                logger.exception(
+                    "LOARequestView.accept_button_callback: failed to fetch staff member (staff_id=%s, guild_id=%s)",
+                    self.staff_id, interaction.guild.id,
+                )
+                await self._safe_followup(interaction, "Failed to fetch the staff member")
+                return
             except Exception:
                 logger.exception(
-                    "LOARequestView.accept_button_callback: delete_loa_pending failed (staff_id=%s, guild_id=%s)",
-                    self.staff_id, interaction.guild.id,
-                )
-
-            roles_to_remove = set(result.get("roles_to_remove", ()))
-            roles_to_add = set(result.get("roles_to_add", ()))
-
-            staff_member: Optional[discord.Member] = interaction.guild.get_member(self.staff_id)
-            if staff_member is None:
-                try:
-                    staff_member = await interaction.guild.fetch_member(self.staff_id)
-                except discord.HTTPException:
-                    logger.exception(
-                        "LOARequestView.accept_button_callback: failed to fetch staff member (staff_id=%s, guild_id=%s)",
-                        self.staff_id, interaction.guild.id,
-                    )
-                    await self._safe_followup(interaction, "Failed to fetch the staff member")
-                    return
-                except Exception:
-                    logger.exception(
-                        "LOARequestView.accept_button_callback: unexpected error fetching staff member (staff_id=%s)",
-                        self.staff_id,
-                    )
-                    await self._safe_followup(interaction, "Failed to fetch the staff member")
-                    return
-
-            current_roles = set(staff_member.roles)
-
-            remove_roles = {
-                interaction.guild.get_role(rid)
-                for rid in roles_to_remove
-            }
-            remove_roles = {r for r in remove_roles if r}
-
-            add_roles = {
-                interaction.guild.get_role(rid)
-                for rid in roles_to_add
-            }
-            add_roles = {r for r in add_roles if r}
-
-            new_roles = (current_roles - remove_roles) | add_roles
-
-            try:
-                await staff_member.edit(
-                    roles=list(new_roles),
-                    reason="LOA assigned"
-                )
-            except discord.HTTPException:
-                logger.exception(
-                    "LOARequestView.accept_button_callback: failed to edit staff member roles (staff_id=%s, guild_id=%s)",
-                    self.staff_id, interaction.guild.id,
-                )
-                await self._safe_followup(interaction, "LOA was recorded, but I couldn't update the staff member's roles. Please update them manually.")
-                return
-
-            try:
-                await staff_member.send(
-                    embed=loa_accept_embed(interaction.user.id, interaction.guild.name)
-                )
-            except discord.HTTPException:
-                logger.exception(
-                    "LOARequestView.accept_button_callback: failed to DM staff member acceptance notice (staff_id=%s)",
+                    "LOARequestView.accept_button_callback: unexpected error fetching staff member (staff_id=%s)",
                     self.staff_id,
                 )
+                await self._safe_followup(interaction, "Failed to fetch the staff member")
+                return
 
-            await self.disable_buttons(interaction, "accept")
-            await self._safe_followup(interaction, f"{result.get('message')}")
+        current_roles = set(staff_member.roles)
 
-        else:
-            await self._safe_followup(interaction, f"Failed to add LOA due to internal error {result.get('message')}", is_error=True)
+        remove_roles = {
+            interaction.guild.get_role(rid)
+            for rid in changes.roles_to_remove
+        }
+        remove_roles = {r for r in remove_roles if r}
+
+        add_roles = {
+            interaction.guild.get_role(rid)
+            for rid in changes.roles_to_add
+        }
+        add_roles = {r for r in add_roles if r}
+
+        new_roles = (current_roles - remove_roles) | add_roles
+
+        try:
+            await staff_member.edit(
+                roles=list(new_roles),
+                reason="LOA assigned"
+            )
+        except discord.HTTPException:
+            logger.exception(
+                "LOARequestView.accept_button_callback: failed to edit staff member roles (staff_id=%s, guild_id=%s)",
+                self.staff_id, interaction.guild.id,
+            )
+            await self._safe_followup(interaction, "LOA was recorded, but I couldn't update the staff member's roles. Please update them manually.")
+            return
+
+        try:
+            await staff_member.send(
+                embed=loa_accept_embed(interaction.user.id, interaction.guild.name)
+            )
+        except discord.HTTPException:
+            logger.exception(
+                "LOARequestView.accept_button_callback: failed to DM staff member acceptance notice (staff_id=%s)",
+                self.staff_id,
+            )
+
+        await self.disable_buttons(interaction, "accept")
+        await self._safe_followup(interaction, f"Successfully added LOA for {staff_member.mention}.")
 
     async def reject_button_callback(self, interaction: discord.Interaction):
         assert isinstance(interaction.guild, discord.Guild)
@@ -747,17 +751,17 @@ class LOARequestModal(discord.ui.Modal):
 
         """ Check if the user already has an LOA requested.   """
         try:
-            requested, reason, loa_id = await self.bot_db.has_loa_pending(interaction.user.id, interaction.guild.id)
+            pending = await self.bot_db.get_loa_pending(interaction.user.id, interaction.guild.id)
         except Exception:
             logger.exception(
-                "LOARequestModal.on_submit: has_loa_pending DB call failed (user_id=%s, guild_id=%s)",
+                "LOARequestModal.on_submit: get_loa_pending DB call failed (user_id=%s, guild_id=%s)",
                 interaction.user.id, interaction.guild.id,
             )
             await self._safe_followup(interaction, "Something went wrong while checking your existing LOA status.", is_error=True)
             return
 
-        if requested:
-            return await self._safe_followup(interaction, f"You already have requested an LOA with reason {reason}", is_error=True)
+        if pending is not None:
+            return await self._safe_followup(interaction, f"You already have requested an LOA with reason {pending.reason}", is_error=True)
 
         """ Send the message to the LOA channel """
         try:
@@ -935,7 +939,7 @@ class StrikesListView(discord.ui.LayoutView):
     def __init__(
         self,
         user: Tuple[str, str],
-        strikes_list_data: Dict[str, Any],
+        strikes_list_data: Page[Strike],
         db: BotGlobalsDatabaseAccess,
         *,
         guild_id: int,
@@ -955,10 +959,10 @@ class StrikesListView(discord.ui.LayoutView):
         self.channel = None
         self.message: discord.Message | None = None
 
-        self.page = strikes_list_data["page"]
-        self.max_page = strikes_list_data["max_page"]
-        self.total_count = strikes_list_data["total_count"]
-        page_strikes = strikes_list_data["results"]
+        self.page = strikes_list_data.page
+        self.max_page = strikes_list_data.max_page
+        self.total_count = strikes_list_data.total_count
+        page_strikes = strikes_list_data.items
 
         strike_info = discord.ui.Container(
             discord.ui.Section(
@@ -978,21 +982,22 @@ class StrikesListView(discord.ui.LayoutView):
         strikes: List[discord.ui.Item] = []
 
         for strike in page_strikes:
-            strike_id = strike.get("strike_id")
-            expired = strike.get("expired", False)
-            type: str = strike.get("type", "Unknown")
+            expired = strike.is_expired()
+            type: str = strike.type or "Unknown"
 
             info_button: discord.ui.Button = discord.ui.Button(
                 style=discord.ButtonStyle.danger if expired else discord.ButtonStyle.secondary,
                 emoji=Configs.emoji["paper_clip"],
-                custom_id=str(strike_id),
+                custom_id=str(strike.id),
             )
             info_button.callback = self.strike_info_callback
 
             status_marker = f"{Configs.emoji['clock']} Expired\n" if expired else ""
-            heading = f"### {Configs.emoji['pin']} {type.title()} #{strike_id}"
+            heading = f"### {Configs.emoji['pin']} {type.title()} #{strike.id}"
             if expired:
-                heading = f"### ~~{Configs.emoji['pin']} {type.title()} #{strike_id}~~"
+                heading = f"### ~~{Configs.emoji['pin']} {type.title()} #{strike.id}~~"
+
+            manager = f"<@{strike.issued_by_id}>" if self.elevated else "Hidden"
 
             strikes.append(
                 discord.ui.Section(
@@ -1000,8 +1005,8 @@ class StrikesListView(discord.ui.LayoutView):
                         content=(
                             f"{heading}\n"
                             f"{status_marker}"
-                            f"> {Configs.emoji['shield']} Management: <@{strike['manager'] if self.elevated else "Hidden"}>\n"
-                            f"> {Configs.emoji['pencil']} Reason: {strike['reason']}"
+                            f"> {Configs.emoji['shield']} Management: {manager}\n"
+                            f"> {Configs.emoji['pencil']} Reason: {strike.reason}"
                         )
                     ),
                     accessory=info_button,
@@ -1024,7 +1029,7 @@ class StrikesListView(discord.ui.LayoutView):
         prev_button: discord.ui.Button = discord.ui.Button(
             style=discord.ButtonStyle.secondary,
             emoji=Configs.emoji["left"],
-            disabled=not self.strikes_list_data["has_prev"],
+            disabled=not self.strikes_list_data.has_prev,
         )
         prev_button.callback = self.previous_button_callback
         row.add_item(prev_button)
@@ -1039,7 +1044,7 @@ class StrikesListView(discord.ui.LayoutView):
         next_button: discord.ui.Button = discord.ui.Button(
             style=discord.ButtonStyle.secondary,
             emoji=Configs.emoji["right"],
-            disabled=not self.strikes_list_data["has_next"],
+            disabled=not self.strikes_list_data.has_next,
         )
         next_button.callback = self.next_button_callback
         row.add_item(next_button)
@@ -1123,35 +1128,35 @@ class StrikesListView(discord.ui.LayoutView):
         if strike_id is None:
             return
         assert interaction.guild is not None
-        strike_info = await self.db.get_strike(int(strike_id), interaction.guild.id)
-        if strike_info is None:
+        strike = await self.db.get_strike(int(strike_id), interaction.guild.id)
+        if strike is None:
             await interaction.response.send_message(embed=simple_embed("Strike not found.", 'cross'), ephemeral=True)
             return
 
-        issued_by = f"<@{strike_info['issued_by_id']}>" if self.elevated else "Hidden"
-        reason = strike_info["reason"] or "No reason provided"
-        date_raw = strike_info["date"]
-        date = f"<t:{int(datetime.fromisoformat(date_raw).timestamp())}:R>" if date_raw else "Unknown"
-        expiry_raw = strike_info["expiry_date"]
+        issued_by = f"<@{strike.issued_by_id}>" if self.elevated else "Hidden"
+        reason = strike.reason or "No reason provided"
 
-        now_iso = datetime.now(timezone.utc).isoformat()
-        is_expired = expiry_raw is not None and expiry_raw <= now_iso
+        issued_at = strike.issued_at
+        date = f"<t:{int(issued_at.timestamp())}:R>" if issued_at else "Unknown"
 
-        if expiry_raw is None:
+        is_expired = strike.is_expired()
+        expires_at = strike.expires_at
+
+        if expires_at is None:
             expiry = "Never"
         elif is_expired:
-            expiry = f"<t:{int(datetime.fromisoformat(expiry_raw).timestamp())}:R> (Expired)"
+            expiry = f"<t:{int(expires_at.timestamp())}:R> (Expired)"
         else:
-            expiry = f"<t:{int(datetime.fromisoformat(expiry_raw).timestamp())}:R>"
+            expiry = f"<t:{int(expires_at.timestamp())}:R>"
 
-        strike_type = strike_info["type"] or "Standard"
+        strike_type = strike.type or "Standard"
         title_prefix = "~~" if is_expired else ""
         title_suffix = "~~ (Expired)" if is_expired else ""
 
         view = discord.ui.LayoutView(timeout=None).add_item(
             discord.ui.Container(
                 discord.ui.Section(
-                    discord.ui.TextDisplay(f"## {title_prefix}{Configs.emoji['pin']} {strike_type.title()} | {strike_info['strike_id']}{title_suffix}"),
+                    discord.ui.TextDisplay(f"## {title_prefix}{Configs.emoji['pin']} {strike_type.title()} | {strike.id}{title_suffix}"),
                     discord.ui.TextDisplay(
                         f"> {Configs.emoji['staff']} Issued by: {issued_by}\n"
                         f"> {Configs.emoji['calender']} Issued On: {date}\n"
@@ -1174,7 +1179,7 @@ class QuotaEvaluator(discord.ui.LayoutView):
 class RankUpdateList(discord.ui.LayoutView):
     def __init__(
         self,
-        rank_result: dict[str, Any],
+        rank_result: Page[RankUpdate],
         *,
         thumbnail_url: str,
         staff_id: int | None = None,
@@ -1183,9 +1188,9 @@ class RankUpdateList(discord.ui.LayoutView):
     ) -> None:
         super().__init__(timeout=None)
 
-        self.page: int = rank_result["page"]
-        self.max_page: int = rank_result["max_page"]
-        self.total_count: int = rank_result["total_count"]
+        self.page: int = rank_result.page
+        self.max_page: int = rank_result.max_page
+        self.total_count: int = rank_result.total_count
 
         self.staff_id = staff_id
         self.updated_by = updated_by
@@ -1199,33 +1204,30 @@ class RankUpdateList(discord.ui.LayoutView):
         _TYPE_DISPLAY = {"promotion": "Promoted", "demotion": "Demoted"}
 
         entries: list[discord.ui.TextDisplay | discord.ui.Separator] = []
-        for index, result in enumerate(rank_result["results"]):
+        for index, result in enumerate(rank_result.items):
             if index:
                 entries.append(
                     discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small)
                 )
 
-            old_role = f"<@&{result['old_role_id']}>" if result["old_role_id"] else "*None*"
-            new_role = f"<@&{result['new_role_id']}>" if result["new_role_id"] else "*None*"
+            old_role = f"<@&{result.old_role_id}>" if result.old_role_id else "*None*"
+            new_role = f"<@&{result.new_role_id}>" if result.new_role_id else "*None*"
 
-            reason = discord.utils.escape_markdown(" ".join((result["reason"] or "").split()))
+            reason = discord.utils.escape_markdown(" ".join((result.reason or "").split()))
             if not reason:
                 reason = "*No reason provided*"
             elif len(reason) > REASON_MAX:
                 reason = reason[: REASON_MAX - 1] + "…"
 
-            unix_ts = int(
-                datetime.fromisoformat(result["timestamp"])
-                .replace(tzinfo=timezone.utc)
-                .timestamp()
-            )
+            occurred_at = result.occurred_at
+            timestamp = f"<t:{int(occurred_at.timestamp())}:f>" if occurred_at else "Unknown"
 
             entries.append(
                 discord.ui.TextDisplay(
                     content=(
-                        f"### <@{result['updated_by']}> {_TYPE_DISPLAY.get(result['update_type'], 'Rank Update')} <@{result['staff_id']}>\n"
+                        f"### <@{result.updated_by}> {_TYPE_DISPLAY.get(result.update_type, 'Rank Update')} <@{result.staff_id}>\n"
                         f"- Role: {old_role} → {new_role}\n"
-                        f"- {emoji['clock']} Timestamp: <t:{unix_ts}:f>\n"
+                        f"- {emoji['clock']} Timestamp: {timestamp}\n"
                         f"- Reason: {reason}"
                     )
                 )
@@ -1239,7 +1241,7 @@ class RankUpdateList(discord.ui.LayoutView):
         self.prev_button = discord.ui.Button(
             style=discord.ButtonStyle.secondary,
             emoji=emoji["left"],
-            disabled=not rank_result["has_prev"],
+            disabled=not rank_result.has_prev,
         )
         self.prev_button.callback = self.on_prev
 
@@ -1252,7 +1254,7 @@ class RankUpdateList(discord.ui.LayoutView):
         self.next_button = discord.ui.Button(
             style=discord.ButtonStyle.secondary,
             emoji=emoji["right"],
-            disabled=not rank_result["has_next"],
+            disabled=not rank_result.has_next,
         )
         self.next_button.callback = self.on_next
 

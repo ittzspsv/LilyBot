@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List, Optional, cast, Any, TYPE_CHECKING
+from typing import Dict, List, Optional, Sequence, cast, Any, TYPE_CHECKING
 import re
 import logging
 
@@ -20,6 +20,12 @@ from src.core.features.moderation.components.lily_moderation_components import (
 )
 
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
+from src.core.database.integrations.models import (
+    Page,
+    TicketLog,
+    TicketPanel,
+    TicketType,
+)
 
 from src.core.utils.embeds.sLilyEmbed import (
     simple_embed,
@@ -42,15 +48,20 @@ bot = None
 async def resolve_ticket_roles(bot_db: BotGlobalsDatabaseAccess, guild_id: int, submission_json: dict) -> tuple[set[int], set[int]]:
     """(ping_roles, higher_staff_roles) as configured right now. Empty if the panel no longer exists."""
     panel_message_id = submission_json.get("message_id")
-    view_id = await bot_db.get_ticket_view_id(guild_id, panel_message_id) if panel_message_id else None
-
-    if view_id is None:
+    if not panel_message_id:
         return set(), set()
 
-    ping_roles = await bot_db.get_ticket_ping_roles(view_id, submission_json["ticket_name_base"])
-    staff_roles = await bot_db.get_ticket_view_staff_roles(view_id)
+    view = await bot_db.get_ticket_view(message_id=panel_message_id, guild_id=guild_id)
+    if view is None:
+        return set(), set()
 
-    return set(ping_roles), set(staff_roles)
+    ticket_type = view.get_type(submission_json["ticket_name_base"])
+    ping_roles = set(ticket_type.ping_roles) if ticket_type else set()
+
+    return ping_roles, set(view.staff_role_ids)
+
+def _discord_ts(dt: datetime | None, style: str = "f") -> str:
+    return f"<t:{int(dt.timestamp())}:{style}>" if dt else "*Unknown*"
 
 
 """ Modals for ticket panel moderation. """
@@ -461,14 +472,20 @@ class TicketOpenerComponent(discord.ui.LayoutView):
 
         if not success:
             try:
-                claimer = await bot_db.get_ticket_claimer(interaction.channel.id)
+                ticket = await bot_db.get_ticket_by_id(interaction.channel.id)
+                claimer = ticket.claimer_user_id if ticket else None
             except Exception:
                 logger.exception(
-                    "TicketOpenerComponent.claim_ticket_callback: get_ticket_claimer failed for channel %s",
+                    "TicketOpenerComponent.claim_ticket_callback: get_ticket_by_id failed for channel %s",
                     interaction.channel.id
                 )
                 await interaction.followup.send(embed=simple_embed("This ticket is already claimed, but the claimer could not be determined.", 'cross'), ephemeral=True)
                 return
+
+            if claimer is None:
+                await interaction.followup.send(embed=simple_embed("This ticket is already claimed, but the claimer could not be determined.", 'cross'), ephemeral=True)
+                return
+
             await interaction.followup.send(
                 embed=simple_embed(f"<@{claimer}> has already claimed this ticket!", 'cross'),
                 ephemeral=True
@@ -522,10 +539,11 @@ class TicketOpenerComponent(discord.ui.LayoutView):
         assert bot_db is not None
 
         try:
-            claimer = await bot_db.get_ticket_claimer(interaction.channel.id)
+            ticket = await bot_db.get_ticket_by_id(interaction.channel.id)
+            claimer = ticket.claimer_user_id if ticket else None
         except Exception:
             logger.exception(
-                "TicketOpenerComponent.revoke_claim_callback: get_ticket_claimer failed for channel %s",
+                "TicketOpenerComponent.revoke_claim_callback: get_ticket_by_id failed for channel %s",
                 interaction.channel.id
             )
             await interaction.followup.send(embed=simple_embed("Failed to look up the ticket claimer due to a database error!", 'cross'), ephemeral=True)
@@ -861,26 +879,10 @@ class TicketComponentEmbed(discord.ui.LayoutView):
         bot_db = cast("Lily", interaction.client).db
         assert bot_db is not None
 
-        try:
-            _guild_id = bot_db.get_secondary_guild_id(interaction.guild.id) or interaction.guild.id
-        except Exception:
-            logger.exception(
-                "TicketComponentEmbed.case_list_handler: get_secondary_guild_id failed for guild %s",
-                interaction.guild.id
-            )
-            await interaction.response.send_message(embed=simple_embed("Failed to resolve the guild configuration!", 'cross'), ephemeral=True)
-            return
-
-        """ Fetch modlogs of the given member """
-        payload = {
-            "guild_id": _guild_id,
-            "target_user_id": member_data["id"],
-            "moderator_id": None,
-            "mod_type": "all"
-        }
+        _guild_id = interaction.guild.id
 
         try:
-            result = await bot_db.fetch_mod_logs(**payload)
+            result = await bot_db.fetch_mod_logs(_guild_id, member_data["id"])
         except Exception:
             logger.exception(
                 "TicketComponentEmbed.case_list_handler: fetch_mod_logs failed for user %s in guild %s",
@@ -889,7 +891,7 @@ class TicketComponentEmbed(discord.ui.LayoutView):
             await interaction.response.send_message(embed=simple_embed("Failed to fetch mod logs due to a database error!", 'cross'), ephemeral=True)
             return
 
-        if not result["success"]:
+        if result.total_count == 0:
             await interaction.response.send_message(embed=simple_embed("No cases found.", 'cross'), ephemeral=True)
             return  
 
@@ -958,11 +960,11 @@ class TicketComponentEmbed(discord.ui.LayoutView):
             )
 
 class TicketModal(discord.ui.Modal):
-    def __init__(self, title: str, ticket: dict, view_id: int, message: discord.Message):
+    def __init__(self, title: str, ticket: TicketType, view_id: int, message: discord.Message):
         super().__init__(title=title)
 
-        if not isinstance(ticket, dict):
-            raise TypeError(f"ticket must be a dict, got {type(ticket)}")
+        if not isinstance(ticket, TicketType):
+            raise TypeError(f"ticket must be a TicketType, got {type(ticket)}")
 
         self.components: List[Dict] = []
         self.ticket = ticket
@@ -970,7 +972,7 @@ class TicketModal(discord.ui.Modal):
         self.converter = MemberConverter()
         self.message = message
 
-        self.fields = self.ticket.get("fields")
+        self.fields = self.ticket.fields
 
         if not isinstance(self.fields, list):
             raise TypeError(f"fields must be a list, got {type(self.fields)}")
@@ -1030,7 +1032,7 @@ class TicketModal(discord.ui.Modal):
             self.add_item(item)
         
 
-    async def ticket_thread_constructor(self, interaction: discord.Interaction, submission_json: dict, settings: dict, higher_staff_roles_ids: List[int]) -> discord.TextChannel | discord.Thread | None:
+    async def ticket_thread_constructor(self, interaction: discord.Interaction, submission_json: dict, logging_channel_id: int, higher_staff_roles_ids: List[int]) -> discord.TextChannel | discord.Thread | None:
         if interaction.guild is None:
             return None
 
@@ -1060,7 +1062,6 @@ class TicketModal(discord.ui.Modal):
         roles = submission_json.get("ping_roles", [])
 
         opener = interaction.user
-        logging_channel_id = settings["logging_channel_id"]
         ticket_name_base: str = submission_json["ticket_name_base"]
         channel_emoji = submission_json.get("channel_emoji", "")
         ticket_name = f"{channel_emoji}{ticket_name_base}"
@@ -1333,7 +1334,7 @@ class TicketModal(discord.ui.Modal):
         assert bot_db is not None
 
         try:
-            rows = await bot_db.get_ticket_by_opener(interaction.user.id, interaction.guild.id)
+            tickets = await bot_db.get_ticket_by_opener(interaction.user.id, interaction.guild.id)
         except Exception:
             logger.exception(
                 "TicketModal.on_submit: get_ticket_by_opener failed for user %s in guild %s",
@@ -1345,8 +1346,8 @@ class TicketModal(discord.ui.Modal):
             )
             return
 
-        if len(rows) >= 3:
-            references = ", ".join(f"<#{r[0]}>" for r in rows)
+        if len(tickets) >= 3:
+            references = ", ".join(f"<#{t.id}>" for t in tickets)
             await interaction.followup.send(
                 embed=simple_embed(
                     "Your ticket cannot be created.\n"
@@ -1358,8 +1359,7 @@ class TicketModal(discord.ui.Modal):
             return
 
         try:
-            settings = await bot_db.get_ticket_view_settings(self.view_id)
-            higher_staff_role_ids = await bot_db.get_ticket_view_staff_roles(self.view_id)
+            ticket_view = await bot_db.get_ticket_view(view_id=self.view_id)
         except Exception:
             logger.exception(
                 "TicketModal.on_submit: failed to load ticket configuration for panel %s",
@@ -1371,18 +1371,20 @@ class TicketModal(discord.ui.Modal):
             )
             return
 
-        if settings is None or settings.get("logging_channel_id") is None:
+        if ticket_view is None or ticket_view.logging_channel_id is None:
             await interaction.followup.send(
                 embed=simple_embed("This ticket panel is no longer configured. Please contact an admin.", 'cross'),
                 ephemeral=True
             )
             return
 
-        channel_id = self.ticket.get("channel_id")
-        ticket_name_base = self.ticket["ticket_base_name"]
-        channel_emoji = self.ticket.get("channel_emoji") or ""
-        ping_roles = self.ticket.get("ping_roles", [])
-        logs_channel_id = settings["logging_channel_id"]
+        higher_staff_role_ids = ticket_view.staff_role_ids
+        logs_channel_id = ticket_view.logging_channel_id
+
+        channel_id = self.ticket.channel_id
+        ticket_name_base = self.ticket.ticket_base_name
+        channel_emoji = self.ticket.channel_emoji or ""
+        ping_roles = self.ticket.ping_roles
 
         field_data: List[Dict] = []
 
@@ -1534,7 +1536,7 @@ class TicketModal(discord.ui.Modal):
             thread_channel: discord.TextChannel | discord.Thread | None = await self.ticket_thread_constructor(
                 interaction,
                 submission,
-                settings,
+                logs_channel_id,
                 higher_staff_role_ids
             )
         except Exception:
@@ -1578,7 +1580,7 @@ class TicketSelectComponent(discord.ui.LayoutView):
 
     CUSTOM_ID = "ticket_selector_main"
 
-    def __init__(self, panel: dict, ticket_types: List[dict]) -> None:
+    def __init__(self, panel: TicketPanel | None, ticket_types: Sequence[TicketType]) -> None:
         super().__init__(timeout=None)
 
         if not ticket_types:
@@ -1589,19 +1591,19 @@ class TicketSelectComponent(discord.ui.LayoutView):
             custom_id=self.CUSTOM_ID,
             options=[
                 discord.SelectOption(
-                    label=ticket["label"],
-                    emoji=ticket.get("emoji") or None,
-                    description=ticket.get("description") or None,
-                    value=ticket["ticket_base_name"],
+                    label=ticket.label,
+                    emoji=ticket.emoji or None,
+                    description=ticket.description or None,
+                    value=ticket.ticket_base_name,
                 )
                 for ticket in ticket_types
             ],
         )
         self.ticket_options.callback = self.ticket_selector_callback
 
-        title = panel.get("title") or "Support Tickets"
-        description = panel.get("description") or "Select a ticket type below to get started."
-        thumbnail_url = panel.get("thumbnail_url")
+        title = (panel.title if panel else None) or "Support Tickets"
+        description = (panel.description if panel else None) or "Select a ticket type below to get started."
+        thumbnail_url = panel.thumbnail_url if panel else None
 
         if thumbnail_url:
             header = [
@@ -1627,9 +1629,10 @@ class TicketSelectComponent(discord.ui.LayoutView):
     @classmethod
     async def from_db(cls, bot_db: BotGlobalsDatabaseAccess, view_id: int) -> "TicketSelectComponent":
         """Build the panel from the normalized tables (restart / refresh path)."""
-        panel = await bot_db.get_ticket_panel(view_id) or {}
-        ticket_types = await bot_db.get_ticket_view_types(view_id)
-        return cls(panel, ticket_types)
+        view = await bot_db.get_ticket_view(view_id=view_id)
+        if view is None:
+            raise ValueError(f"Ticket panel {view_id} does not exist.")
+        return cls(view.panel, view.types)
 
     @classmethod
     def from_config(cls, config: dict) -> "TicketSelectComponent":
@@ -1639,12 +1642,25 @@ class TicketSelectComponent(discord.ui.LayoutView):
         the config that is about to be saved.
         """
         panel_config = config.get("PanelConfig") or {}
-        panel = {
-            "title": panel_config.get("title"),
-            "description": panel_config.get("description"),
-            "thumbnail_url": (panel_config.get("thumbnail") or {}).get("url"),
-        }
-        return cls(panel, config.get("Tickets") or [])
+        panel = TicketPanel(
+            title=panel_config.get("title"),
+            description=panel_config.get("description"),
+            footer_text=(panel_config.get("footer") or {}).get("text"),
+            thumbnail_url=(panel_config.get("thumbnail") or {}).get("url"),
+        )
+        # The panel row (and therefore real type ids) doesn't exist yet; only the
+        # render fields are used here, so the id is a placeholder.
+        ticket_types = [
+            TicketType(
+                id=0,
+                label=ticket["label"],
+                ticket_base_name=ticket["ticket_base_name"],
+                description=ticket.get("description"),
+                emoji=ticket.get("emoji"),
+            )
+            for ticket in config.get("Tickets") or []
+        ]
+        return cls(panel, ticket_types)
 
     async def ticket_selector_callback(self, interaction: discord.Interaction):
         if interaction.guild is None or interaction.message is None:
@@ -1656,14 +1672,8 @@ class TicketSelectComponent(discord.ui.LayoutView):
         selected = self.ticket_options.values[0]
 
         try:
-            view_id = await bot_db.get_ticket_view_id(
-                interaction.guild.id, interaction.message.id
-            )
-
-            ticket = (
-                await bot_db.get_ticket_view_type(view_id, selected)
-                if view_id is not None
-                else None
+            ticket_view = await bot_db.get_ticket_view(
+                message_id=interaction.message.id, guild_id=interaction.guild.id
             )
         except Exception:
             logger.exception(
@@ -1676,17 +1686,19 @@ class TicketSelectComponent(discord.ui.LayoutView):
             )
             return
 
-        if view_id is None:
+        if ticket_view is None:
             await interaction.response.send_message(
                 embed=simple_embed("This ticket panel is no longer configured!", 'cross'),
                 ephemeral=True
             )
             return
 
+        ticket = ticket_view.get_type(selected)
+
         if ticket is None:
             logger.warning(
                 "TicketSelectComponent.ticket_selector_callback: ticket type %r no longer exists on panel %s",
-                selected, view_id
+                selected, ticket_view.id
             )
             await interaction.response.send_message(
                 embed=simple_embed("That ticket type is no longer available!", 'cross'),
@@ -1696,15 +1708,15 @@ class TicketSelectComponent(discord.ui.LayoutView):
 
         try:
             modal = TicketModal(
-                title=ticket["label"],
+                title=ticket.label,
                 ticket=ticket,
-                view_id=view_id,
+                view_id=ticket_view.id,
                 message=interaction.message
             )
         except (TypeError, ValueError):
             logger.exception(
                 "TicketSelectComponent.ticket_selector_callback: failed to build TicketModal for ticket %r",
-                ticket.get("label")
+                ticket.label
             )
             await interaction.response.send_message(
                 embed=simple_embed("This ticket type is misconfigured. Please contact an admin.", 'cross'),
@@ -1717,7 +1729,7 @@ class TicketSelectComponent(discord.ui.LayoutView):
         except discord.HTTPException:
             logger.exception(
                 "TicketSelectComponent.ticket_selector_callback: failed to send ticket modal for ticket %r",
-                ticket.get("label")
+                ticket.label
             )
 
 class TicketLogComponent(discord.ui.LayoutView):
@@ -1760,7 +1772,7 @@ class TicketLogDirectMessage(discord.ui.LayoutView):
 class TicketList(discord.ui.LayoutView):
     def __init__(
         self,
-        ticket_result: dict[str, Any],
+        ticket_result: Page[TicketLog],
         ticket_types: List[str],
         *,
         opened_user_id: int | None = None,
@@ -1770,34 +1782,37 @@ class TicketList(discord.ui.LayoutView):
     ) -> None:
         super().__init__(timeout=None)
 
-        self.page = ticket_result["page"]
-        self.max_page = ticket_result["max_page"]
-        self.total_count = ticket_result["total_count"]
+        self.page = ticket_result.page
+        self.max_page = ticket_result.max_page
+        self.total_count = ticket_result.total_count
         self.ticket_types = ticket_types
         self.opened_user_id = opened_user_id
         self.staff_handled = staff_handled
         self.ticket_type = ticket_type
         self.guild_avatar: str | None = guild_avatar
 
-        self.ticket_results = ticket_result["results"]
+        self.ticket_results: list[TicketLog] = ticket_result.items
         self.ticket_sections: List[discord.ui.Section] = []
 
-        for result in self.ticket_results:
+        for log in self.ticket_results:
             retrieve_ticket = discord.ui.Button(
                 style=discord.ButtonStyle.secondary,
                 emoji=emoji["paper_clip"],
-                custom_id=str(result["id"]),
+                custom_id=str(log.id),
             )
     
             retrieve_ticket.callback = self.retrieve_ticket_callback
 
+            type_label = (log.ticket_type or "unknown").replace("_", " ").title()
+            staff_label = f"<@{log.staff_handled}>" if log.staff_handled else "*Unassigned*"
+
             self.ticket_sections.append(
                 discord.ui.Section(
                     discord.ui.TextDisplay(
-                        content=f"### {result['ticket_type'].replace("_", " ").title()} | <@{result['opened_user_id']}>"
+                        content=f"### {type_label} | <@{log.opened_user_id}>"
                     ),
                     discord.ui.TextDisplay(
-                        content=f"- {emoji["staff"]} Staff Handled: <@{result['staff_handled']}>\n- {emoji["clock"]} Timestamp: <t:{int(datetime.fromisoformat(result['timestamp']).timestamp())}:f>"
+                        content=f"- {emoji['staff']} Staff Handled: {staff_label}\n- {emoji['clock']} Timestamp: {_discord_ts(log.opened_at)}"
                     ),
                     accessory=retrieve_ticket
                 )
@@ -1806,7 +1821,7 @@ class TicketList(discord.ui.LayoutView):
         self.prev_button = discord.ui.Button(
             style=discord.ButtonStyle.secondary,
             emoji=emoji["left"],
-            disabled=not ticket_result["has_prev"],
+            disabled=not ticket_result.has_prev,
         )
         self.prev_button.callback = self.on_prev
 
@@ -1819,7 +1834,7 @@ class TicketList(discord.ui.LayoutView):
         self.next_button = discord.ui.Button(
             style=discord.ButtonStyle.secondary,
             emoji=emoji["right"],
-            disabled=not ticket_result["has_next"],
+            disabled=not ticket_result.has_next,
         )
         self.next_button.callback = self.on_next
 
@@ -1944,31 +1959,38 @@ class TicketList(discord.ui.LayoutView):
             )
             return
 
-        view = discord.ui.LayoutView().add_item(
-                discord.ui.Container(
-                    discord.ui.Section(
-                        discord.ui.TextDisplay(content="## Ticket Information"),
-                        discord.ui.TextDisplay(content=f"- Showing ticket information for #{ticket_id}"),
-                        accessory=discord.ui.Thumbnail(
-                            media=interaction.guild.icon.url if interaction.guild.icon else interaction.guild.me.display_avatar.url,
-                        ),
+        type_label = (result.ticket_type or "unknown").replace("_", " ").title()
+        reason = result.reason or "*No reason provided*"
+
+        container_items: list[discord.ui.Item] = [
+            discord.ui.Section(
+                discord.ui.TextDisplay(content="## Ticket Information"),
+                discord.ui.TextDisplay(content=f"- Showing ticket information for #{ticket_id}"),
+                accessory=discord.ui.Thumbnail(
+                    media=interaction.guild.icon.url if interaction.guild.icon else interaction.guild.me.display_avatar.url,
+                ),
+            ),
+            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+            discord.ui.TextDisplay(content=f"### Opened By\n- <@{result.opened_user_id}>"),
+            discord.ui.TextDisplay(content=f"### Staff Handled\n- <@{result.staff_handled}>" if result.staff_handled else "*Unassigned*"),
+            discord.ui.TextDisplay(content=f"### Ticket Type\n- {type_label}"),
+            discord.ui.TextDisplay(content=f"### Timestamp\n- {_discord_ts(result.opened_at)}"),
+            discord.ui.TextDisplay(content=f"### Reason\n- {reason}"),
+        ]
+
+        if result.logs_channel_id and result.transcripts_reference:
+            container_items.append(
+                discord.ui.Section(
+                    discord.ui.TextDisplay(content="### Transcript Reference"),
+                    accessory=discord.ui.Button(
+                        url=f"https://discord.com/channels/{interaction.guild.id}/{result.logs_channel_id}/{result.transcripts_reference}",
+                        style=discord.ButtonStyle.link,
+                        label="Transcript"
                     ),
-                    discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
-                    discord.ui.TextDisplay(content=f"### Opened By\n- <@{result['opened_user_id']}>"),
-                    discord.ui.TextDisplay(content=f"### Staff Handled\n- <@{result['staff_handled']}>" if result["staff_handled"] else "*Unassigned*"),
-                    discord.ui.TextDisplay(content=f"### Ticket Type\n- {result["ticket_type"].replace("_", " ").title()}"),
-                    discord.ui.TextDisplay(content=f"### Timestamp\n- <t:{int(datetime.fromisoformat(result['timestamp']).timestamp())}:f>"),
-                    discord.ui.TextDisplay(content=f"### Reason\n- {result["reason"] or "*No reason provided*"}"),
-                    discord.ui.Section(
-                        discord.ui.TextDisplay(content="### Transcript Reference"),
-                        accessory=discord.ui.Button(
-                            url=f"https://discord.com/channels/{interaction.guild.id}/{result["logs_channel_id"]}/{result["transcripts_reference"]}",
-                            style=discord.ButtonStyle.link,
-                            label="Transcript"
-                        ),
-                    ),
+                )
             )
-        )
+
+        view = discord.ui.LayoutView().add_item(discord.ui.Container(*container_items))
 
         try:
             await interaction.response.send_message(view=view, ephemeral=True)

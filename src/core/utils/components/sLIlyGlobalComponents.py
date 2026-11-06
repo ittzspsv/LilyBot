@@ -5,13 +5,14 @@ import src.core.configs.bot_details as Config
 from src.core.configs.bot_details import emoji
 
 from discord.ext import commands
-from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
+from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess, LilyError
+from src.core.database.integrations.models import Leaderboard, Role
 from src.core.utils.embeds.sLilyEmbed import simple_embed
 
 
 logger = logging.getLogger("lily")
 
-from typing import List, Dict, Any
+from typing import List, Optional
 
 class CommandInfo(discord.ui.LayoutView):
     def __init__(self, ctx: commands.Context ,cmd_name: str, cmd_usage: List[str]):
@@ -23,11 +24,13 @@ class CommandInfo(discord.ui.LayoutView):
 
         prefix = self.bot_db.get_prefix_member(ctx.author.id, ctx.guild.id) or self.bot_db.get_prefix(ctx.guild.id) or "."
 
+        description = ctx.command.description if ctx.command else "No description available"
+
         self.formatted_usage: str = "\n".join(f"- {prefix}{cmd}" for cmd in self.cmd_usage)
         self.container = discord.ui.Container(
             discord.ui.Section(
                 discord.ui.TextDisplay(content=f"## {self.cmd_name}"),
-                discord.ui.TextDisplay(content=f"- {ctx.command.description if ctx.command else "No description available"}"),
+                discord.ui.TextDisplay(content=f"- {description}"),
                 discord.ui.TextDisplay(content=f"### Command Usage\n{self.formatted_usage}"),
                 accessory=discord.ui.Thumbnail(
                     media=ctx.me.display_avatar.url,
@@ -62,12 +65,19 @@ class Avatar(discord.ui.LayoutView):
         self.add_item(action_row)
 
 class RoleCustomizationModal(discord.ui.Modal):
-    def __init__(self, role_id: int ,db: BotGlobalsDatabaseAccess, role_name: str, role_config: Dict[str, Any]) -> None:
+    def __init__(self, role_id: int ,db: BotGlobalsDatabaseAccess, role_name: str, role_config: Optional[Role]) -> None:
         super().__init__(title="Role Configuration")
 
         self.db = db
         self.role_id = role_id
         self.role_name = role_name
+
+        # `role_config` is a Role dataclass, or None if the role was never configured.
+        current_type: str | None = role_config.role_type if role_config else None
+        current_ban_limit: int = (role_config.ban_limit if role_config and role_config.ban_limit is not None else 45)
+        current_ban_queue: bool = bool(role_config.ban_queue) if role_config else False
+        current_scope: str = (role_config.role_assignment_scope if role_config else "none") or "none"
+        current_assignment_roles = role_config.assignment_roles if role_config else frozenset()
 
         role_options = {
             "staff_base": {
@@ -101,12 +111,12 @@ class RoleCustomizationModal(discord.ui.Modal):
                 required=True,
                 options=[
                     discord.SelectOption(
-                        label=role["name"],
-                        value=role_type,
-                        description=role["description"],
-                        default=role_config.get("role_type", "unknown") == role_type 
+                        label=option["name"],
+                        value=option_type,
+                        description=option["description"],
+                        default=current_type == option_type
                     )
-                    for role_type, role in role_options.items()
+                    for option_type, option in role_options.items()
                 ]
             )
         )
@@ -117,19 +127,16 @@ class RoleCustomizationModal(discord.ui.Modal):
             placeholder='Hardcoded Limit that resets 24 hrs',
             required=True,
             max_length=5,
-            default=str(role_config.get("ban_limit", "45"))
+            default=str(current_ban_limit)
         )
-
-        _bq_option: int = role_config.get("ban_queue", 0)
-        _assign_scope: str = role_config.get("assignment_scope", "none") or "none"
 
         self.ban_queue_option = discord.ui.Label(
             text='Ban Queue',
             description='Should ban`s undergo a validation before action?',
             component=discord.ui.RadioGroup(
                 options=[
-                    discord.RadioGroupOption(label="Yes", value="1", description="Their bans require approval through /moderation queue before execution.", default=_bq_option == 1),
-                    discord.RadioGroupOption(label="No", value="0", description="Their bans are executed instantly without queue validation.", default=_bq_option != 1)
+                    discord.RadioGroupOption(label="Yes", value="1", description="Their bans require approval through /moderation queue before execution.", default=current_ban_queue),
+                    discord.RadioGroupOption(label="No", value="0", description="Their bans are executed instantly without queue validation.", default=not current_ban_queue)
                 ],
             )
         )
@@ -143,25 +150,25 @@ class RoleCustomizationModal(discord.ui.Modal):
                         label="None",
                         value="none",
                         description="This role cannot assign any roles.",
-                        default=_assign_scope == "none"
+                        default=current_scope == "none"
                     ),
                     discord.RadioGroupOption(
                         label="All",
                         value="all",
                         description="This role can assign all available roles.",
-                        default=_assign_scope == "all"
+                        default=current_scope == "all"
                     ),
                     discord.RadioGroupOption(
                         label="Except",
                         value="except",
                         description="This role can assign all roles except selected restricted roles.",
-                        default=_assign_scope == "except"
+                        default=current_scope == "except"
                     ),
                     discord.RadioGroupOption(
                         label="Specified",
                         value="specific",
                         description="This role can only assign specifically selected roles.",
-                        default=_assign_scope == "specific"
+                        default=current_scope == "specific"
                     ),
                 ]
             )
@@ -175,8 +182,8 @@ class RoleCustomizationModal(discord.ui.Modal):
                 max_values=25,
                 required=False,
                 default_values=[
-                    discord.Object(id=role_id)
-                    for role_id in role_config.get("assignment_roles", [])
+                    discord.Object(id=assigned_id)
+                    for assigned_id in current_assignment_roles
                 ]
             )
         )
@@ -199,28 +206,46 @@ class RoleCustomizationModal(discord.ui.Modal):
         assert isinstance(self.assignment_roles.component, discord.ui.RoleSelect)
         assert isinstance(self.role_type.component, discord.ui.Select)
 
+        try:
+            ban_limit = int(self.ban_limit.value)
+        except ValueError:
+            await interaction.followup.send(embed=simple_embed("Ban limit must be a whole number.", 'cross'))
+            return
 
+        try:
+            # configure_role now returns the saved Role and raises on failure.
+            role = await self.db.configure_role(
+                interaction.guild.id,
+                self.role_id,
+                ban_limit,
+                int(self.ban_queue_option.component.value or "0"),
+                self.assignment_scope.component.value or "none",
+                {assigned.id for assigned in (self.assignment_roles.component.values or [])},
+                self.role_type.component.values[0],
+            )
+        except LilyError as e:
+            await interaction.followup.send(embed=simple_embed(str(e), 'cross'))
+            return
+        except Exception:
+            logger.exception(
+                "RoleCustomizationModal.on_submit: configure_role failed for role %s in guild %s",
+                self.role_id, interaction.guild.id
+            )
+            await interaction.followup.send(embed=simple_embed("Failed to configure the role due to an unexpected error!", 'cross'))
+            return
 
-        response = await self.db.configure_role(
-            interaction.guild.id,
-            self.role_id,
-            int(self.ban_limit.value),
-            int(self.ban_queue_option.component.value or "0"),
-            self.assignment_scope.component.value or "none",
-            {role.id for role in (self.assignment_roles.component.values or [])},
-            self.role_type.component.values[0],
+        await interaction.followup.send(
+            embed=simple_embed(
+                f"Successfully configured {role.mention} as `{role.role_type}` "
+                f"(ban limit: {role.ban_limit}, scope: `{role.role_assignment_scope}`)."
+            )
         )
-
-        if response.get("success"):
-            await interaction.followup.send(embed=simple_embed(str(response.get("message"))))
-        else:
-            await interaction.followup.send(embed=simple_embed(str(response.get("message")), 'cross'))
 
 class LeaderboardView(discord.ui.LayoutView):
     def __init__(
         self,
         guild_name: str,
-        leaderboard_data: Dict[str, Any],
+        leaderboard_data: Leaderboard,
         db: BotGlobalsDatabaseAccess,
         *,
         guild_id: int,
@@ -241,24 +266,23 @@ class LeaderboardView(discord.ui.LayoutView):
 
         self.message: discord.Message | None = None
 
-        self.page = leaderboard_data["page"]
-        self.total_pages = leaderboard_data["total_pages"]
-        self.total_count = leaderboard_data["total_count"]
-        entries = leaderboard_data["leaderboard"]
-        target_entry = leaderboard_data.get("target")
+        # Leaderboard(type, page: Page[LeaderboardEntry], target: LeaderboardEntry | None)
+        self.page = leaderboard_data.page.page
+        self.total_pages = leaderboard_data.page.max_page
+        self.total_count = leaderboard_data.page.total_count
+        entries = leaderboard_data.page.items
+        target_entry = leaderboard_data.target
 
-        type_label = leaderboard_data["type"].title()
+        type_label = leaderboard_data.type.title()
 
         rows: List[discord.ui.Item] = []
 
         for entry in entries:
-            rank = entry["rank"]
-
             rows.append(
                 discord.ui.TextDisplay(
                     content=(
-                        f"{rank}. <@{entry['member_id']}> — "
-                        f"**{entry['messages']:,}** messages"
+                        f"{entry.rank}. <@{entry.member_id}> — "
+                        f"**{entry.count:,}** messages"
                     )
                 )
             )
@@ -293,8 +317,8 @@ class LeaderboardView(discord.ui.LayoutView):
             board.add_item(
                 discord.ui.TextDisplay(
                     content=(
-                        f"Your rank: **#{target_entry['rank']}** "
-                        f"— {target_entry['messages']:,} messages"
+                        f"Your rank: **#{target_entry.rank}** "
+                        f"— {target_entry.count:,} messages"
                     )
                 )
             )

@@ -15,15 +15,15 @@ from src.core.utils.components.sLIlyGlobalComponents import CommandInfo as CI
 from src.core.utils.lily_utility import purge_messages_by_user
 from src.core.utils.types.types import ChannelEnum
 from zoneinfo import available_timezones, ZoneInfo, ZoneInfoNotFoundError
-from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
+from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess, LilyError
 from src.core.utils.components.sLIlyGlobalComponents import RoleCustomizationModal, Avatar, LeaderboardView
 from src.core.visuals.cards.quote import make_quote_card
 from src.core.visuals.cards.leaderboard import leaderboard_img
 from discord.ext import commands, tasks
 from discord import app_commands
 from discord.utils import MISSING
-from typing import cast, TYPE_CHECKING
-from datetime import timedelta, timezone
+from typing import cast, Optional, TYPE_CHECKING
+from datetime import datetime, timedelta, timezone
 from src.core.bot import get_instance
 if TYPE_CHECKING:
     from src.lily import Lily
@@ -131,26 +131,29 @@ class LilyUtility(commands.Cog):
 
         bot_db: BotGlobalsDatabaseAccess = self.bot.db
 
+        # dict[int, AFK]
         afk_entries = await bot_db.get_afk_entries(message.guild.id)
 
         if message.author.id in afk_entries:
-            cleared_row = await bot_db.afk_clear(message.author.id, message.guild.id)
+            cleared = await bot_db.afk_clear(message.author.id, message.guild.id)
 
-            if cleared_row is not None:
+            if cleared is not None:
                 assert isinstance(message.author, discord.Member)
 
                 try:
-                    await message.author.edit(nick=cleared_row["display_name"])
+                    await message.author.edit(nick=cleared.display_name)
                 except discord.Forbidden:
                     pass
                 except discord.HTTPException:
                     pass
 
-                afk_since = datetime.fromisoformat(cleared_row["timestamp"])
-                unix_ts = int(afk_since.timestamp())
+                since = (
+                    discord.utils.format_dt(cleared.since, style="R")
+                    if cleared.since else "earlier"
+                )
 
                 await message.reply(
-                    content=f"Welcome back, {message.author.mention}! I've removed your AFK status. You were AFK Since <t:{unix_ts}:R>",
+                    content=f"Welcome back, {message.author.mention}! I've removed your AFK status. You were AFK Since {since}",
                     allowed_mentions=discord.AllowedMentions.none()
                 )
 
@@ -161,12 +164,11 @@ class LilyUtility(commands.Cog):
                 continue
 
             if user.id in afk_entries and user.id != message.author.id:
-                row = afk_entries[user.id]
-                afk_since = datetime.fromisoformat(row["timestamp"])
-                unix_ts = int(afk_since.timestamp())
+                afk = afk_entries[user.id]
+                since = f" {discord.utils.format_dt(afk.since, style='R')}" if afk.since else ""
 
                 afk_mentions.append(
-                    f"{user.mention} is AFK: {row['reason']} <t:{unix_ts}:R>"
+                    f"{user.mention} is AFK: {afk.reason}{since}"
                 )
 
         if afk_mentions:
@@ -677,7 +679,8 @@ class LilyUtility(commands.Cog):
             return
 
         db: BotGlobalsDatabaseAccess = self.bot.db
-        permissions = db.get_permissions(interaction.guild.id, role.id)
+        # Sync + cache based; takes a collection of role ids and returns set[str].
+        permissions = db.get_permissions(interaction.guild.id, [role.id])
 
         if not permissions:
             await interaction.response.send_message(
@@ -689,7 +692,7 @@ class LilyUtility(commands.Cog):
             return
 
         await interaction.response.send_message(
-            embed=discord.Embed(title="Permissions", description=", ".join(permissions), color=16777215)
+            embed=discord.Embed(title="Permissions", description=", ".join(sorted(permissions)), color=16777215)
         )
 
     @app_permission(command_name="set_prefix")
@@ -710,6 +713,7 @@ class LilyUtility(commands.Cog):
     async def configure_role(self, interaction: discord.Interaction, role: discord.Role):
         assert interaction.guild is not None
         bot_db: BotGlobalsDatabaseAccess = self.bot.db
+        # Role | None (was a dict)
         role_config = await bot_db.get_role_configuration(interaction.guild.id, role.id)
         await interaction.response.send_modal(RoleCustomizationModal(role.id, self.bot.db, role.name, role_config))
 
@@ -848,57 +852,47 @@ class LilyUtility(commands.Cog):
 
         target_member = member or await ctx.guild.fetch_member(ctx.author.id)
 
-        tz_name = await db.get_timezone(target_member.id, ctx.guild.id)
+        # get_timezone was folded into get_member; Member carries tz helpers.
+        target = await db.get_member(target_member.id, ctx.guild.id)
 
-        if not tz_name:
+        if not target.timezone:
             return await ctx.reply(
                 embed=simple_embed(f"**{target_member.display_name}** hasn't set their timezone yet.", 'cross'),
                 ephemeral=True
             )
 
-        try:
-            tz = ZoneInfo(tz_name)
-        except ZoneInfoNotFoundError:
+        if not target.has_valid_timezone:
             return await ctx.reply(
                 embed=simple_embed("Invalid timezone configured", 'cross'),
                 ephemeral=True
             )
 
-        now = datetime.now(tz)
+        now = target.now()
 
         formatted_date = now.strftime("%A, %B %-d, %Y")
         formatted_time = now.strftime("%-I:%M %p")
 
         description = (
-            f"**Timezone:** `{tz_name}`\n"
+            f"**Timezone:** `{target.timezone}`\n"
             f"**Local time:** {formatted_time}\n"
             f"**Date:** {formatted_date}"
         )
 
-        requester_tz_name = await db.get_timezone(ctx.author.id, ctx.guild.id)
+        requester = await db.get_member(ctx.author.id, ctx.guild.id)
 
-        if requester_tz_name:
-            try:
-                requester_tz = ZoneInfo(requester_tz_name)
-            except ZoneInfoNotFoundError:
-                requester_tz = None
+        if requester.has_valid_timezone:
+            target_offset = now.utcoffset() or timedelta(0)
+            requester_offset = requester.now().utcoffset() or timedelta(0)
+            difference_hours = (target_offset - requester_offset).total_seconds() / 3600
 
-            if requester_tz is not None:
-                requester_now = datetime.now(requester_tz)
-                target_offset = now.utcoffset()
-                requester_offset = requester_now.utcoffset()
+            if difference_hours == 0:
+                difference_text = "You are in the **same timezone**."
+            elif difference_hours > 0:
+                difference_text = f"They are **{difference_hours:g} hours ahead** of you."
+            else:
+                difference_text = f"They are **{abs(difference_hours):g} hours behind** you."
 
-                if target_offset is not None and requester_offset is not None:
-                    difference_hours = (target_offset - requester_offset).total_seconds() / 3600
-
-                    if difference_hours == 0:
-                        difference_text = "You are in the **same timezone**."
-                    elif difference_hours > 0:
-                        difference_text = f"They are **{difference_hours:g} hours ahead** of you."
-                    else:
-                        difference_text = f"They are **{abs(difference_hours):g} hours behind** you."
-
-                    description += f"\n\n**Compared to you:**\n{difference_text}"
+            description += f"\n\n**Compared to you:**\n{difference_text}"
 
         view = discord.ui.LayoutView().add_item(
             discord.ui.Container(
@@ -941,19 +935,20 @@ class LilyUtility(commands.Cog):
 
         try:
             ZoneInfo(timezone)
-        except ZoneInfoNotFoundError:
+        except (ZoneInfoNotFoundError, ValueError):
             return await ctx.reply(
                 embed=simple_embed(f"`{timezone}` is not a valid timezone.", 'cross'),
                 ephemeral=True
             )
 
-        await db.set_timezone(
+        # Returns the updated Member, so we can use its local clock directly.
+        updated = await db.set_timezone(
             ctx.author.id,
             ctx.guild.id,
             timezone
         )
 
-        now = datetime.now(ZoneInfo(timezone))
+        now = updated.now()
 
         await ctx.reply(
             embed=simple_embed(
@@ -1045,8 +1040,8 @@ class LilyUtility(commands.Cog):
                     pass
 
             await ctx.send(content=f"{ctx.author.mention} You are now AFK: {reason}", allowed_mentions=discord.AllowedMentions.none())
-        except Exception as e:
-            print(e)
+        except Exception:
+            logger.exception("Failed to set AFK for user %s", ctx.author.id)
 
     @app_permission(command_name = "afk clear")
     @afk.command(name = "clear", description="Clear an AFK for an user")
@@ -1057,16 +1052,16 @@ class LilyUtility(commands.Cog):
             await interaction.response.send_message(embed=simple_embed("This command can only be used inside a guild", 'cross'))
             return
 
-        cleared_row = await bot_db.afk_clear(member.id, interaction.guild.id)
+        cleared = await bot_db.afk_clear(member.id, interaction.guild.id)
 
-        if cleared_row is None:
+        if cleared is None:
             await interaction.response.send_message(
                 embed=simple_embed(f"{member.display_name} is not currently AFK", 'cross')
             )
             return
 
         try:
-            await member.edit(nick=cleared_row["display_name"])
+            await member.edit(nick=cleared.display_name)
         except discord.Forbidden:
             pass
         except discord.HTTPException:
@@ -1092,6 +1087,7 @@ class LilyUtility(commands.Cog):
 
         target = member if member is not None else ctx.author
 
+        # MessageCount(daily, weekly, monthly, total, xp)
         msg_stats = await db.get_messages(ctx.guild.id, target.id)
 
         view = discord.ui.LayoutView().add_item(
@@ -1100,10 +1096,10 @@ class LilyUtility(commands.Cog):
                     discord.ui.TextDisplay(content=f"## {target.display_name}'s Messages"),
                     discord.ui.TextDisplay(
                         content=(
-                            f"> **Today**:  {msg_stats['daily_messages']:,}\n"
-                            f"> **This Week**:  {msg_stats['weekly_messages']:,}\n"
-                            f"> **This Month**:  {msg_stats['monthly_messages']:,}\n"
-                            f"> **Total**:  {msg_stats['total_messages']:,}"
+                            f"> **Today**:  {msg_stats.daily:,}\n"
+                            f"> **This Week**:  {msg_stats.weekly:,}\n"
+                            f"> **This Month**:  {msg_stats.monthly:,}\n"
+                            f"> **Total**:  {msg_stats.total:,}"
                         )
                     ),
                     accessory=discord.ui.Thumbnail(
@@ -1143,6 +1139,7 @@ class LilyUtility(commands.Cog):
         await interaction.response.defer()
 
         try:
+            # Leaderboard(type, page: Page[LeaderboardEntry], target)
             results = await db.leaderboard(
                 interaction.guild.id,
                 leaderboard_type,
@@ -1160,21 +1157,20 @@ class LilyUtility(commands.Cog):
             )
             return
 
-        top_three = results["leaderboard"][:3]
+        top_three = results.page.items[:3]
 
         img_bytes = None
         if len(top_three) == 3:
             try:
                 podium_members = []
-                for m in top_three:
-                    member_id = m["member_id"]
-                    _member = interaction.guild.get_member(member_id) or await interaction.guild.fetch_member(member_id)
+                for entry in top_three:
+                    _member = interaction.guild.get_member(entry.member_id) or await interaction.guild.fetch_member(entry.member_id)
 
                     podium_members.append({
-                        "display_name": m["name"],
+                        "display_name": entry.name or _member.display_name,
                         "avatar_url": _member.display_avatar.url,
                         "avatar_deco_url": _member.avatar_decoration.url if _member.avatar_decoration else "",
-                        "messages": f"{m['messages']:,}",
+                        "messages": f"{entry.count:,}",
                     })
 
                 img_bytes = await leaderboard_img(tuple(podium_members))
@@ -1293,15 +1289,15 @@ class LilyUtility(commands.Cog):
     async def tag(self, ctx: commands.Context, tag: str):
         bot_db: BotGlobalsDatabaseAccess = ctx.bot.db
 
-        row = await bot_db.get_tag(tag)
-        if row is None:
+        found = await bot_db.get_tag(tag)
+        if found is None:
             suggestions = await bot_db.search_tags(tag)
             if not suggestions:
                 return await ctx.send("No tag found.")
             options = ", ".join(f"`{s}`" for s in suggestions)
             return await ctx.send(f"Tag not found. Did you mean: {options}?")
 
-        await ctx.send(row["content"], allowed_mentions=discord.AllowedMentions.none())
+        await ctx.send(found.content, allowed_mentions=discord.AllowedMentions.none())
 
     @permission(command_name="tag", restrict=True)
     @commands.command(name="tagnew", description="Add a new tag", aliases=["tn"])
@@ -1349,39 +1345,48 @@ class LilyUtility(commands.Cog):
                 f"Tag content is too long ({len(content)}/{2000})."
             )
 
-        if not await bot_db.add_tag(tag, content, ctx.author.id):
-            return await ctx.send(f"A tag named `{tag}` already exists.")
-        await ctx.send(f"Tag `{tag}` created.")
+        # add_tag now raises LilyError when the tag already exists.
+        try:
+            created = await bot_db.add_tag(tag, content, ctx.author.id)
+        except LilyError as e:
+            return await ctx.send(str(e))
+        await ctx.send(f"Tag `{created.name}` created.")
 
     @permission(command_name="tag", restrict=True)
     @commands.command(name="tagedit", description="Edit a new tag", aliases=["te"])
     async def tag_edit(self, ctx: commands.Context, tag: str, *, content: str):
         bot_db: BotGlobalsDatabaseAccess = ctx.bot.db
 
-        row = await bot_db.get_tag(tag)
-        if row is None:
+        found = await bot_db.get_tag(tag)
+        if found is None:
             return await ctx.send("No tag found.")
-        if row["created_by"] != ctx.author.id and not await ctx.bot.is_owner(ctx.author):
+        if found.created_by != ctx.author.id and not await ctx.bot.is_owner(ctx.author):
             return await ctx.send("You can only edit tags you created.")
         if len(content) > 2000:
             return await ctx.send(f"Tag content is too long ({len(content)}/{2000}).")
 
-        await bot_db.update_tag(tag, content)
-        await ctx.send(f"Tag `{tag}` updated.")
+        try:
+            await bot_db.update_tag(tag, content)
+        except LilyError as e:
+            return await ctx.send(str(e))
+        await ctx.send(f"Tag `{found.name}` updated.")
 
     @permission(command_name="tag", restrict=True)
     @commands.command(name="tagdelete", description="Delete a tag", aliases=["td"])
     async def tag_delete(self, ctx: commands.Context, tag: str):
         bot_db: BotGlobalsDatabaseAccess = ctx.bot.db
 
-        row = await bot_db.get_tag(tag)
-        if row is None:
+        found = await bot_db.get_tag(tag)
+        if found is None:
             return await ctx.send("No tag found.")
-        if row["created_by"] != ctx.author.id and not await ctx.bot.is_owner(ctx.author):
+        if found.created_by != ctx.author.id and not await ctx.bot.is_owner(ctx.author):
             return await ctx.send("You can only delete tags you created.")
 
-        await bot_db.delete_tag(tag)
-        await ctx.send(f"Tag `{tag}` deleted.")
+        try:
+            await bot_db.delete_tag(tag)
+        except LilyError as e:
+            return await ctx.send(str(e))
+        await ctx.send(f"Tag `{found.name}` deleted.")
 
 
     @commands.hybrid_command(name="whois", description="Get member information", aliases=["wis", "w"])
@@ -1393,7 +1398,8 @@ class LilyUtility(commands.Cog):
         bot_db = cast("Lily", ctx.bot).db
         assert bot_db is not None
 
-        lily_permissions = await bot_db.get_all_permissions(
+        # get_all_permissions (async, DB) is gone; get_permissions is sync, cache based.
+        lily_permissions = bot_db.get_permissions(
             ctx.guild.id,
             [role.id for role in user.roles]
         )
