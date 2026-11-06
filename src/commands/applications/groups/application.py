@@ -66,3 +66,16 @@ class ApplicationCommands(app_commands.Group):
             view=ApplicationMain(avatar_url=interaction.guild.me.display_avatar.url, in_place=True),
             ephemeral=True
         )
+
+    @app_permission(
+        command_name="application_management",
+        permissions={"manage_guild"},
+    )
+    @app_commands.command(name="send", description="Send an application view")
+    @app_commands.describe(
+        application="The application to send",
+        channel="The channel to send the application view in",
+    )
+    @app_commands.autocomplete(application=applications_autocomplete)
+    async def send(self, interaction: Interaction, application: int, channel: TextChannel):
+        await controller.send_application_view(interaction, application, channel)
