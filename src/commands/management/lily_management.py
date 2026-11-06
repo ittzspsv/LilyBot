@@ -63,17 +63,20 @@ class LilyManagement(commands.Cog):
         if self.db is not None:
             rows = await self.db.fetch_all_loa_pending()
             for row in rows:
+                assert row.avatar_url is not None
+                assert row.reason is not None
+                assert row.days is not None
                 try:
                     view = LOARequestView(
                         self.db,
-                        row["staff_id"],
-                        row["guild_id"],
-                        row["staff_pfp"],
-                        row["reason"],
-                        row["days"]
+                        row.staff_id,
+                        row.guild_id,
+                        row.avatar_url,
+                        row.reason,
+                        row.days
                     )
 
-                    self.bot.add_view(view, message_id=row["message_id"])
+                    self.bot.add_view(view, message_id=row.message_id)
                 except Exception as e:
                     print(f"Exception [LOARequestView] {e}")
                     continue
