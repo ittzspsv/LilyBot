@@ -209,7 +209,7 @@ async def on_case_update(
 
     embed = discord.Embed(
         title="Moderation Case Updated",
-        color=discord.Color.orange(),
+        color=0xFFFFFF,
         timestamp=discord.utils.utcnow()
     )
 
@@ -263,7 +263,7 @@ async def on_case_delete(
     embed = discord.Embed(
         title=f"Case Deleted #{case.id}",
         description=f"Deleted by {user.mention}",
-        color=discord.Color.red(),
+        color=0xFFFFFF,
         timestamp=discord.utils.utcnow()
     )
 
