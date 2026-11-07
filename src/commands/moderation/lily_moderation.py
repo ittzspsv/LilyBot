@@ -141,8 +141,9 @@ class LilyModeration(commands.Cog):
             try:
                 view = AppealMessageView(
                     f"{self.strip_mention(message.content, message.guild.me.id)}",
-                    message.guild.name,
-                    message.attachments
+                    bot=message.guild.me,
+                    server=message.guild,
+                    attachments=message.attachments
                 )
                 await member.send(
                     view=view
@@ -154,7 +155,7 @@ class LilyModeration(commands.Cog):
                 await message.reply("This member is no longer in the server. The appeal can be safely rejected.")
 
         else:
-            appeal = await bot_db.get_appeal(member_id=message.author.id)
+            appeal = await bot_db.get_appeal(member_id=message.author.id, pending_only=True)
             if appeal is None:
                 return
 
