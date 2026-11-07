@@ -210,6 +210,7 @@ async def on_case_update(
     embed = discord.Embed(
         title="Moderation Case Updated",
         color=0xFFFFFF,
+        description=f"> Updated by {user.mention}",
         timestamp=discord.utils.utcnow()
     )
 
@@ -226,8 +227,8 @@ async def on_case_update(
 
         embed.add_field(
             name=name,
-            value=f"**Before:**\n```{old_value}```\n"
-                  f"**After:**\n```{new_value}```",
+            value=f"Before:\n```{old_value}```\n"
+                  f"After:\n```{new_value}```",
             inline=False
         )
 
@@ -274,13 +275,13 @@ async def on_case_delete(
 
     embed.add_field(
         name="Moderator",
-        value=f"<@{case.moderator_id}> (`{case.moderator_id}`)",
+        value=f"<@{case.moderator_id}>",
         inline=True
     )
 
     embed.add_field(
         name="Target",
-        value=f"<@{case.target_user_id}> (`{case.target_user_id}`)",
+        value=f"<@{case.target_user_id}>",
         inline=True
     )
 
