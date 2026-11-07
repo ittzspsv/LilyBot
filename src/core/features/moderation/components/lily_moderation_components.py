@@ -1802,7 +1802,13 @@ class CaseProofsPurgeViewAbsolute(discord.ui.View):
             logger.exception("Failed to update purge button for case_id")
 
 class AppealMessageView(discord.ui.LayoutView):
-    def __init__(self, message: str, server: str, attachments: List[discord.Attachment]) -> None:
+    def __init__(
+            self, 
+            message: str, 
+            bot: discord.Member, 
+            server: discord.Guild, 
+            attachments: List[discord.Attachment]
+        ) -> None:
         super().__init__(timeout=None)
 
         gallery_items = [
@@ -1811,21 +1817,28 @@ class AppealMessageView(discord.ui.LayoutView):
         ]
 
         components: List[
-            Union[discord.ui.TextDisplay, discord.ui.MediaGallery, discord.ui.Separator]
+            Union[discord.ui.TextDisplay, discord.ui.Section, discord.ui.MediaGallery, discord.ui.Separator]
         ] = [
-            discord.ui.TextDisplay(content=f"### {message}"),
+            discord.ui.Section(
+                discord.ui.TextDisplay(content=f"### You've received a message"),
+                discord.ui.TextDisplay(content=f"Server: **{server.name}**"),
+                discord.ui.TextDisplay(content=f"> {message or 'No message received'}"),
+                accessory=discord.ui.Thumbnail(
+                    media=server.icon.url if server.icon else bot.display_avatar.url
+                )
+            )   
+            
         ]
-
-        if gallery_items:
-            components.append(discord.ui.MediaGallery(*gallery_items))
 
         components.append(
             discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small)
         )
-        components.append(
-            discord.ui.TextDisplay(content=f"-# Message From {server}'s Staff Team")
-        )
 
+        if gallery_items:
+            components.append(discord.ui.TextDisplay(content="### Attachments"))
+            components.append(discord.ui.MediaGallery(*gallery_items))
+
+        
         self.container1 = discord.ui.Container(*components)
         self.add_item(self.container1)
 
