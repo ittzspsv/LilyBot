@@ -54,7 +54,7 @@ class ApplicationCommands(app_commands.Group):
         await controller.flush_submission(interaction, application, wave)
 
 
-    @app_permission(command_name="application_dashboard", restrict=True)
+    @app_permission(command_name="application_dashboard")
     @app_commands.command(
         name="dashboard",
         description="Open the application panel to setup"
