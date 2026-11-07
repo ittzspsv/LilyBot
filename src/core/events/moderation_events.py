@@ -18,6 +18,7 @@ from typing import (
 
 import aiohttp
 import discord
+import json
 
 from src.core.configs.bot_details import emoji, img
 from src.core.features.moderation.components.lily_moderation_components import AppealButton
@@ -178,17 +179,139 @@ async def log_moderation_to_channel(payload: EventPayload, action: ModerationAct
 
 @event
 async def on_case_update(
-    payload: EventPayload, 
-    before: ModLog, 
-    after: ModLog, 
+    payload: EventPayload,
+    before: ModLog,
+    after: ModLog,
     user: discord.Member
 ):
-    ...
+    bot = cast("Lily", payload.bot)
+    assert bot.db is not None
+
+    channel_id = bot.db.get_channel(
+        payload.guild.id,
+        Events.CASE_UPDATE.value
+    )
+
+    if channel_id is None:
+        return
+
+    channel = payload.guild.get_channel(channel_id)
+    if channel is None:
+        return
+
+    if not isinstance(channel, discord.TextChannel):
+        return
+
+    diff = before.diff(after)
+
+    if not diff:
+        return
+
+    embed = discord.Embed(
+        title="Moderation Case Updated",
+        color=discord.Color.orange(),
+        timestamp=discord.utils.utcnow()
+    )
+
+    embed.set_author(
+        name=f"{user.name}",
+        icon_url=user.display_avatar.url
+    )
+
+    for field, (old, new) in diff.items():
+        name = field.replace("_", " ").title()
+
+        old_value = str(old) if old is not None else "None"
+        new_value = str(new) if new is not None else "None"
+
+        embed.add_field(
+            name=name,
+            value=f"**Before:**\n```{old_value}```\n"
+                  f"**After:**\n```{new_value}```",
+            inline=False
+        )
+
+    embed.set_image(url=img["border"])
+    embed.set_footer(text=f"Case ID: {after.id}")
+
+    await channel.send(embed=embed)
 
 @event
 async def on_case_delete(
-    payload: EventPayload, 
-    case: ModLog, 
+    payload: EventPayload,
+    case: ModLog,
     user: discord.Member
 ):
-    ...
+    bot = cast("Lily", payload.bot)
+    assert bot.db is not None
+
+    channel_id = bot.db.get_channel(
+        payload.guild.id,
+        Events.CASE_DELETE.value
+    )
+
+    if channel_id is None:
+        return
+
+    channel = payload.guild.get_channel(channel_id)
+    if channel is None:
+        return
+
+    if not isinstance(channel, discord.TextChannel):
+        return
+
+    embed = discord.Embed(
+        title=f"Case Deleted #{case.id}",
+        description=f"Deleted by {user.mention}",
+        color=discord.Color.red(),
+        timestamp=discord.utils.utcnow()
+    )
+
+    embed.set_author(
+        name=f"{user}",
+        icon_url=user.display_avatar.url
+    )
+
+    embed.add_field(
+        name="Moderator",
+        value=f"<@{case.moderator_id}> (`{case.moderator_id}`)",
+        inline=True
+    )
+
+    embed.add_field(
+        name="Target",
+        value=f"<@{case.target_user_id}> (`{case.target_user_id}`)",
+        inline=True
+    )
+
+    embed.add_field(
+        name="Type",
+        value=case.mod_type or "Unknown",
+        inline=True
+    )
+
+    embed.add_field(
+        name="Reason",
+        value=case.reason or "No reason provided.",
+        inline=False
+    )
+
+    embed.set_image(url=img["border"])
+
+    if case.created_at:
+        embed.add_field(
+            name="Created At",
+            value=discord.utils.format_dt(case.created_at, style="F"),
+            inline=True
+        )
+
+    if case.metadata:
+        metadata = json.dumps(case.metadata, indent=2, default=str)
+
+        embed.add_field(
+            name="Metadata",
+            value=f"```json\n{metadata[:1000]}\n```",
+            inline=False
+        )
+
+    await channel.send(embed=embed)
