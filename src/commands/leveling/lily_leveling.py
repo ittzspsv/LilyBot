@@ -229,10 +229,10 @@ class LilyLeveling(commands.Cog):
                 name=message.author.name,
             )
 
-            if not (result and result["leveled_up"]):
+            if result is None:
                 return
 
-            new_level = result["new_level"]
+            new_level = result.new_level
             logger.info(
                 f"[OnMessage] User {message.author.id} leveled up to {new_level} "
                 f"in guild {message.guild.id}"
