@@ -81,12 +81,12 @@ class LilyModeration(commands.Cog):
         if message.author.top_role >= message.guild.me.top_role:
             return
 
-        bypass, case_id = await bot_db.is_quarantine_bypassing(
+        quarantine = await bot_db.get_active_quarantine(
             message.author.id,
             message.guild.id
         )
 
-        if bypass:
+        if quarantine:
             target_user = message.author
             _messages = [
                 f"Eliminating {target_user.mention} for attempting to bypass Quarantine",
@@ -97,7 +97,7 @@ class LilyModeration(commands.Cog):
             ]
             _message = await message.channel.send(random.choice(_messages))
             ctx = await self.bot.get_context(_message)
-            await quarantine_user(ctx, target_user, f"Quarantine Bypass (Ref #{case_id})", [], True)
+            await quarantine_user(ctx, target_user, f"Quarantine Bypass (Ref #{quarantine.id})", [], True)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -117,14 +117,14 @@ class LilyModeration(commands.Cog):
                 return
 
             """ Send the message to the users DM """
-            appeal = await bot_db.get_appeal_complete(message.channel.id)
+            appeal = await bot_db.get_appeal(thread_id=message.channel.id)
             if appeal is None:
                 return
 
-            member: discord.Member | None = self.cached_members.get(appeal["target_user_id"])
+            member: discord.Member | None = self.cached_members.get(appeal.case.target_user_id)
             if member is None:
                 try:
-                    member = await message.guild.fetch_member(appeal["target_user_id"])
+                    member = await message.guild.fetch_member(appeal.case.target_user_id)
                     self.cached_members[member.id] = member
                 except discord.NotFound:
                     member = None
@@ -154,12 +154,15 @@ class LilyModeration(commands.Cog):
                 await message.reply("This member is no longer in the server. The appeal can be safely rejected.")
 
         else:
-            appeal = await bot_db.get_current_active_appeal(message.author.id)
+            appeal = await bot_db.get_appeal(member_id=message.author.id)
             if appeal is None:
                 return
 
+            if appeal.thread_id is None:
+                return
+
             webhook_url = await bot_db.get_webhook(
-                appeal["guild_id"],
+                appeal.case.guild_id,
                 "moderation_appeal_dm",
             )
             if webhook_url is None:
@@ -172,7 +175,7 @@ class LilyModeration(commands.Cog):
 
             kwargs = {
                 "content": message.content,
-                "thread": discord.Object(id=appeal["thread_id"]),
+                "thread": discord.Object(id=appeal.thread_id),
                 "username": message.author.name,
                 "avatar_url": message.author.display_avatar.url,
                 "allowed_mentions": discord.AllowedMentions.none(),
