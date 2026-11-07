@@ -287,11 +287,6 @@ class LilyApplications(commands.Cog):
     async def on_app_command_error(self, interaction, error):
         print("App command error:", error)
 
-
-    @commands.command(name="app_dashboard")
-    async def dashboard_spawn(self, ctx: commands.Context):
-        await ctx.reply(view=ApplicationMain(avatar_url=ctx.guild.me.display_avatar.url))
-
 async def setup(bot):
     cog = LilyApplications(bot)
     await bot.add_cog(cog)
