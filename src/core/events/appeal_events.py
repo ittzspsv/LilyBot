@@ -22,7 +22,7 @@ async def on_appeal_requested(
     appeal_response: Dict[str, str],
     thread: discord.Thread
 ) -> None:
-    bot = cast(Lily, payload.bot)
+    bot = cast("Lily", payload.bot)
 
     if not bot.db:
         return
@@ -80,7 +80,7 @@ async def on_appeal_handled(
     case_id: int,
     reason: str = "No Reason Provided"
 ) -> None:
-    bot = cast(Lily, payload.bot)
+    bot = cast("Lily", payload.bot)
 
     if not bot.db:
         return
@@ -95,8 +95,6 @@ async def on_appeal_handled(
 
     if not isinstance(channel, discord.TextChannel):
         return
-
-    appeal_type = getattr(type, "value", str(type))
 
     embed = discord.Embed(
         title="Appeal Handled",
@@ -114,7 +112,7 @@ async def on_appeal_handled(
 
     embed.add_field(
         name="Appeal Status",
-        value=str(appeal_type).replace("_", " ").title(),
+        value=type.replace("_", " ").title(),
         inline=True
     )
 
