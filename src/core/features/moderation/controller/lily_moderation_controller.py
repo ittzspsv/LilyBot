@@ -798,6 +798,7 @@ async def mod_logs(
             target_user_id=user.id,
             moderator_id=moderator.id if moderator else None,
             mod_type=mod_type,
+            interactor=ctx.author.id if isinstance(ctx, commands.Context) else ctx.user.id
         )
 
         if isinstance(ctx, discord.Interaction):
