@@ -5,9 +5,7 @@ from src.core.utils.embeds.sLilyEmbed import simple_embed
 from src.core.features.moderation.components.lily_moderation_components import AppealForumCustomize
 from src.core.features.permissions.lily_permissions import app_permission
 from src.core.features.moderation.controller.lily_moderation_controller import (
-    setup_mod_appeal,
-    accept_appeal as accept_appeal_fn,
-    reject_appeal as reject_appeal_fn,
+    setup_mod_appeal
 )
 
 
