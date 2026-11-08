@@ -7,6 +7,8 @@ import discord, discord.app_commands as app_commands
 
 from src.core.features.ticketing.controller.lily_ticketing_controller import *
 from src.core.features.ticketing.components.lily_ticket_tool_components import TicketList
+from src.core.features.ticketing.components.lily_ticket_tool_components import TicketPanelList
+
 
 import logging
 
@@ -190,6 +192,26 @@ class LilyTicketTool(commands.Cog):
         except Exception:
             logger.exception("Failed to send ticket list view")
 
+
+    @app_commands.guild_only()
+    @ticket.command(name="dashboard", description="Open the ticket panel dashboard")
+    @app_permission(
+        command_name="ticket_dashboard",
+        permissions={"manage_guild"},
+        match="all"
+    )
+    @app_commands.checks.cooldown(1, 5)
+    async def ticket_dashboard(self, interaction: discord.Interaction):
+        bot_db = cast("Lily", interaction.client).db
+        assert bot_db is not None
+
+        assert interaction.guild is not None
+
+
+        view = await TicketPanelList.create(bot_db, interaction.guild.id)
+        await interaction.response.send_message(view=view, ephemeral=True)
+
+        
 
 
 async def setup(bot):
