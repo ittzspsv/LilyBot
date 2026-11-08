@@ -110,25 +110,6 @@ async def initialize_ticket_view(bot):
 
                 bot.add_view(selector_view, message_id=message_id)
 
-                try:
-                    if not isinstance(channel, discord.TextChannel):
-                        continue
-
-                    message = await channel.fetch_message(message_id)
-                    await message.edit(
-                        content=None,
-                        embeds=[],
-                        view=selector_view
-                    )
-
-                except (discord.NotFound, discord.Forbidden):
-                    logger.warning(
-                        "[InitializeTicketView] Panel message missing in %s", channel_id
-                    )
-                    continue
-
-                await asyncio.sleep(1)
-
             except Exception:
                 logger.exception("[TicketPanel Restore ERROR] panel=%s", panel.id)
                 continue
