@@ -63,9 +63,6 @@ class LilyManagement(commands.Cog):
         if self.db is not None:
             rows = await self.db.fetch_all_loa_pending()
             for row in rows:
-                assert row.avatar_url is not None
-                assert row.reason is not None
-                assert row.days is not None
                 try:
                     view = LOARequestView(
                         self.db,
