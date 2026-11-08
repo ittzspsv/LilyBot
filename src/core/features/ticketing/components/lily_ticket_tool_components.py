@@ -2565,7 +2565,7 @@ class TicketPanelEdit(discord.ui.LayoutView):
             style=discord.ButtonStyle.secondary,
             label="Add Section",
             emoji=emoji["plus"],
-            disabled=len(tv.types) >= 5,
+            disabled=len(tv.types) >= 25,
         )
         add_button.callback = self.add_type_callback
 
@@ -2889,8 +2889,8 @@ class TicketTypeModal(discord.ui.Modal):
 
         def mutate(config: dict[str, Any]) -> None:
             if self.ticket is None:
-                if len(config["Tickets"]) >= 5:
-                    raise LilyError(f"A panel can hold at most {5} ticket types.")
+                if len(config["Tickets"]) >= 25:
+                    raise LilyError(f"A panel can hold at most {25} ticket types.")
                 config["Tickets"].append({**values, "channel_emoji": None, "fields": [dict(f) for f in DEFAULT_FIELDS], "ping_roles": []})
             else:
                 find_ticket(config, self.ticket.ticket_base_name).update(values)
