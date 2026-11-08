@@ -296,7 +296,7 @@ class EditCaseModal(discord.ui.Modal):
                 user=interaction.user
             )
 
-            new_view = CaseView(self.case_id, edit.after, self.case_list_view, appeal)
+            new_view = CaseView(self.case_id, edit.after, self.case_list_view, appeal, interaction.user.id)
             await interaction.response.edit_message(view=new_view, allowed_mentions=discord.AllowedMentions.none())
             await interaction.followup.send(embed=simple_embed(f"Successfully edited case #{self.case_id}."), ephemeral=True)
         except LilyError as e:
@@ -353,7 +353,7 @@ class AddProofsModal(discord.ui.Modal):
             )
 
 class CaseView(discord.ui.LayoutView):
-    def __init__(self, case_id: int, case: ModLog, case_list_view: CaseListView, appeal: Appeal | None) -> None:
+    def __init__(self, case_id: int, case: ModLog, case_list_view: CaseListView, appeal: Appeal | None, interactor: int) -> None:
         super().__init__(timeout=None)
 
         self.case_id = case_id
@@ -365,6 +365,7 @@ class CaseView(discord.ui.LayoutView):
         self.guild_id = case.guild_id
         self.appeal = appeal
         self.appeal_thread = (appeal.thread_id or 0) if appeal else 0
+        self.interactor = interactor
 
         self.channel = None
 
@@ -482,6 +483,14 @@ class CaseView(discord.ui.LayoutView):
             )
         )
         self.add_item(case_overview)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.interactor:
+            return True
+        await interaction.response.send_message(
+            embed=simple_embed("Access denied", 'cross'), ephemeral=True
+        )
+        return False
 
     async def back_callback(self, interaction: discord.Interaction) -> None:
         await self.case_list_view._refresh_page(interaction, self.case_list_view.page)
@@ -712,7 +721,8 @@ class CaseListView(discord.ui.LayoutView):
         guild_id: int,
         target_user_id: int,
         moderator_id: int | None = None,
-        mod_type: str = "all"
+        mod_type: str = "all",
+        interactor: int
     ) -> None:
         super().__init__(timeout=300)
 
@@ -732,6 +742,7 @@ class CaseListView(discord.ui.LayoutView):
         self.max_page = case_list_data.max_page
         self.total_count = case_list_data.total_count
         page_logs = case_list_data.items
+        self.interactor = interactor
 
         case_info = discord.ui.Container(
             discord.ui.Section(
@@ -780,6 +791,14 @@ class CaseListView(discord.ui.LayoutView):
         self.add_item(case_list)
         self.add_item(self.pagination())
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.interactor:
+            return True
+        await interaction.response.send_message(
+            embed=simple_embed("Access denied", 'cross'), ephemeral=True
+        )
+        return False
+
     def pagination(self) -> discord.ui.ActionRow:
         row = discord.ui.ActionRow()
 
@@ -825,7 +844,8 @@ class CaseListView(discord.ui.LayoutView):
                 guild_id=self.guild_id,
                 target_user_id=self.target_user_id,
                 moderator_id=self.moderator_id,
-                mod_type=self.mod_type
+                mod_type=self.mod_type,
+                interactor=interaction.user.id
             )
             new_view.message = self.message
             await interaction.response.edit_message(view=new_view, allowed_mentions=discord.AllowedMentions.none())
@@ -864,6 +884,7 @@ class CaseListView(discord.ui.LayoutView):
                 target_user_id=self.target_user_id,
                 moderator_id=self.moderator_id,
                 mod_type=self.mod_type,
+                interactor=self.interactor
             )
 
             new_view.message = self.message
@@ -900,7 +921,7 @@ class CaseListView(discord.ui.LayoutView):
 
             appeal = await bot_db.get_appeal(case_id=case_id)
 
-            view = CaseView(case_id, case, self, appeal)
+            view = CaseView(case_id, case, self, appeal, self.interactor)
             await interaction.response.edit_message(view=view, allowed_mentions=discord.AllowedMentions.none())
         except Exception:
             logger.exception("Failed to open case info for custom_id=%s", getattr(interaction, "custom_id", None))
