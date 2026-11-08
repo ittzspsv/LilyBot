@@ -360,6 +360,10 @@ def build_ticket_summary(submission_json: dict) -> discord.Embed:
         elif field_type == "role_select":
             description_parts.append(f"### {label}\n{' , '.join(value)}")
 
+        elif field_type in ("selector", "radio_option", "check_box"):
+            picked = value if isinstance(value, list) else [value]
+            description_parts.append(f"### {label}\n{' , '.join(str(v) for v in picked if v) or 'None selected'}")
+
     embed = discord.Embed(
         title="Ticket Summary",
         description="\n\n".join(description_parts),
@@ -823,6 +827,16 @@ class TicketComponentEmbed(discord.ui.LayoutView):
                         discord.ui.TextDisplay(content=value["invite_url"])
                     )
 
+            elif field_type in ("selector", "radio_option", "check_box"):
+                picked = value if isinstance(value, list) else [value]
+                answers = " , ".join(str(v) for v in picked if v) or "None selected"
+
+                ticket_details.append(
+                    discord.ui.TextDisplay(
+                        f"### {label}\n> {answers}"
+                    )
+                )
+
 
 
         ticket_details_container = discord.ui.Container(
@@ -1025,6 +1039,46 @@ class TicketModal(discord.ui.Modal):
                     required=True
                 )
 
+            elif field_type in ("selector", "radio_option", "check_box"):
+                options = self.parse_field_options(field)
+
+                if field_type == "selector":
+                    if not 1 <= len(options) <= 25:
+                        raise ValueError(f"selector '{label}' needs 1-25 options")
+                    min_values, max_values = self.selection_range(field, len(options), cap=25, default_max=1)
+                    component = discord.ui.Select(
+                        min_values=min_values,
+                        max_values=max_values,
+                        required=True,
+                        options=[discord.SelectOption(label=o[:100], value=o[:100]) for o in options],
+                    )
+
+                elif field_type == "radio_option":
+                    if not 2 <= len(options) <= 10:
+                        raise ValueError(f"radio field '{label}' needs 2-10 options")
+                    component = discord.ui.RadioGroup(
+                        required=True,
+                        options=[discord.RadioGroupOption(label=o[:100]) for o in options],
+                    )
+
+                else:
+                    if not 1 <= len(options) <= 10:
+                        raise ValueError(f"checkbox field '{label}' needs 1-10 options")
+
+                    if len(options) == 1:
+                        description = description or options[0][:100]
+                        component = discord.ui.Checkbox(default=False)
+                    else:
+                        min_values, max_values = self.selection_range(
+                            field, len(options), cap=10, default_max=len(options)
+                        )
+                        component = discord.ui.CheckboxGroup(
+                            min_values=min_values,
+                            max_values=max_values,
+                            required=True,
+                            options=[discord.CheckboxGroupOption(label=o[:100]) for o in options],
+                        )
+
             """ This wouldn't likely to occur """
             if component is None:
                 raise ValueError
@@ -1041,6 +1095,22 @@ class TicketModal(discord.ui.Modal):
             })
             self.add_item(item)
         
+    def parse_field_options(self, field: dict) -> list[str]:
+        raw = field.get("metadata") or ""
+        return list(dict.fromkeys(o.strip() for o in str(raw).split(",") if o.strip()))
+
+
+    def selection_range(self, field: dict, option_count: int, *, cap: int, default_max: int) -> tuple[int, int]:
+        ceiling = min(option_count, cap)
+        try:
+            min_values = int(field.get("min_values", 1))
+            max_values = int(field.get("max_values", default_max))
+        except (TypeError, ValueError):
+            min_values, max_values = 1, default_max
+        max_values = max(1, min(max_values, ceiling))
+        min_values = max(1, min(min_values, max_values))
+        return min_values, max_values
+
 
     async def ticket_thread_constructor(self, interaction: discord.Interaction, submission_json: dict, logging_channel_id: int, higher_staff_roles_ids: List[int]) -> discord.TextChannel | discord.Thread | None:
         if interaction.guild is None:
@@ -1425,6 +1495,7 @@ class TicketModal(discord.ui.Modal):
                     "field": field,
                     "value": [attachment.url for attachment in item.component.values]
                 })
+            
             elif field_type == "member":
                 assert isinstance(item.component, discord.ui.TextInput)
                 # Try fetching the member details.
@@ -1475,8 +1546,8 @@ class TicketModal(discord.ui.Modal):
                         field_data.append({
                             "field": field,
                             "value": {
-                                "flag": 0,
-                                "url": item.component.value
+                                "flag": 1,
+                                "invite_url": item.component.value
                             }
                         })
 
@@ -1513,6 +1584,35 @@ class TicketModal(discord.ui.Modal):
                     "field": field,
                     "value": [role.name for role in item.component.values]
                 })
+
+            elif field_type == "selector":
+                assert isinstance(item.component, discord.ui.Select)
+                field_data.append({
+                    "field": field,
+                    "value": [str(v) for v in item.component.values]
+                })
+
+            elif field_type == "radio_option":
+                assert isinstance(item.component, discord.ui.RadioGroup)
+                chosen = item.component.value
+                field_data.append({
+                    "field": field,
+                    "value": [str(chosen)] if chosen else []
+                })
+
+            elif field_type == "check_box":
+                if isinstance(item.component, discord.ui.Checkbox):
+                    only_option = self.parse_field_options(field)[:1]
+                    field_data.append({
+                        "field": field,
+                        "value": only_option if item.component.value else []
+                    })
+                else:
+                    assert isinstance(item.component, discord.ui.CheckboxGroup)
+                    field_data.append({
+                        "field": field,
+                        "value": [str(v) for v in item.component.values]
+                    })
 
             else:
                 assert isinstance(item.component, discord.ui.TextInput)
@@ -1616,12 +1716,15 @@ class TicketSelectComponent(discord.ui.LayoutView):
                 discord.ui.TextDisplay(content=description),
             ]
 
-        self.add_item(
-            discord.ui.Container(
-                *header,
-                discord.ui.ActionRow(self.ticket_options),
-            )
-        )
+        children: list[discord.ui.Item] = [
+            *header, 
+            discord.ui.ActionRow(self.ticket_options)
+        ]
+        footer = panel.footer_text if panel else None
+        if footer:
+            children.append(discord.ui.TextDisplay(content=f"-# {footer}"))
+
+        self.add_item(discord.ui.Container(*children))
 
     @classmethod
     async def from_db(cls, bot_db: BotGlobalsDatabaseAccess, view_id: int) -> "TicketSelectComponent":
@@ -1645,8 +1748,6 @@ class TicketSelectComponent(discord.ui.LayoutView):
             footer_text=(panel_config.get("footer") or {}).get("text"),
             thumbnail_url=(panel_config.get("thumbnail") or {}).get("url"),
         )
-        # The panel row (and therefore real type ids) doesn't exist yet; only the
-        # render fields are used here, so the id is a placeholder.
         ticket_types = [
             TicketType(
                 id=0,
@@ -2059,9 +2160,16 @@ FIELD_TYPES = {
     "guild_invite": ("Server invite", "Accepts a Discord server invite link."),
     "file_upload": ("File upload", "Allows users to upload files as attachments."),
     "role_select": ("Role select", "Allows users to select a role from the server."),
+    "selector": ("Select Options", "Allows users to choose one or more predefined options."),
+    "radio_option": ("Radio Options", "Allows users to select a single option from predefined choices."),
+    "check_box": ("Checkbox", "Allows users to toggle a predefined option on or off.")
 }
 TEXT_FIELD_TYPES = {"short", "long", "member", "guild_invite"}
 DEFAULT_FIELDS = [{"label": "Describe your issue", "type": "long", "length": 500}]
+
+OPTION_FIELD_TYPES = {"selector", "radio_option", "check_box"}
+MAX_SELECT_OPTIONS = 25
+MAX_RADIO_OPTIONS = 10
 
 
 def get_db(interaction: discord.Interaction):
@@ -2934,6 +3042,69 @@ class TicketTypeOptionsModal(discord.ui.Modal):
         if new_tv is not None:
             await edit_view(interaction, TicketTypeEdit(self.panel_view, new_tv, base))
 
+class FieldTypePicker(discord.ui.LayoutView):
+    def __init__(self, fields_view: TicketFieldsEdit, index: int | None = None) -> None:
+        super().__init__(timeout=None)
+
+        assert fields_view.ticket is not None
+        self.fields_view = fields_view
+        self.index = index
+
+        fields = fields_view.ticket.fields
+        current = fields[index] if index is not None and index < len(fields) else None
+        self.current_type = current.get("type", "short") if current else None
+
+        self.type_select = discord.ui.Select(
+            placeholder="Choose a field type...",
+            options=[
+                discord.SelectOption(
+                    label=name, description=description, value=key, default=key == self.current_type
+                )
+                for key, (name, description) in FIELD_TYPES.items()
+            ],
+        )
+        self.type_select.callback = self.type_callback
+
+        back_button: discord.ui.Button = discord.ui.Button(style=discord.ButtonStyle.secondary, label="Back")
+        back_button.callback = self.back_callback
+
+        rows: List[discord.ui.Item] = [discord.ui.ActionRow(self.type_select)]
+        if self.current_type in FIELD_TYPES:
+            keep_button: discord.ui.Button = discord.ui.Button(
+                style=discord.ButtonStyle.secondary,
+                label=f"Keep {FIELD_TYPES[self.current_type][0]}",
+            )
+            keep_button.callback = self.keep_callback
+            rows.append(discord.ui.ActionRow(keep_button))
+
+        action = "Edit" if index is not None else "Add"
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.Section(
+                    discord.ui.TextDisplay(
+                        content=f"### {action} Form Field\n-# Step 1/2: choose the field type"
+                    ),
+                    accessory=back_button,
+                ),
+                discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+                *rows,
+            )
+        )
+
+    async def type_callback(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(
+            TicketFieldModal(self.fields_view, self.index, self.type_select.values[0])
+        )
+
+    async def keep_callback(self, interaction: discord.Interaction) -> None:
+        assert self.current_type is not None
+        await interaction.response.send_modal(
+            TicketFieldModal(self.fields_view, self.index, self.current_type)
+        )
+
+    async def back_callback(self, interaction: discord.Interaction) -> None:
+        await self.fields_view.refresh(interaction, self.fields_view.tv)
+
 class TicketFieldsEdit(discord.ui.LayoutView):
     def __init__(self, panel_view: TicketPanelEdit, tv: TicketView, base_name: str) -> None:
         super().__init__(timeout=None)
@@ -2976,7 +3147,10 @@ class TicketFieldsEdit(discord.ui.LayoutView):
                 details.append(f"max {field.get('length', 100)} chars")
 
             if field.get("metadata"):
-                details.append(f"options: {field['metadata']}")
+                details.append(f"options: {field['metadata'][:60]}")
+
+            if ftype in ("selector", "check_box") and field.get("min_values") is not None:
+                details.append(f"pick {field['min_values']}-{field['max_values']}")
 
             items.append(
                 discord.ui.Section(
@@ -3031,31 +3205,35 @@ class TicketFieldsEdit(discord.ui.LayoutView):
         await edit_view(interaction, TicketTypeEdit(self.panel_view, self.tv, self.base_name))
 
     async def add_callback(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_modal(TicketFieldModal(self))
+        await edit_view(interaction, FieldTypePicker(self))
+
+    def _edit_callback(self, index: int):
+        async def callback(interaction: discord.Interaction) -> None:
+            await edit_view(interaction, FieldTypePicker(self, index))
+
+        return callback
 
     async def remove_callback(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_modal(RemoveFieldModal(self))
 
-    def _edit_callback(self, index: int):
-        async def callback(interaction: discord.Interaction) -> None:
-            await interaction.response.send_modal(TicketFieldModal(self, index))
-
-        return callback
-
 class TicketFieldModal(discord.ui.Modal):
-    def __init__(self, fields_view: TicketFieldsEdit, index: int | None = None) -> None:
-        super().__init__(title="Edit Form Field" if index is not None else "Add Form Field")
+    def __init__(self, fields_view: TicketFieldsEdit, index: int | None = None, ftype: str = "short") -> None:
+        type_name = FIELD_TYPES.get(ftype, (ftype, ""))[0]
+        super().__init__(title=f"{'Edit' if index is not None else 'Add'} {type_name} Field"[:45])
 
         assert fields_view.ticket is not None
         self.fields_view = fields_view
         self.index = index
+        self.ftype = ftype
 
         existing = fields_view.ticket.fields
         current = existing[index] if index is not None and index < len(existing) else {}
+        if current.get("type") != ftype:
+            current = {"label": current.get("label"), "description": current.get("description")}
 
         self.label_input = discord.ui.TextInput(
             label="Label (shown above the input)",
-            max_length=45,  
+            max_length=45,
             default=current.get("label"),
         )
         self.description_input = discord.ui.TextInput(
@@ -3064,71 +3242,112 @@ class TicketFieldModal(discord.ui.Modal):
             max_length=100,
             default=current.get("description") or None,
         )
-        self.type_select = discord.ui.Select(
-            placeholder="Field type",
-            options=[
-                discord.SelectOption(label=name, description=description ,value=key, default=key == current.get("type", "short"))
-                for key, (name, description) in FIELD_TYPES.items()
-            ],
-        )
-        self.length_input = discord.ui.TextInput(
-            label="Max Length (text fields only)",
-            required=False,
-            max_length=4,
-            placeholder="100",
-            default=str(current["length"]) if current.get("length") is not None else None,
-        )
-        self.metadata_input = discord.ui.TextInput(
-            label="Metadata (comma separated options)",
-            required=False,
-            max_length=500,
-            placeholder="Reserved for select / radio options, e.g. Yes, No",
-            default=str(current["metadata"]) if current.get("metadata") else None,
-        )
-
         self.add_item(self.label_input)
         self.add_item(self.description_input)
-        self.add_item(discord.ui.Label(text="Field Type", component=self.type_select))
-        self.add_item(self.length_input)
-        self.add_item(self.metadata_input)
+
+        self.length_input: discord.ui.TextInput | None = None
+        self.options_input: discord.ui.TextInput | None = None
+        self.min_input: discord.ui.TextInput | None = None
+        self.max_input: discord.ui.TextInput | None = None
+
+        if ftype in TEXT_FIELD_TYPES:
+            self.length_input = discord.ui.TextInput(
+                label="Max Length",
+                required=False,
+                max_length=4,
+                placeholder="100",
+                default=str(current["length"]) if current.get("length") is not None else None,
+            )
+            self.add_item(self.length_input)
+
+        if ftype in OPTION_FIELD_TYPES:
+            self.options_input = discord.ui.TextInput(
+                label="Options (comma separated)",
+                style=discord.TextStyle.paragraph,
+                max_length=1500,
+                placeholder="e.g. Bug report, Billing, Other",
+                default=current.get("metadata") or None,
+            )
+            self.add_item(self.options_input)
+
+        if ftype in ("selector", "check_box"):
+            self.min_input = discord.ui.TextInput(
+                label="Min Selections",
+                required=False,
+                max_length=2,
+                placeholder="1",
+                default=str(current["min_values"]) if current.get("min_values") is not None else None,
+            )
+            self.max_input = discord.ui.TextInput(
+                label="Max Selections",
+                required=False,
+                max_length=2,
+                placeholder="1",
+                default=str(current["max_values"]) if current.get("max_values") is not None else None,
+            )
+            self.add_item(self.min_input)
+            self.add_item(self.max_input)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         assert self.fields_view.ticket is not None
 
-        label = self.label_input.value.strip()
-        description = self.description_input.value.strip()
-        metadata = self.metadata_input.value.strip()
-        ftype = self.type_select.values[0]
-        length_text = self.length_input.value.strip()
-
         async def reject(text: str) -> None:
             await interaction.response.send_message(embed=simple_embed(text, "cross"), ephemeral=True)
 
+        label = self.label_input.value.strip()
+        description = self.description_input.value.strip()
         if not label:
             await reject("A field needs a label.")
             return
 
-        length = 100
-        if length_text:
-            if not length_text.isdigit() or not 1 <= int(length_text) <= 4000:
-                await reject("Max length must be a number between 1 and 4000.")
-                return
-            length = int(length_text)
-
         others = [f for i, f in enumerate(self.fields_view.ticket.fields) if i != self.index]
-        if ftype == "file_upload" and any(f.get("type") == "file_upload" for f in others):
+        if self.ftype == "file_upload" and any(f.get("type") == "file_upload" for f in others):
             await reject("A form can only have one file upload field.")
             return
 
-        await interaction.response.defer()
-
-        entry: dict[str, Any] = {"label": label, "type": ftype}
+        entry: dict[str, Any] = {"label": label, "type": self.ftype}
         if description:
             entry["description"] = description
-        if ftype in TEXT_FIELD_TYPES:
+
+        if self.length_input is not None:
+            length_text = self.length_input.value.strip()
+            length = 100
+            if length_text:
+                if not length_text.isdigit() or not 1 <= int(length_text) <= 4000:
+                    await reject("Max length must be a number between 1 and 4000.")
+                    return
+                length = int(length_text)
             entry["length"] = length
-        if metadata:
-            entry["metadata"] = metadata
+
+        options: list[str] = []
+        if self.options_input is not None:
+            options = list(dict.fromkeys(o.strip() for o in self.options_input.value.split(",") if o.strip()))
+            limit = MAX_SELECT_OPTIONS if self.ftype == "selector" else MAX_RADIO_OPTIONS
+            minimum = 1 if self.ftype == "check_box" else 2
+            if not minimum <= len(options) <= limit:
+                await reject(f"Provide {minimum}-{limit} unique options, separated by commas.")
+                return
+            if any(len(o) > 100 for o in options):
+                await reject("Each option can be at most 100 characters.")
+                return
+            entry["metadata"] = ", ".join(options)
+
+        if self.ftype == "selector" or (self.ftype == "check_box" and len(options) > 1):
+            assert self.min_input is not None and self.max_input is not None
+            try:
+                min_values = int(self.min_input.value.strip() or 1)
+                max_default = len(options) if self.ftype == "check_box" else 1
+                max_values = int(self.max_input.value.strip() or max_default)
+            except ValueError:
+                await reject("Min and max selections must be numbers.")
+                return
+            if not 1 <= min_values <= max_values <= len(options):
+                await reject(f"Selections must satisfy 1 <= min <= max <= {len(options)} (the number of options).")
+                return
+            entry["min_values"] = min_values
+            entry["max_values"] = max_values
+
+        await interaction.response.defer()
 
         base = self.fields_view.base_name
 
@@ -3136,13 +3355,13 @@ class TicketFieldModal(discord.ui.Modal):
             fields = find_ticket(config, base)["fields"]
             if self.index is None:
                 if len(fields) >= 5:
-                    raise LilyError(f"A form can hold at most {5} fields.")
+                    raise LilyError("A form can hold at most 5 fields.")
                 fields.append(entry)
             else:
                 if self.index >= len(fields):
                     raise LilyError("That field no longer exists.")
                 old = fields[self.index]
-                for key in ("description", "length", "metadata"):
+                for key in ("description", "length", "metadata", "min_values", "max_values"):
                     old.pop(key, None)
                 old.update(entry)
 
