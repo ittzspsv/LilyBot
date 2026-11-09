@@ -977,7 +977,6 @@ async def check_staff_quota(interaction: discord.Interaction, staff: discord.Mem
         await interaction.response.send_message(embed=embed)
         return
 
-    await interaction.response.defer()
 
     try:
         bot_db = cast("Lily", interaction.client).db
@@ -986,7 +985,7 @@ async def check_staff_quota(interaction: discord.Interaction, staff: discord.Mem
         results = await bot_db.evaluate_quotas(interaction.guild.id, staff_id=staff.id)
 
         if not results:
-            return await interaction.followup.send(
+            return await interaction.response.send_message(
                 embed=simple_embed("No quota applies to this staff member.", "cross")
             )
 
@@ -1029,14 +1028,14 @@ async def check_staff_quota(interaction: discord.Interaction, staff: discord.Mem
             embed.set_footer(text=f"Quota {index} of {total}")
             embeds.append(embed)
 
-        await interaction.followup.send(embeds=embeds)
+        await interaction.response.send_message(embeds=embeds)
     except LilyError as e:
-        await interaction.followup.send(embed=simple_embed(str(e), "cross"))
+        await interaction.response.send_message(embed=simple_embed(str(e), "cross"))
     except Exception:
         logger.exception(
             f"[CheckStaffQuota] Failed to check quota for staff_id={staff.id} in guild_id={interaction.guild.id}"
         )
-        await interaction.followup.send(embed=simple_embed("Failed to check staff quota.", "cross"))
+        await interaction.response.send_message(embed=simple_embed("Failed to check staff quota.", "cross"))
 
 
 async def remove_role(interaction: discord.Interaction, role: int):
