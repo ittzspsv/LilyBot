@@ -27,12 +27,17 @@ async def on_appeal_requested(
     if not bot.db:
         return
 
-    channel = bot.db.get_channel(
+    channel_id = bot.db.get_channel(
         payload.guild.id,
         Events.APPEAL_REQUESTED.value
     )
 
-    if not channel:
+    if not channel_id:
+        return
+
+    channel = payload.guild.get_channel(channel_id)
+
+    if channel is None:
         return
 
     if not isinstance(channel, discord.TextChannel):
@@ -85,12 +90,17 @@ async def on_appeal_handled(
     if not bot.db:
         return
 
-    channel = bot.db.get_channel(
+    channel_id = bot.db.get_channel(
         payload.guild.id,
         Events.APPEAL_HANDLED.value
     )
 
-    if not channel:
+    if not channel_id:
+            return
+    
+    channel = payload.guild.get_channel(channel_id)
+
+    if channel is None:
         return
 
     if not isinstance(channel, discord.TextChannel):
