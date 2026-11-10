@@ -1077,46 +1077,45 @@ async def evaluate_staff_quota(interaction: discord.Interaction, role: discord.R
                 embed=simple_embed("No quota has been defined for this role", 'cross')
             )
 
-        quota = quotas[0]
-        results = await bot_db.evaluate_quotas(interaction.guild.id, quota_id=quota.id)
+        embeds=[]
 
-        passed_staff_str = "\n".join(r.staff.mention for r in results if r.passed) or "None"
-        failed_staff_str = "\n".join(r.staff.mention for r in results if not r.passed) or "None"
-        passed_count = sum(1 for r in results if r.passed)
+        for i, quota in enumerate(quotas):
+            results = await bot_db.evaluate_quotas(interaction.guild.id, quota_id=quota.id)
 
-        embed = discord.Embed(
-            color=0xFFFFFF,
-            description=f"### Quota Evaluation for <@&{quota.role_id}>"
-        )
+            passed_staff_str = ", ".join(r.staff.mention for r in results if r.passed) or "None"
+            failed_staff_str = ", ".join(r.staff.mention for r in results if not r.passed) or "None"
+            passed_count = sum(1 for r in results if r.passed)
 
-        embed.add_field(
-            name="Quota Summary",
-            value=(
-                f"Total Staff: **{len(results)}**\n"
-                f"Passed: **{passed_count}**\n"
-                f"Failed: **{len(results) - passed_count}**"
-            ),
-            inline=False,
-        )
+            embed = discord.Embed(
+                color=0xFFFFFF,
+                description=(
+                    f"### Quota Evaluation for <@&{quota.role_id}>"
+                    if i == 0 else None
+                )
+            )
 
-        embed.add_field(
-            name="Passed Staff",
-            value=passed_staff_str,
-            inline=False,
-        )
+            embed.add_field(
+                name=f"Passed ({passed_count})",
+                value=passed_staff_str,
+                inline=False,
+            )
 
-        embed.add_field(
-            name="Failed Staff",
-            value=failed_staff_str,
-            inline=False,
-        )
+            embed.add_field(
+                name=f"Failed ({len(results) - passed_count})",
+                value=failed_staff_str,
+                inline=False,
+            )
 
-        if interaction.guild.icon:
-            embed.set_thumbnail(url=interaction.guild.icon.url)
+            embed.set_footer(text=f"Quota ID #{quota.id}")
 
-        embed.set_image(url=img['border'])
+            if interaction.guild.icon:
+                embed.set_thumbnail(url=interaction.guild.icon.url)
 
-        await interaction.response.send_message(embed=embed)
+            embed.set_image(url=img['border'])
+
+            embeds.append(embed)
+
+        await interaction.response.send_message(embeds=embeds)
     except LilyError as e:
         await interaction.response.send_message(embed=simple_embed(str(e), "cross"))
     except Exception:
@@ -1288,25 +1287,17 @@ async def automatic_quota_evaluator(check_by: str, bot):
                 if webhook is None:
                     continue
 
-                passed_staff_str = "\n".join(r.staff.mention for r in results if r.passed) or "None"
-                failed_staff_str = "\n".join(r.staff.mention for r in results if not r.passed) or "None"
+                passed_staff_str = ", ".join(r.staff.mention for r in results if r.passed) or "None"
+                failed_staff_str = ", ".join(r.staff.mention for r in results if not r.passed) or "None"
                 passed_count = sum(1 for r in results if r.passed)
 
                 embed = discord.Embed(
                     color=0xFFFFFF,
                     description=f"### Quota Evaluation for <@&{quota.role_id}>",
                 )
-                embed.add_field(
-                    name="Quota Summary",
-                    value=(
-                        f"Total Staff: **{len(results)}**\n"
-                        f"Passed: **{passed_count}**\n"
-                        f"Failed: **{len(results) - passed_count}**"
-                    ),
-                    inline=False,
-                )
-                embed.add_field(name="Passed Staff", value=passed_staff_str, inline=False)
-                embed.add_field(name="Failed Staff", value=failed_staff_str, inline=False)
+                embed.add_field(name=f"Passed Staff ({passed_count})", value=passed_staff_str, inline=False)
+                embed.add_field(name=f"Failed Staff ({len(results) - passed_count})", value=failed_staff_str, inline=False)
+                embed.set_footer(text=f"Total Staffs {len(results)}")
                 embed.set_image(url=img["border"])
 
                 bot_name = _bot.user.name if _bot.user else "Lily"
