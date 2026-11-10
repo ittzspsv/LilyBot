@@ -6,8 +6,9 @@ from discord.ext import commands
 import src.core.configs.bot_details as Configs
 from src.core.configs.bot_details import emoji, img
 
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from datetime import datetime,timedelta, timezone
+from dataclasses import dataclass
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from src.core.utils.embeds.sLilyEmbed import simple_embed
 from ..embeds.staff_management_embed import loa_accept_embed, loa_reject_embed, infraction_embed
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess, LilyError
@@ -28,20 +29,51 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("lily")
 
+@dataclass(slots=True)
+class StaffPage:
+    label: str
+    emoji: str
+    body: str
+
 
 class StaffDataView(discord.ui.LayoutView):
-    def __init__(self, member: discord.Member | discord.User, profile: StaffProfile) -> None:
-        super().__init__(timeout=None)
+    DEFAULT_PAGE = "basic"
+
+    def __init__(self, member: discord.Member, profile: StaffProfile) -> None:
+        super().__init__(timeout=300)
 
         staff = profile.staff
-        name = member.display_name
         role_ids = profile.role_ids
-        timezone = profile.timezone
+        _timezone = profile.timezone
 
         joined = staff.joined
-        joined_ts = int(joined.timestamp()) if joined else None
-        join_date = f"<t:{joined_ts}:D>" if joined_ts else "N/A"
-        experience = f"<t:{joined_ts}:R>" if joined_ts else "N/A"
+        join_date = "N/A"
+        experience = "N/A"
+
+        if joined:
+            now = discord.utils.utcnow()
+            start = joined if joined.tzinfo else joined.replace(tzinfo=timezone.utc)
+            join_date = f"<t:{int(start.timestamp())}:D>"
+
+            delta = max(now - start, timedelta(0))
+            years = max(0, now.year - start.year - ((now.month, now.day) < (start.month, start.day)))
+
+            if years:
+                n, unit = years, "year"
+            elif delta.days:
+                n, unit = delta.days, "day"
+            elif delta.seconds >= 3600:
+                n, unit = delta.seconds // 3600, "hour"
+            elif delta.seconds >= 60:
+                n, unit = delta.seconds // 60, "minute"
+            else:
+                n, unit = 0, ""
+
+            experience = (
+                f"{n} {unit}{'s' if n != 1 else ''} of dedication"
+                if n
+                else "Less than a minute"
+            )
 
         if staff.on_loa:
             status_display = f"{Configs.emoji['dnd']} On Leave"
@@ -50,67 +82,100 @@ class StaffDataView(discord.ui.LayoutView):
         else:
             status_display = f"{Configs.emoji['online']} Active"
 
-        if timezone is not None:
-            local_dt = datetime.now(tz=ZoneInfo(timezone))
-            current_time = (
-                local_dt.strftime("%-d %A %Y at %-I.%M%p")
-                .replace("AM", "am")
-                .replace("PM", "pm")
+        current_time = self._format_local_time(_timezone)
+        roles = ", ".join(f"<@&{rid}>" for rid in role_ids) if role_ids else "N/A"
+
+        self.pages: dict[str, StaffPage] = {
+            "basic": StaffPage(
+                "Basic Information",
+                Configs.emoji["staff"],
+                f"> {Configs.emoji['staff']} **Role:** {roles}\n"
+                f"> {Configs.emoji['pencil']} **Responsibilities:** {staff.responsibility or 'N/A'}",
+            ),
+            "timezone": StaffPage(
+                "Timezone Information",
+                Configs.emoji["clock"],
+                f"> {Configs.emoji['clock']} **Timezone:** {_timezone or 'N/A'}\n"
+                f"> {Configs.emoji['clock']} **Current Time:** {current_time}",
+            ),
+            "strikes": StaffPage(
+                "Infractions Information",
+                Configs.emoji["warn"],
+                f"> {Configs.emoji['warn']} **Strike Count:** **{profile.strikes_count}**",
+            ),
+            "quota_status": StaffPage(
+                "Quota Status Information",
+                Configs.emoji[""],
+                f""
             )
-        else:
-            current_time = "N/A"
+        }
 
-        avatar_url = member.avatar.url if member.avatar else member.default_avatar.url
-
-        container = discord.ui.Container()
-        self.add_item(container)
-
-        container.add_item(
+        header = discord.ui.Container()
+        header.add_item(
             discord.ui.Section(
-                discord.ui.TextDisplay(f"## [{name}'s Profile](https://discord.com/users/{member.id})"),
                 discord.ui.TextDisplay(
-                    "### Basic Information\n"
-                    f"{Configs.emoji['staff']} **Role:** {', '.join(f'<@&{rid}>' for rid in role_ids) if role_ids else 'N/A'}\n"
-                    f"{Configs.emoji['pencil']} **Responsibilities:** {staff.responsibility or 'N/A'}\n"
-                    f"{Configs.emoji['calender']} **Join Date:** {join_date}"
+                    f"## [{member.display_name}'s Profile]"
+                    f"(https://discord.com/users/{member.id}) `{member.name}`"
                 ),
-                accessory=discord.ui.Thumbnail(media=avatar_url),
+                discord.ui.TextDisplay(f"Staff member at {member.guild.name}"),
+                discord.ui.TextDisplay(f"Status: **{status_display}**"),
+                accessory=discord.ui.Thumbnail(media=member.display_avatar.url),
             )
         )
+        self.add_item(header)
 
-        container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.large))
+        self.details_selector = discord.ui.Select(
+            placeholder="Select a section...",
+            options=[
+                discord.SelectOption(
+                    label=page.label,
+                    value=key,
+                    emoji=page.emoji,
+                    default=(key == self.DEFAULT_PAGE),
+                )
+                for key, page in self.pages.items()
+            ],
+        )
+        self.details_selector.callback = self.details_selector_callback
 
-        container.add_item(
-            discord.ui.TextDisplay(
-                "### Timezone Information\n"
-                f"{Configs.emoji['clock']} **Timezone:** {timezone or 'N/A'}\n"
-                f"{Configs.emoji['clock']} **Current Time:** {current_time}"
+        self.details_text = discord.ui.TextDisplay(self.pages[self.DEFAULT_PAGE].body)
+
+        details = discord.ui.Container()
+        details.add_item(discord.ui.ActionRow(self.details_selector))
+        details.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+        details.add_item(self.details_text)
+        details.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+        details.add_item(
+            discord.ui.Section(
+                discord.ui.TextDisplay("**Staff Since**"),
+                discord.ui.TextDisplay(f"{Configs.emoji['calender']} {join_date}"),
+                accessory=discord.ui.Button(label=experience, disabled=True),
             )
         )
+        self.add_item(details)
 
-        container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+    @staticmethod
+    def _format_local_time(tz_name: str | None) -> str:
+        if not tz_name:
+            return "N/A"
+        try:
+            dt = datetime.now(tz=ZoneInfo(tz_name))
+        except (ZoneInfoNotFoundError, ValueError):
+            return "N/A"
+        hour = dt.hour % 12 or 12
+        meridiem = "am" if dt.hour < 12 else "pm"
+        return f"{dt:%A} {dt.day} {dt:%B} {dt.year} at {hour}.{dt:%M}{meridiem}"
 
-        container.add_item(
-            discord.ui.TextDisplay(
-                "### Experience Information\n"
-                f"{Configs.emoji['clock']} **Evaluated Experience:** {experience}"
-            )
-        )
+    async def details_selector_callback(self, interaction: discord.Interaction) -> None:
+        key = self.details_selector.values[0]
 
-        container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
+        for option in self.details_selector.options:
+            option.default = option.value == key
 
-        container.add_item(
-            discord.ui.TextDisplay(
-                "### Strikes Information\n"
-                f"{Configs.emoji['warn']} **Strike Count:** **{profile.strikes_count}**"
-            )
-        )
+        self.details_text.content = self.pages[key].body
+        await interaction.response.edit_message(view=self)
 
-        container.add_item(discord.ui.Separator(spacing=discord.SeparatorSpacing.small))
-
-        container.add_item(
-            discord.ui.TextDisplay(f"**Status**\n{status_display}")
-        )
+    
 
 class StaffListView(discord.ui.LayoutView):
     def __init__(
