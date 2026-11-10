@@ -102,11 +102,6 @@ class StaffDataView(discord.ui.LayoutView):
                 "Infractions Information",
                 Configs.emoji["warn"],
                 f"> {Configs.emoji['warn']} **Strike Count:** **{profile.strikes_count}**",
-            ),
-            "quota_status": StaffPage(
-                "Quota Status Information",
-                Configs.emoji[""],
-                f""
             )
         }
 
@@ -174,8 +169,6 @@ class StaffDataView(discord.ui.LayoutView):
 
         self.details_text.content = self.pages[key].body
         await interaction.response.edit_message(view=self)
-
-    
 
 class StaffListView(discord.ui.LayoutView):
     def __init__(
@@ -397,18 +390,19 @@ class StaffsView(discord.ui.LayoutView):
             discord.ui.Section(
                 discord.ui.TextDisplay(
                     content=(
-                        "## Staff's Overview\n"
-                        "- Lily's Staff Management System.\n\n"
+                        "## Staff Team\n"
+                        f"List of all staff members in {interaction.guild.name}\n\n"
                     )
+                ),
+                discord.ui.TextDisplay(
+                    f"### __Overall Details__\n"
+                    f"> **ON LOA** - `{overall_details.loa}`\n"
+                    f"> **Active Staffs** - `{overall_details.active}`\n"
+                    f"> **Total Staffs** - `{overall_details.total}`"
                 ),
                 accessory=discord.ui.Thumbnail(media=interaction.guild.icon.url if interaction.guild.icon else interaction.guild.me.display_avatar.url)
             ),
             discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
-            discord.ui.TextDisplay(content="### Server Staff Team\n- List of Role Category who has **Moderation/Administration/Management** Authority"),
-            discord.ui.TextDisplay(content=f"### __Overall Details__\n"
-                        f"- **ON LOA** - `{overall_details.loa}`\n"
-                        f"- **Active Staffs** - `{overall_details.active}`\n"
-                        f"- **Total Staffs** - `{overall_details.total}`"),
             discord.ui.ActionRow(self.roles_selector),
             discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
             discord.ui.Section(
@@ -416,8 +410,7 @@ class StaffsView(discord.ui.LayoutView):
                 discord.ui.TextDisplay(content="- Displays All Staffs who are on leave"),
                 accessory=self.loa_staffs_btn
             ),
-            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
-            accent_colour=discord.Colour(16777215),
+            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small)
         )
 
         self.add_item(self.container_1)
