@@ -66,14 +66,14 @@ class LilyManagement(commands.Cog):
                 try:
                     view = LOARequestView(
                         self.db,
-                        row["staff_id"],
-                        row["guild_id"],
-                        row["staff_pfp"],
-                        row["reason"],
-                        row["days"]
+                        row.staff_id,
+                        row.guild_id,
+                        row.avatar_url,
+                        row.reason,
+                        row.days
                     )
 
-                    self.bot.add_view(view, message_id=row["message_id"])
+                    self.bot.add_view(view, message_id=row.message_id)
                 except Exception as e:
                     print(f"Exception [LOARequestView] {e}")
                     continue

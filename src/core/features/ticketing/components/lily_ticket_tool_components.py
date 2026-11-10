@@ -1,18 +1,20 @@
 from __future__ import annotations
 
-from typing import Dict, List, Optional, cast, Any, TYPE_CHECKING
+from typing import Dict, List, Optional, Sequence, cast, Any, TYPE_CHECKING, Callable
 import re
 import logging
+import json
 
 import discord
 from discord.ext import commands
 from discord.ext.commands import MemberConverter
 from datetime import datetime
+from math import ceil
+from contextlib import suppress
 from src.core.configs.bot_details import emoji
 
 from src.core.configs.bot_details import (
-    emoji,
-    img,
+    emoji
 )
 
 from src.core.features.moderation.components.lily_moderation_components import (
@@ -20,6 +22,12 @@ from src.core.features.moderation.components.lily_moderation_components import (
 )
 
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
+from src.core.database.integrations.models import (
+    Page,
+    TicketLog,
+    TicketPanel,
+    TicketType,
+)
 
 from src.core.utils.embeds.sLilyEmbed import (
     simple_embed,
@@ -30,6 +38,14 @@ from src.core.features.moderation.controller.lily_moderation_controller import (
     quarantine_user,
     warn
 )
+
+from src.core.database.integrations.models import (
+    TicketView,
+    TicketPanel,
+    TicketType
+)
+
+from src.core.database.integrations.bot_globals import LilyError
 
 if TYPE_CHECKING:
     from src.lily import Lily
@@ -42,15 +58,20 @@ bot = None
 async def resolve_ticket_roles(bot_db: BotGlobalsDatabaseAccess, guild_id: int, submission_json: dict) -> tuple[set[int], set[int]]:
     """(ping_roles, higher_staff_roles) as configured right now. Empty if the panel no longer exists."""
     panel_message_id = submission_json.get("message_id")
-    view_id = await bot_db.get_ticket_view_id(guild_id, panel_message_id) if panel_message_id else None
-
-    if view_id is None:
+    if not panel_message_id:
         return set(), set()
 
-    ping_roles = await bot_db.get_ticket_ping_roles(view_id, submission_json["ticket_name_base"])
-    staff_roles = await bot_db.get_ticket_view_staff_roles(view_id)
+    view = await bot_db.get_ticket_view(message_id=panel_message_id, guild_id=guild_id)
+    if view is None:
+        return set(), set()
 
-    return set(ping_roles), set(staff_roles)
+    ticket_type = view.get_type(submission_json["ticket_name_base"])
+    ping_roles = set(ticket_type.ping_roles) if ticket_type else set()
+
+    return ping_roles, set(view.staff_role_ids)
+
+def _discord_ts(dt: datetime | None, style: str = "f") -> str:
+    return f"<t:{int(dt.timestamp())}:{style}>" if dt else "*Unknown*"
 
 
 """ Modals for ticket panel moderation. """
@@ -84,7 +105,7 @@ class MuteModal(discord.ui.Modal):
         self.member_id = member_id
         self.proofs = proofs
 
-    async def on_submit(self, interaction: discord.Interaction):
+    async def on_submit(self, interaction: discord.Interaction) -> None:
         assert isinstance(self.duration.component, discord.ui.TextInput)
         assert isinstance(self.reason.component, discord.ui.TextInput)
 
@@ -339,6 +360,10 @@ def build_ticket_summary(submission_json: dict) -> discord.Embed:
         elif field_type == "role_select":
             description_parts.append(f"### {label}\n{' , '.join(value)}")
 
+        elif field_type in ("selector", "radio_option", "check_box"):
+            picked = value if isinstance(value, list) else [value]
+            description_parts.append(f"### {label}\n{' , '.join(str(v) for v in picked if v) or 'None selected'}")
+
     embed = discord.Embed(
         title="Ticket Summary",
         description="\n\n".join(description_parts),
@@ -461,14 +486,20 @@ class TicketOpenerComponent(discord.ui.LayoutView):
 
         if not success:
             try:
-                claimer = await bot_db.get_ticket_claimer(interaction.channel.id)
+                ticket = await bot_db.get_ticket_by_id(interaction.channel.id)
+                claimer = ticket.claimer_user_id if ticket else None
             except Exception:
                 logger.exception(
-                    "TicketOpenerComponent.claim_ticket_callback: get_ticket_claimer failed for channel %s",
+                    "TicketOpenerComponent.claim_ticket_callback: get_ticket_by_id failed for channel %s",
                     interaction.channel.id
                 )
                 await interaction.followup.send(embed=simple_embed("This ticket is already claimed, but the claimer could not be determined.", 'cross'), ephemeral=True)
                 return
+
+            if claimer is None:
+                await interaction.followup.send(embed=simple_embed("This ticket is already claimed, but the claimer could not be determined.", 'cross'), ephemeral=True)
+                return
+
             await interaction.followup.send(
                 embed=simple_embed(f"<@{claimer}> has already claimed this ticket!", 'cross'),
                 ephemeral=True
@@ -522,10 +553,11 @@ class TicketOpenerComponent(discord.ui.LayoutView):
         assert bot_db is not None
 
         try:
-            claimer = await bot_db.get_ticket_claimer(interaction.channel.id)
+            ticket = await bot_db.get_ticket_by_id(interaction.channel.id)
+            claimer = ticket.claimer_user_id if ticket else None
         except Exception:
             logger.exception(
-                "TicketOpenerComponent.revoke_claim_callback: get_ticket_claimer failed for channel %s",
+                "TicketOpenerComponent.revoke_claim_callback: get_ticket_by_id failed for channel %s",
                 interaction.channel.id
             )
             await interaction.followup.send(embed=simple_embed("Failed to look up the ticket claimer due to a database error!", 'cross'), ephemeral=True)
@@ -795,6 +827,16 @@ class TicketComponentEmbed(discord.ui.LayoutView):
                         discord.ui.TextDisplay(content=value["invite_url"])
                     )
 
+            elif field_type in ("selector", "radio_option", "check_box"):
+                picked = value if isinstance(value, list) else [value]
+                answers = " , ".join(str(v) for v in picked if v) or "None selected"
+
+                ticket_details.append(
+                    discord.ui.TextDisplay(
+                        f"### {label}\n> {answers}"
+                    )
+                )
+
 
 
         ticket_details_container = discord.ui.Container(
@@ -861,26 +903,10 @@ class TicketComponentEmbed(discord.ui.LayoutView):
         bot_db = cast("Lily", interaction.client).db
         assert bot_db is not None
 
-        try:
-            _guild_id = bot_db.get_secondary_guild_id(interaction.guild.id) or interaction.guild.id
-        except Exception:
-            logger.exception(
-                "TicketComponentEmbed.case_list_handler: get_secondary_guild_id failed for guild %s",
-                interaction.guild.id
-            )
-            await interaction.response.send_message(embed=simple_embed("Failed to resolve the guild configuration!", 'cross'), ephemeral=True)
-            return
-
-        """ Fetch modlogs of the given member """
-        payload = {
-            "guild_id": _guild_id,
-            "target_user_id": member_data["id"],
-            "moderator_id": None,
-            "mod_type": "all"
-        }
+        _guild_id = interaction.guild.id
 
         try:
-            result = await bot_db.fetch_mod_logs(**payload)
+            result = await bot_db.fetch_mod_logs(_guild_id, member_data["id"])
         except Exception:
             logger.exception(
                 "TicketComponentEmbed.case_list_handler: fetch_mod_logs failed for user %s in guild %s",
@@ -889,11 +915,11 @@ class TicketComponentEmbed(discord.ui.LayoutView):
             await interaction.response.send_message(embed=simple_embed("Failed to fetch mod logs due to a database error!", 'cross'), ephemeral=True)
             return
 
-        if not result["success"]:
+        if result.total_count == 0:
             await interaction.response.send_message(embed=simple_embed("No cases found.", 'cross'), ephemeral=True)
             return  
 
-        view = CaseListView((member_data["username"], member_data["avatar"]), result, bot_db, guild_id=interaction.guild.id, target_user_id=member_data["id"])
+        view = CaseListView((member_data["username"], member_data["avatar"]), result, bot_db, guild_id=interaction.guild.id, target_user_id=member_data["id"], interactor=interaction.user.id)
         try:
             await interaction.response.send_message(
                 view=view,
@@ -958,11 +984,11 @@ class TicketComponentEmbed(discord.ui.LayoutView):
             )
 
 class TicketModal(discord.ui.Modal):
-    def __init__(self, title: str, ticket: dict, view_id: int, message: discord.Message):
+    def __init__(self, title: str, ticket: TicketType, view_id: int, message: discord.Message):
         super().__init__(title=title)
 
-        if not isinstance(ticket, dict):
-            raise TypeError(f"ticket must be a dict, got {type(ticket)}")
+        if not isinstance(ticket, TicketType):
+            raise TypeError(f"ticket must be a TicketType, got {type(ticket)}")
 
         self.components: List[Dict] = []
         self.ticket = ticket
@@ -970,7 +996,7 @@ class TicketModal(discord.ui.Modal):
         self.converter = MemberConverter()
         self.message = message
 
-        self.fields = self.ticket.get("fields")
+        self.fields = self.ticket.fields
 
         if not isinstance(self.fields, list):
             raise TypeError(f"fields must be a list, got {type(self.fields)}")
@@ -1013,6 +1039,46 @@ class TicketModal(discord.ui.Modal):
                     required=True
                 )
 
+            elif field_type in ("selector", "radio_option", "check_box"):
+                options = self.parse_field_options(field)
+
+                if field_type == "selector":
+                    if not 1 <= len(options) <= 25:
+                        raise ValueError(f"selector '{label}' needs 1-25 options")
+                    min_values, max_values = self.selection_range(field, len(options), cap=25, default_max=1)
+                    component = discord.ui.Select(
+                        min_values=min_values,
+                        max_values=max_values,
+                        required=True,
+                        options=[discord.SelectOption(label=o[:100], value=o[:100]) for o in options],
+                    )
+
+                elif field_type == "radio_option":
+                    if not 2 <= len(options) <= 10:
+                        raise ValueError(f"radio field '{label}' needs 2-10 options")
+                    component = discord.ui.RadioGroup(
+                        required=True,
+                        options=[discord.RadioGroupOption(label=o[:100]) for o in options],
+                    )
+
+                else:
+                    if not 1 <= len(options) <= 10:
+                        raise ValueError(f"checkbox field '{label}' needs 1-10 options")
+
+                    if len(options) == 1:
+                        description = description or options[0][:100]
+                        component = discord.ui.Checkbox(default=False)
+                    else:
+                        min_values, max_values = self.selection_range(
+                            field, len(options), cap=10, default_max=len(options)
+                        )
+                        component = discord.ui.CheckboxGroup(
+                            min_values=min_values,
+                            max_values=max_values,
+                            required=True,
+                            options=[discord.CheckboxGroupOption(label=o[:100]) for o in options],
+                        )
+
             """ This wouldn't likely to occur """
             if component is None:
                 raise ValueError
@@ -1029,8 +1095,24 @@ class TicketModal(discord.ui.Modal):
             })
             self.add_item(item)
         
+    def parse_field_options(self, field: dict) -> list[str]:
+        raw = field.get("metadata") or ""
+        return list(dict.fromkeys(o.strip() for o in str(raw).split(",") if o.strip()))
 
-    async def ticket_thread_constructor(self, interaction: discord.Interaction, submission_json: dict, settings: dict, higher_staff_roles_ids: List[int]) -> discord.TextChannel | discord.Thread | None:
+
+    def selection_range(self, field: dict, option_count: int, *, cap: int, default_max: int) -> tuple[int, int]:
+        ceiling = min(option_count, cap)
+        try:
+            min_values = int(field.get("min_values", 1))
+            max_values = int(field.get("max_values", default_max))
+        except (TypeError, ValueError):
+            min_values, max_values = 1, default_max
+        max_values = max(1, min(max_values, ceiling))
+        min_values = max(1, min(min_values, max_values))
+        return min_values, max_values
+
+
+    async def ticket_thread_constructor(self, interaction: discord.Interaction, submission_json: dict, logging_channel_id: int, higher_staff_roles_ids: List[int]) -> discord.TextChannel | discord.Thread | None:
         if interaction.guild is None:
             return None
 
@@ -1060,7 +1142,6 @@ class TicketModal(discord.ui.Modal):
         roles = submission_json.get("ping_roles", [])
 
         opener = interaction.user
-        logging_channel_id = settings["logging_channel_id"]
         ticket_name_base: str = submission_json["ticket_name_base"]
         channel_emoji = submission_json.get("channel_emoji", "")
         ticket_name = f"{channel_emoji}{ticket_name_base}"
@@ -1333,7 +1414,7 @@ class TicketModal(discord.ui.Modal):
         assert bot_db is not None
 
         try:
-            rows = await bot_db.get_ticket_by_opener(interaction.user.id, interaction.guild.id)
+            tickets = await bot_db.get_ticket_by_opener(interaction.user.id, interaction.guild.id)
         except Exception:
             logger.exception(
                 "TicketModal.on_submit: get_ticket_by_opener failed for user %s in guild %s",
@@ -1345,8 +1426,8 @@ class TicketModal(discord.ui.Modal):
             )
             return
 
-        if len(rows) >= 3:
-            references = ", ".join(f"<#{r[0]}>" for r in rows)
+        if len(tickets) >= 3:
+            references = ", ".join(f"<#{t.id}>" for t in tickets)
             await interaction.followup.send(
                 embed=simple_embed(
                     "Your ticket cannot be created.\n"
@@ -1358,8 +1439,7 @@ class TicketModal(discord.ui.Modal):
             return
 
         try:
-            settings = await bot_db.get_ticket_view_settings(self.view_id)
-            higher_staff_role_ids = await bot_db.get_ticket_view_staff_roles(self.view_id)
+            ticket_view = await bot_db.get_ticket_view(view_id=self.view_id)
         except Exception:
             logger.exception(
                 "TicketModal.on_submit: failed to load ticket configuration for panel %s",
@@ -1371,18 +1451,20 @@ class TicketModal(discord.ui.Modal):
             )
             return
 
-        if settings is None or settings.get("logging_channel_id") is None:
+        if ticket_view is None or ticket_view.logging_channel_id is None:
             await interaction.followup.send(
                 embed=simple_embed("This ticket panel is no longer configured. Please contact an admin.", 'cross'),
                 ephemeral=True
             )
             return
 
-        channel_id = self.ticket.get("channel_id")
-        ticket_name_base = self.ticket["ticket_base_name"]
-        channel_emoji = self.ticket.get("channel_emoji") or ""
-        ping_roles = self.ticket.get("ping_roles", [])
-        logs_channel_id = settings["logging_channel_id"]
+        higher_staff_role_ids = ticket_view.staff_role_ids
+        logs_channel_id = ticket_view.logging_channel_id
+
+        channel_id = self.ticket.channel_id
+        ticket_name_base = self.ticket.ticket_base_name
+        channel_emoji = self.ticket.channel_emoji or ""
+        ping_roles = self.ticket.ping_roles
 
         field_data: List[Dict] = []
 
@@ -1413,6 +1495,7 @@ class TicketModal(discord.ui.Modal):
                     "field": field,
                     "value": [attachment.url for attachment in item.component.values]
                 })
+            
             elif field_type == "member":
                 assert isinstance(item.component, discord.ui.TextInput)
                 # Try fetching the member details.
@@ -1463,8 +1546,8 @@ class TicketModal(discord.ui.Modal):
                         field_data.append({
                             "field": field,
                             "value": {
-                                "flag": 0,
-                                "url": item.component.value
+                                "flag": 1,
+                                "invite_url": item.component.value
                             }
                         })
 
@@ -1502,6 +1585,35 @@ class TicketModal(discord.ui.Modal):
                     "value": [role.name for role in item.component.values]
                 })
 
+            elif field_type == "selector":
+                assert isinstance(item.component, discord.ui.Select)
+                field_data.append({
+                    "field": field,
+                    "value": [str(v) for v in item.component.values]
+                })
+
+            elif field_type == "radio_option":
+                assert isinstance(item.component, discord.ui.RadioGroup)
+                chosen = item.component.value
+                field_data.append({
+                    "field": field,
+                    "value": [str(chosen)] if chosen else []
+                })
+
+            elif field_type == "check_box":
+                if isinstance(item.component, discord.ui.Checkbox):
+                    only_option = self.parse_field_options(field)[:1]
+                    field_data.append({
+                        "field": field,
+                        "value": only_option if item.component.value else []
+                    })
+                else:
+                    assert isinstance(item.component, discord.ui.CheckboxGroup)
+                    field_data.append({
+                        "field": field,
+                        "value": [str(v) for v in item.component.values]
+                    })
+
             else:
                 assert isinstance(item.component, discord.ui.TextInput)
                 field_data.append({
@@ -1534,7 +1646,7 @@ class TicketModal(discord.ui.Modal):
             thread_channel: discord.TextChannel | discord.Thread | None = await self.ticket_thread_constructor(
                 interaction,
                 submission,
-                settings,
+                logs_channel_id,
                 higher_staff_role_ids
             )
         except Exception:
@@ -1563,22 +1675,9 @@ class TicketModal(discord.ui.Modal):
                 )
 
 class TicketSelectComponent(discord.ui.LayoutView):
-    """
-    Stateless ticket panel.
-
-    The view only carries what is needed to RENDER the panel message (title,
-    description, thumbnail and the select options).  Ticket types, modal
-    fields, roles and channels are never kept on the instance: when a member
-    picks an option the callback finds the panel from the message that was
-    clicked and reads everything else from the database on demand.
-
-    The option value is the ticket type's `ticket_base_name` (unique per
-    panel), so re-ordering or editing types can never open the wrong modal.
-    """
-
     CUSTOM_ID = "ticket_selector_main"
 
-    def __init__(self, panel: dict, ticket_types: List[dict]) -> None:
+    def __init__(self, panel: TicketPanel | None, ticket_types: Sequence[TicketType]) -> None:
         super().__init__(timeout=None)
 
         if not ticket_types:
@@ -1589,19 +1688,19 @@ class TicketSelectComponent(discord.ui.LayoutView):
             custom_id=self.CUSTOM_ID,
             options=[
                 discord.SelectOption(
-                    label=ticket["label"],
-                    emoji=ticket.get("emoji") or None,
-                    description=ticket.get("description") or None,
-                    value=ticket["ticket_base_name"],
+                    label=ticket.label,
+                    emoji=ticket.emoji or None,
+                    description=ticket.description or None,
+                    value=ticket.ticket_base_name,
                 )
                 for ticket in ticket_types
             ],
         )
         self.ticket_options.callback = self.ticket_selector_callback
 
-        title = panel.get("title") or "Support Tickets"
-        description = panel.get("description") or "Select a ticket type below to get started."
-        thumbnail_url = panel.get("thumbnail_url")
+        title = (panel.title if panel else None) or "Support Tickets"
+        description = (panel.description if panel else None) or "Select a ticket type below to get started."
+        thumbnail_url = panel.thumbnail_url if panel else None
 
         if thumbnail_url:
             header = [
@@ -1617,19 +1716,23 @@ class TicketSelectComponent(discord.ui.LayoutView):
                 discord.ui.TextDisplay(content=description),
             ]
 
-        self.add_item(
-            discord.ui.Container(
-                *header,
-                discord.ui.ActionRow(self.ticket_options),
-            )
-        )
+        children: list[discord.ui.Item] = [
+            *header, 
+            discord.ui.ActionRow(self.ticket_options)
+        ]
+        footer = panel.footer_text if panel else None
+        if footer:
+            children.append(discord.ui.TextDisplay(content=f"-# {footer}"))
+
+        self.add_item(discord.ui.Container(*children))
 
     @classmethod
     async def from_db(cls, bot_db: BotGlobalsDatabaseAccess, view_id: int) -> "TicketSelectComponent":
         """Build the panel from the normalized tables (restart / refresh path)."""
-        panel = await bot_db.get_ticket_panel(view_id) or {}
-        ticket_types = await bot_db.get_ticket_view_types(view_id)
-        return cls(panel, ticket_types)
+        view = await bot_db.get_ticket_view(view_id=view_id)
+        if view is None:
+            raise ValueError(f"Ticket panel {view_id} does not exist.")
+        return cls(view.panel, view.types)
 
     @classmethod
     def from_config(cls, config: dict) -> "TicketSelectComponent":
@@ -1639,12 +1742,23 @@ class TicketSelectComponent(discord.ui.LayoutView):
         the config that is about to be saved.
         """
         panel_config = config.get("PanelConfig") or {}
-        panel = {
-            "title": panel_config.get("title"),
-            "description": panel_config.get("description"),
-            "thumbnail_url": (panel_config.get("thumbnail") or {}).get("url"),
-        }
-        return cls(panel, config.get("Tickets") or [])
+        panel = TicketPanel(
+            title=panel_config.get("title"),
+            description=panel_config.get("description"),
+            footer_text=(panel_config.get("footer") or {}).get("text"),
+            thumbnail_url=(panel_config.get("thumbnail") or {}).get("url"),
+        )
+        ticket_types = [
+            TicketType(
+                id=0,
+                label=ticket["label"],
+                ticket_base_name=ticket["ticket_base_name"],
+                description=ticket.get("description"),
+                emoji=ticket.get("emoji"),
+            )
+            for ticket in config.get("Tickets") or []
+        ]
+        return cls(panel, ticket_types)
 
     async def ticket_selector_callback(self, interaction: discord.Interaction):
         if interaction.guild is None or interaction.message is None:
@@ -1656,14 +1770,8 @@ class TicketSelectComponent(discord.ui.LayoutView):
         selected = self.ticket_options.values[0]
 
         try:
-            view_id = await bot_db.get_ticket_view_id(
-                interaction.guild.id, interaction.message.id
-            )
-
-            ticket = (
-                await bot_db.get_ticket_view_type(view_id, selected)
-                if view_id is not None
-                else None
+            ticket_view = await bot_db.get_ticket_view(
+                message_id=interaction.message.id, guild_id=interaction.guild.id
             )
         except Exception:
             logger.exception(
@@ -1676,17 +1784,19 @@ class TicketSelectComponent(discord.ui.LayoutView):
             )
             return
 
-        if view_id is None:
+        if ticket_view is None:
             await interaction.response.send_message(
                 embed=simple_embed("This ticket panel is no longer configured!", 'cross'),
                 ephemeral=True
             )
             return
 
+        ticket = ticket_view.get_type(selected)
+
         if ticket is None:
             logger.warning(
                 "TicketSelectComponent.ticket_selector_callback: ticket type %r no longer exists on panel %s",
-                selected, view_id
+                selected, ticket_view.id
             )
             await interaction.response.send_message(
                 embed=simple_embed("That ticket type is no longer available!", 'cross'),
@@ -1696,15 +1806,15 @@ class TicketSelectComponent(discord.ui.LayoutView):
 
         try:
             modal = TicketModal(
-                title=ticket["label"],
+                title=ticket.label,
                 ticket=ticket,
-                view_id=view_id,
+                view_id=ticket_view.id,
                 message=interaction.message
             )
         except (TypeError, ValueError):
             logger.exception(
                 "TicketSelectComponent.ticket_selector_callback: failed to build TicketModal for ticket %r",
-                ticket.get("label")
+                ticket.label
             )
             await interaction.response.send_message(
                 embed=simple_embed("This ticket type is misconfigured. Please contact an admin.", 'cross'),
@@ -1717,7 +1827,7 @@ class TicketSelectComponent(discord.ui.LayoutView):
         except discord.HTTPException:
             logger.exception(
                 "TicketSelectComponent.ticket_selector_callback: failed to send ticket modal for ticket %r",
-                ticket.get("label")
+                ticket.label
             )
 
 class TicketLogComponent(discord.ui.LayoutView):
@@ -1760,7 +1870,7 @@ class TicketLogDirectMessage(discord.ui.LayoutView):
 class TicketList(discord.ui.LayoutView):
     def __init__(
         self,
-        ticket_result: dict[str, Any],
+        ticket_result: Page[TicketLog],
         ticket_types: List[str],
         *,
         opened_user_id: int | None = None,
@@ -1770,34 +1880,37 @@ class TicketList(discord.ui.LayoutView):
     ) -> None:
         super().__init__(timeout=None)
 
-        self.page = ticket_result["page"]
-        self.max_page = ticket_result["max_page"]
-        self.total_count = ticket_result["total_count"]
+        self.page = ticket_result.page
+        self.max_page = ticket_result.max_page
+        self.total_count = ticket_result.total_count
         self.ticket_types = ticket_types
         self.opened_user_id = opened_user_id
         self.staff_handled = staff_handled
         self.ticket_type = ticket_type
         self.guild_avatar: str | None = guild_avatar
 
-        self.ticket_results = ticket_result["results"]
+        self.ticket_results: list[TicketLog] = ticket_result.items
         self.ticket_sections: List[discord.ui.Section] = []
 
-        for result in self.ticket_results:
+        for log in self.ticket_results:
             retrieve_ticket = discord.ui.Button(
                 style=discord.ButtonStyle.secondary,
                 emoji=emoji["paper_clip"],
-                custom_id=str(result["id"]),
+                custom_id=str(log.id),
             )
     
             retrieve_ticket.callback = self.retrieve_ticket_callback
 
+            type_label = (log.ticket_type or "unknown").replace("_", " ").title()
+            staff_label = f"<@{log.staff_handled}>" if log.staff_handled else "*Unassigned*"
+
             self.ticket_sections.append(
                 discord.ui.Section(
                     discord.ui.TextDisplay(
-                        content=f"### {result['ticket_type'].replace("_", " ").title()} | <@{result['opened_user_id']}>"
+                        content=f"### {type_label} | <@{log.opened_user_id}>"
                     ),
                     discord.ui.TextDisplay(
-                        content=f"- {emoji["staff"]} Staff Handled: <@{result['staff_handled']}>\n- {emoji["clock"]} Timestamp: <t:{int(datetime.fromisoformat(result['timestamp']).timestamp())}:f>"
+                        content=f"- {emoji['staff']} Staff Handled: {staff_label}\n- {emoji['clock']} Timestamp: {_discord_ts(log.opened_at)}"
                     ),
                     accessory=retrieve_ticket
                 )
@@ -1806,7 +1919,7 @@ class TicketList(discord.ui.LayoutView):
         self.prev_button = discord.ui.Button(
             style=discord.ButtonStyle.secondary,
             emoji=emoji["left"],
-            disabled=not ticket_result["has_prev"],
+            disabled=not ticket_result.has_prev,
         )
         self.prev_button.callback = self.on_prev
 
@@ -1819,7 +1932,7 @@ class TicketList(discord.ui.LayoutView):
         self.next_button = discord.ui.Button(
             style=discord.ButtonStyle.secondary,
             emoji=emoji["right"],
-            disabled=not ticket_result["has_next"],
+            disabled=not ticket_result.has_next,
         )
         self.next_button.callback = self.on_next
 
@@ -1944,31 +2057,38 @@ class TicketList(discord.ui.LayoutView):
             )
             return
 
-        view = discord.ui.LayoutView().add_item(
-                discord.ui.Container(
-                    discord.ui.Section(
-                        discord.ui.TextDisplay(content="## Ticket Information"),
-                        discord.ui.TextDisplay(content=f"- Showing ticket information for #{ticket_id}"),
-                        accessory=discord.ui.Thumbnail(
-                            media=interaction.guild.icon.url if interaction.guild.icon else interaction.guild.me.display_avatar.url,
-                        ),
+        type_label = (result.ticket_type or "unknown").replace("_", " ").title()
+        reason = result.reason or "*No reason provided*"
+
+        container_items: list[discord.ui.Item] = [
+            discord.ui.Section(
+                discord.ui.TextDisplay(content="## Ticket Information"),
+                discord.ui.TextDisplay(content=f"- Showing ticket information for #{ticket_id}"),
+                accessory=discord.ui.Thumbnail(
+                    media=interaction.guild.icon.url if interaction.guild.icon else interaction.guild.me.display_avatar.url,
+                ),
+            ),
+            discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+            discord.ui.TextDisplay(content=f"### Opened By\n- <@{result.opened_user_id}>"),
+            discord.ui.TextDisplay(content=f"### Staff Handled\n- <@{result.staff_handled}>" if result.staff_handled else "*Unassigned*"),
+            discord.ui.TextDisplay(content=f"### Ticket Type\n- {type_label}"),
+            discord.ui.TextDisplay(content=f"### Timestamp\n- {_discord_ts(result.opened_at)}"),
+            discord.ui.TextDisplay(content=f"### Reason\n- {reason}"),
+        ]
+
+        if result.logs_channel_id and result.transcripts_reference:
+            container_items.append(
+                discord.ui.Section(
+                    discord.ui.TextDisplay(content="### Transcript Reference"),
+                    accessory=discord.ui.Button(
+                        url=f"https://discord.com/channels/{interaction.guild.id}/{result.logs_channel_id}/{result.transcripts_reference}",
+                        style=discord.ButtonStyle.link,
+                        label="Transcript"
                     ),
-                    discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
-                    discord.ui.TextDisplay(content=f"### Opened By\n- <@{result['opened_user_id']}>"),
-                    discord.ui.TextDisplay(content=f"### Staff Handled\n- <@{result['staff_handled']}>" if result["staff_handled"] else "*Unassigned*"),
-                    discord.ui.TextDisplay(content=f"### Ticket Type\n- {result["ticket_type"].replace("_", " ").title()}"),
-                    discord.ui.TextDisplay(content=f"### Timestamp\n- <t:{int(datetime.fromisoformat(result['timestamp']).timestamp())}:f>"),
-                    discord.ui.TextDisplay(content=f"### Reason\n- {result["reason"] or "*No reason provided*"}"),
-                    discord.ui.Section(
-                        discord.ui.TextDisplay(content="### Transcript Reference"),
-                        accessory=discord.ui.Button(
-                            url=f"https://discord.com/channels/{interaction.guild.id}/{result["logs_channel_id"]}/{result["transcripts_reference"]}",
-                            style=discord.ButtonStyle.link,
-                            label="Transcript"
-                        ),
-                    ),
+                )
             )
-        )
+
+        view = discord.ui.LayoutView().add_item(discord.ui.Container(*container_items))
 
         try:
             await interaction.response.send_message(view=view, ephemeral=True)
@@ -2027,3 +2147,1254 @@ class TicketList(discord.ui.LayoutView):
                 "TicketList.refresh: failed to edit message with refreshed ticket list for guild %s",
                 interaction.guild.id
             )
+
+
+# Ticket Dashboard
+       
+TICKET_MODES = {"channel": "Channel", "thread": "Thread"}
+BASE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
+FIELD_TYPES = {
+    "short": ("Short text", "Accepts a short text response."),
+    "long": ("Long text", "Accepts a longer, multi-line text response."),
+    "member": ("Member", "Resolves a Discord member object for member-specific actions."),
+    "guild_invite": ("Server invite", "Accepts a Discord server invite link."),
+    "file_upload": ("File upload", "Allows users to upload files as attachments."),
+    "role_select": ("Role select", "Allows users to select a role from the server."),
+    "selector": ("Select Options", "Allows users to choose one or more predefined options."),
+    "radio_option": ("Radio Options", "Allows users to select a single option from predefined choices."),
+    "check_box": ("Checkbox", "Allows users to toggle a predefined option on or off.")
+}
+TEXT_FIELD_TYPES = {"short", "long", "member", "guild_invite"}
+DEFAULT_FIELDS = [{"label": "Describe your issue", "type": "long", "length": 500}]
+
+OPTION_FIELD_TYPES = {"selector", "radio_option", "check_box"}
+MAX_SELECT_OPTIONS = 25
+MAX_RADIO_OPTIONS = 10
+
+
+def get_db(interaction: discord.Interaction):
+    bot_db = cast("Lily", interaction.client).db
+    assert bot_db is not None
+    return bot_db
+
+async def edit_view(interaction: discord.Interaction, view: discord.ui.LayoutView) -> None:
+    if interaction.response.is_done():
+        await interaction.edit_original_response(view=view, allowed_mentions=discord.AllowedMentions.none())
+    else:
+        await interaction.response.edit_message(view=view, allowed_mentions=discord.AllowedMentions.none())
+
+def page_slice(items: list, page: int, size: int = 5):
+    max_page = max(1, ceil(len(items) / size))
+    page = min(max(1, page), max_page)
+    return items[(page - 1) * size : page * size], page, max_page
+
+def channel_defaults(channel_id: int | None) -> list[discord.SelectDefaultValue]:
+    if not channel_id:
+        return []
+    return [discord.SelectDefaultValue(id=channel_id, type=discord.SelectDefaultValueType.channel)]
+
+def role_defaults(role_ids) -> list[discord.SelectDefaultValue]:
+    return [
+        discord.SelectDefaultValue(id=r, type=discord.SelectDefaultValueType.role)
+        for r in list(role_ids)[:25]
+    ]
+
+def ticket_type_to_dict(t: TicketType) -> dict[str, Any]:
+    return {
+        "label": t.label,
+        "description": t.description,
+        "emoji": t.emoji,
+        "channel_id": t.channel_id,
+        "channel_emoji": t.channel_emoji,
+        "ticket_base_name": t.ticket_base_name,
+        "fields": list(t.fields),
+        "ping_roles": list(t.ping_roles),
+    }
+
+def view_to_config(tv: TicketView) -> dict[str, Any]:
+    panel = tv.panel
+    return {
+        "BasicConfigurations": {
+            "TicketPanelSpawnChannel": tv.spawn_channel_id,
+            "TicketLoggingHandler": tv.logging_channel_id,
+            "TicketType": tv.ticket_type,
+            "higher_staffs_role_id": list(tv.staff_role_ids),
+        },
+        "PanelConfig": (
+            {
+                "title": panel.title,
+                "description": panel.description,
+                "footer": {"text": panel.footer_text},
+                "thumbnail": {"url": panel.thumbnail_url},
+            }
+            if panel
+            else {}
+        ),
+        "Tickets": [ticket_type_to_dict(t) for t in tv.types],
+    }
+
+def find_ticket(config: dict[str, Any], base_name: str) -> dict[str, Any]:
+    for entry in config["Tickets"]:
+        if entry["ticket_base_name"] == base_name:
+            return entry
+    raise LilyError("Ticket type not found.")
+
+def build_panel_view(tv: TicketView) -> discord.ui.LayoutView:
+    return TicketSelectComponent(tv.panel, tv.types)
+
+async def sync_panel_message(guild: discord.Guild, tv: TicketView) -> str | None:
+    try:
+        channel = guild.get_channel(tv.channel_id) or await guild.fetch_channel(tv.channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            return "the panel channel is no longer a text channel."
+        message = await channel.fetch_message(tv.message_id)
+        await message.edit(view=build_panel_view(tv))
+    except discord.NotFound:
+        return "the posted panel message no longer exists."
+    except discord.Forbidden:
+        return "I don't have permission to edit the posted panel message."
+    except discord.HTTPException:
+        logger.exception("Failed to edit ticket panel message (view_id=%s)", tv.id)
+        return "Discord rejected the panel update (check emojis and image URLs)."
+    return None
+
+async def delete_panel_message(guild: discord.Guild, tv: TicketView) -> None:
+    with suppress(discord.HTTPException):
+        channel = guild.get_channel(tv.channel_id) or await guild.fetch_channel(tv.channel_id)
+        if isinstance(channel, discord.TextChannel):
+            await channel.get_partial_message(tv.message_id).delete()
+
+async def save_changes(
+    interaction: discord.Interaction,
+    tv: TicketView,
+    mutate: Callable[[dict[str, Any]], None],
+) -> TicketView | None:
+    assert interaction.guild is not None
+    bot_db = get_db(interaction)
+
+    try:
+        latest = await bot_db.get_ticket_view(view_id=tv.id)
+        if latest is None:
+            raise LilyError("This ticket panel no longer exists.")
+
+        config = view_to_config(latest)
+        mutate(config)
+        new_tv = await bot_db.save_ticket_view(latest.guild_id, latest.channel_id, latest.message_id, config)
+    except LilyError as exc:
+        await interaction.followup.send(embed=simple_embed(str(exc), "cross"), ephemeral=True)
+        return None
+    except Exception:
+        logger.exception("Failed to save ticket panel (view_id=%s)", tv.id)
+        await interaction.followup.send(
+            embed=simple_embed("Failed to save the ticket panel. Please try again later.", "cross"),
+            ephemeral=True,
+        )
+        return None
+
+    problem = await sync_panel_message(interaction.guild, new_tv)
+    if problem:
+        await interaction.followup.send(
+            embed=simple_embed(f"Saved, but the panel message wasn't updated: {problem}", "cross"),
+            ephemeral=True,
+        )
+    return new_tv
+
+class TicketPanelList(discord.ui.LayoutView):
+    def __init__(self, guild_id: int, panels: list[TicketView], page: int = 1) -> None:
+        super().__init__(timeout=None)
+
+        self.guild_id = guild_id
+        self.panels = panels
+        self.shown, self.page, self.max_page = page_slice(panels, page)
+
+        items: List[discord.ui.Item] = []
+        for tv in self.shown:
+            edit_button: discord.ui.Button = discord.ui.Button(
+                style=discord.ButtonStyle.secondary,
+                label="Edit",
+            )
+            edit_button.callback = self._edit_callback(tv.id)
+
+            title = (tv.panel.title if tv.panel else None) or "Untitled panel"
+            items.append(
+                discord.ui.Section(
+                    discord.ui.TextDisplay(
+                        content=f"**#{tv.id}** {title}\n-# <#{tv.channel_id}> | {len(tv.types)} ticket type(s)"
+                    ),
+                    accessory=edit_button,
+                )
+            )
+
+        if not items:
+            items.append(discord.ui.TextDisplay(content="*No ticket panels yet.*"))
+
+        prev_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary, emoji=emoji["left"], disabled=self.page <= 1
+        )
+        prev_button.callback = self.previous_callback
+
+        page_indicator: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label=f"Page {self.page}/{self.max_page}",
+            disabled=True,
+        )
+
+        next_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary, emoji=emoji["right"], disabled=self.page >= self.max_page
+        )
+        next_button.callback = self.next_callback
+
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(content="### Ticket Panels\n- Create and manage ticket panels"),
+                discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+                *items,
+                discord.ui.ActionRow(prev_button, page_indicator, next_button),
+            )
+        )
+
+        add_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary, label="Add", emoji=emoji["plus"]
+        )
+        add_button.callback = self.add_callback
+
+        remove_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label="Remove",
+            emoji=emoji["trash"],
+            disabled=not self.shown,
+        )
+        remove_button.callback = self.remove_callback
+
+        self.add_item(discord.ui.ActionRow(add_button, remove_button))
+
+    @classmethod
+    async def create(cls, bot_db, guild_id: int, page: int = 1) -> "TicketPanelList":
+        return cls(guild_id, await bot_db.get_ticket_views(guild_id), page)
+
+    async def refresh(self, interaction: discord.Interaction, page: int) -> None:
+        view = await TicketPanelList.create(get_db(interaction), self.guild_id, page)
+        await edit_view(interaction, view)
+
+    async def previous_callback(self, interaction: discord.Interaction) -> None:
+        await self.refresh(interaction, self.page - 1)
+
+    async def next_callback(self, interaction: discord.Interaction) -> None:
+        await self.refresh(interaction, self.page + 1)
+
+    async def add_callback(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(AddPanelModal(self))
+
+    async def remove_callback(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(RemovePanelModal(self))
+
+    def _edit_callback(self, view_id: int):
+        async def callback(interaction: discord.Interaction) -> None:
+            tv = await get_db(interaction).get_ticket_view(view_id=view_id)
+            if tv is None:
+                await interaction.response.send_message(
+                    embed=simple_embed("Ticket panel not found", "cross"), ephemeral=True
+                )
+                return
+            await edit_view(interaction, TicketPanelEdit(self, tv))
+
+        return callback
+
+class AddPanelModal(discord.ui.Modal):
+    def __init__(self, list_view: TicketPanelList) -> None:
+        super().__init__(title="Add Ticket Panel")
+        self.list_view = list_view
+
+        self.title_input = discord.ui.TextInput(label="Panel Title", max_length=256, default="Support")
+        self.description_input = discord.ui.TextInput(
+            label="Panel Description",
+            required=False,
+            style=discord.TextStyle.paragraph,
+            max_length=4000,
+        )
+        self.spawn_select = discord.ui.ChannelSelect(
+            channel_types=[discord.ChannelType.text],
+            placeholder="Channel to post the panel in",
+            min_values=1,
+            max_values=1,
+        )
+        self.log_select = discord.ui.ChannelSelect(
+            channel_types=[discord.ChannelType.text],
+            placeholder="Channel for ticket logs",
+            min_values=1,
+            max_values=1,
+        )
+        self.mode_select = discord.ui.Select(
+            placeholder="How tickets are created",
+            options=[discord.SelectOption(label=name, value=key) for key, name in TICKET_MODES.items()],
+        )
+
+        self.add_item(self.title_input)
+        self.add_item(self.description_input)
+        self.add_item(discord.ui.Label(text="Panel Channel", component=self.spawn_select))
+        self.add_item(discord.ui.Label(text="Logging Channel", component=self.log_select))
+        self.add_item(discord.ui.Label(text="Ticket Mode", component=self.mode_select))
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+        guild = interaction.guild
+        bot_db = get_db(interaction)
+
+        spawn = guild.get_channel(self.spawn_select.values[0].id)
+        if not isinstance(spawn, discord.TextChannel):
+            await interaction.response.send_message(
+                embed=simple_embed("Pick a text channel for the panel.", "cross"), ephemeral=True
+            )
+            return
+
+        perms = spawn.permissions_for(guild.me)
+        if not (perms.view_channel and perms.send_messages):
+            await interaction.response.send_message(
+                embed=simple_embed(f"I can't send messages in {spawn.mention}.", "cross"), ephemeral=True
+            )
+            return
+
+        await interaction.response.defer()
+
+        placeholder = discord.ui.LayoutView(timeout=None)
+        placeholder.add_item(discord.ui.TextDisplay(content="*Setting up ticket panel...*"))
+        try:
+            message = await spawn.send(view=placeholder)
+        except discord.HTTPException:
+            logger.exception("Failed to post ticket panel (guild_id=%s)", guild.id)
+            await interaction.followup.send(
+                embed=simple_embed("Couldn't post the panel message.", "cross"), ephemeral=True
+            )
+            return
+
+        config = {
+            "BasicConfigurations": {
+                "TicketPanelSpawnChannel": spawn.id,
+                "TicketLoggingHandler": self.log_select.values[0].id,
+                "TicketType": self.mode_select.values[0],
+                "higher_staffs_role_id": [],
+            },
+            "PanelConfig": {
+                "title": self.title_input.value,
+                "description": self.description_input.value or None,
+                "footer": {},
+                "thumbnail": {},
+            },
+            "Tickets": [
+                {
+                    "label": "General Support",
+                    "description": "Open a general support ticket",
+                    "ticket_base_name": "support",
+                    "fields": [dict(f) for f in DEFAULT_FIELDS],
+                    "ping_roles": [],
+                }
+            ],
+        }
+
+        try:
+            tv = await bot_db.save_ticket_view(guild.id, spawn.id, message.id, config)
+        except Exception as exc:
+            logger.exception("Failed to save new ticket panel (guild_id=%s)", guild.id)
+            with suppress(discord.HTTPException):
+                await message.delete()
+            text = str(exc) if isinstance(exc, LilyError) else "Failed to save the ticket panel."
+            await interaction.followup.send(embed=simple_embed(text, "cross"), ephemeral=True)
+            return
+
+        problem = await sync_panel_message(guild, tv)
+        if problem:
+            await interaction.followup.send(
+                embed=simple_embed(f"Panel saved, but couldn't render it: {problem}", "cross"),
+                ephemeral=True,
+            )
+
+        await edit_view(interaction, TicketPanelEdit(self.list_view, tv))
+
+class RemovePanelModal(discord.ui.Modal):
+    def __init__(self, list_view: TicketPanelList) -> None:
+        super().__init__(title="Remove Ticket Panel")
+        self.list_view = list_view
+
+        self.select = discord.ui.Select(
+            placeholder="Select a panel",
+            options=[
+                discord.SelectOption(
+                    label=f"#{tv.id} {(tv.panel.title if tv.panel else None) or 'Untitled panel'}"[:100],
+                    value=str(tv.id),
+                )
+                for tv in list_view.shown
+            ],
+        )
+        self.add_item(discord.ui.Label(text="Panel to remove", component=self.select))
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        view_id = int(self.select.values[0])
+        tv = next((p for p in self.list_view.shown if p.id == view_id), None)
+        if tv is None:
+            await self.list_view.refresh(interaction, self.list_view.page)
+            return
+
+        await interaction.response.edit_message(view=TicketPanelDeleteConfirm(self.list_view, tv))
+
+class TicketPanelDeleteConfirm(discord.ui.LayoutView):
+    def __init__(self, list_view: TicketPanelList, tv: TicketView) -> None:
+        super().__init__(timeout=300)
+        self.list_view = list_view
+        self.tv = tv
+
+        delete_button: discord.ui.Button = discord.ui.Button(style=discord.ButtonStyle.danger, label="Delete")
+        delete_button.callback = self.delete_callback
+
+        cancel_button: discord.ui.Button = discord.ui.Button(style=discord.ButtonStyle.secondary, label="Cancel")
+        cancel_button.callback = self.cancel_callback
+
+        title = (tv.panel.title if tv.panel else None) or "Untitled panel"
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.TextDisplay(
+                    content=(
+                        f"### Delete #{tv.id} {title}?\n"
+                        f"This deletes the panel configuration and its **{len(tv.types)}** ticket type(s), "
+                        f"and removes the posted panel message. This cannot be undone.\n"
+                        f"-# Open tickets from this panel stay, but staff can no longer claim them or use their moderation buttons."
+                    )
+                ),
+                discord.ui.ActionRow(delete_button, cancel_button),
+            )
+        )
+
+    async def delete_callback(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+        await interaction.response.defer()
+
+        try:
+            await get_db(interaction).delete_ticket_view(self.tv.message_id)
+        except LilyError:
+            pass  # already gone
+        except Exception:
+            logger.exception("Failed to delete ticket panel (view_id=%s)", self.tv.id)
+            await interaction.followup.send(
+                embed=simple_embed("Failed to delete the ticket panel.", "cross"), ephemeral=True
+            )
+            return
+
+        await delete_panel_message(interaction.guild, self.tv)
+        await self.list_view.refresh(interaction, self.list_view.page)
+
+    async def cancel_callback(self, interaction: discord.Interaction) -> None:
+        await self.list_view.refresh(interaction, self.list_view.page)
+
+class TicketPanelEdit(discord.ui.LayoutView):
+    def __init__(self, list_view: TicketPanelList, tv: TicketView, page: int = 1) -> None:
+        super().__init__(timeout=None)
+
+        self.list_view = list_view
+        self.tv = tv
+        shown, self.page, self.max_page = page_slice(tv.types, page)
+
+        title = (tv.panel.title if tv.panel else None) or "Untitled panel"
+        staff = " ".join(f"<@&{r}>" for r in tv.staff_role_ids) or "*None*"
+        logging_text = f"<#{tv.logging_channel_id}>" if tv.logging_channel_id else "*Not set*"
+        jump = f"https://discord.com/channels/{tv.guild_id}/{tv.channel_id}/{tv.message_id}"
+
+        back_button: discord.ui.Button = discord.ui.Button(style=discord.ButtonStyle.secondary, label="Back")
+        back_button.callback = self.back_callback
+
+        appearance_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary, label="Appearance", emoji=emoji["pencil"]
+        )
+        appearance_button.callback = self.appearance_callback
+
+        settings_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary, label="Settings", emoji=emoji["pencil"]
+        )
+        settings_button.callback = self.settings_callback
+
+        items: List[discord.ui.Item] = []
+        for t in shown:
+            edit_button: discord.ui.Button = discord.ui.Button(
+                style=discord.ButtonStyle.secondary, emoji=emoji["pencil"]
+            )
+            edit_button.callback = self._type_callback(t.ticket_base_name)
+
+            prefix = f"{t.emoji} " if t.emoji else ""
+            items.append(
+                discord.ui.Section(
+                    discord.ui.TextDisplay(
+                        content=(
+                            f"{prefix}**{t.label}**\n"
+                            f"-# `{t.ticket_base_name}` | {len(t.ping_roles)} ping role(s) | {len(t.fields)} field(s)"
+                        )
+                    ),
+                    accessory=edit_button,
+                )
+            )
+
+        prev_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary, emoji=emoji["left"], disabled=self.page <= 1
+        )
+        prev_button.callback = self.previous_callback
+
+        page_indicator: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label=f"Page {self.page}/{self.max_page}",
+            disabled=True,
+        )
+
+        next_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary, emoji=emoji["right"], disabled=self.page >= self.max_page
+        )
+        next_button.callback = self.next_callback
+
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.Section(
+                    discord.ui.TextDisplay(content=f"### #{tv.id} {title}\n-# Posted in <#{tv.channel_id}>"),
+                    accessory=back_button,
+                ),
+                discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+                discord.ui.TextDisplay(
+                    content=(
+                        f"> **Panel message:** [Jump]({jump})\n"
+                        f"> **Logging channel:** {logging_text}\n"
+                        f"> **Ticket mode:** `{tv.ticket_type or 'not set'}`\n"
+                        f"> **Staff roles:** {staff}"
+                    )
+                ),
+                discord.ui.ActionRow(appearance_button, settings_button),
+                discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+                discord.ui.TextDisplay(content=f"### Ticket Sections"),
+                *items,
+                discord.ui.ActionRow(prev_button, page_indicator, next_button),
+            )
+        )
+
+        add_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label="Add Section",
+            emoji=emoji["plus"],
+            disabled=len(tv.types) >= 25,
+        )
+        add_button.callback = self.add_type_callback
+
+        remove_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label="Remove Section",
+            emoji=emoji["trash"],
+            disabled=len(tv.types) <= 1,  
+        )
+        remove_button.callback = self.remove_type_callback
+
+        self.add_item(discord.ui.ActionRow(add_button, remove_button))
+
+    async def refresh(
+        self, interaction: discord.Interaction, tv: TicketView | None = None, page: int | None = None
+    ) -> None:
+        view = TicketPanelEdit(self.list_view, tv or self.tv, self.page if page is None else page)
+        await edit_view(interaction, view)
+
+    async def back_callback(self, interaction: discord.Interaction) -> None:
+        await self.list_view.refresh(interaction, self.list_view.page)
+
+    async def previous_callback(self, interaction: discord.Interaction) -> None:
+        await self.refresh(interaction, page=self.page - 1)
+
+    async def next_callback(self, interaction: discord.Interaction) -> None:
+        await self.refresh(interaction, page=self.page + 1)
+
+    async def appearance_callback(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(PanelAppearanceModal(self))
+
+    async def settings_callback(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(PanelSettingsModal(self))
+
+    async def add_type_callback(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(TicketTypeModal(self, self.tv))
+
+    async def remove_type_callback(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(RemoveTypeModal(self))
+
+    def _type_callback(self, base_name: str):
+        async def callback(interaction: discord.Interaction) -> None:
+            await edit_view(interaction, TicketTypeEdit(self, self.tv, base_name))
+
+        return callback
+
+class PanelAppearanceModal(discord.ui.Modal):
+    def __init__(self, panel_view: TicketPanelEdit) -> None:
+        super().__init__(title="Edit Panel Appearance")
+        self.panel_view = panel_view
+        panel = panel_view.tv.panel
+
+        self.title_input = discord.ui.TextInput(
+            label="Title", max_length=256, default=panel.title if panel else None
+        )
+        self.description_input = discord.ui.TextInput(
+            label="Description",
+            required=False,
+            style=discord.TextStyle.paragraph,
+            max_length=4000,
+            default=panel.description if panel else None,
+        )
+        self.footer_input = discord.ui.TextInput(
+            label="Footer Text", required=False, max_length=2048, default=panel.footer_text if panel else None
+        )
+        self.thumbnail_input = discord.ui.TextInput(
+            label="Thumbnail URL", required=False, max_length=500, default=panel.thumbnail_url if panel else None
+        )
+
+        self.add_item(self.title_input)
+        self.add_item(self.description_input)
+        self.add_item(self.footer_input)
+        self.add_item(self.thumbnail_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        thumbnail = self.thumbnail_input.value.strip() or None
+        if thumbnail and not thumbnail.startswith(("http://", "https://")):
+            await interaction.response.send_message(
+                embed=simple_embed("Thumbnail must be a valid http(s) URL.", "cross"), ephemeral=True
+            )
+            return
+
+        await interaction.response.defer()
+
+        def mutate(config: dict[str, Any]) -> None:
+            config["PanelConfig"] = {
+                "title": self.title_input.value,
+                "description": self.description_input.value or None,
+                "footer": {"text": self.footer_input.value or None},
+                "thumbnail": {"url": thumbnail},
+            }
+
+        new_tv = await save_changes(interaction, self.panel_view.tv, mutate)
+        if new_tv is not None:
+            await self.panel_view.refresh(interaction, tv=new_tv)
+
+class PanelSettingsModal(discord.ui.Modal):
+    def __init__(self, panel_view: TicketPanelEdit) -> None:
+        super().__init__(title="Edit Panel Settings")
+        self.panel_view = panel_view
+        tv = panel_view.tv
+
+        self.log_select = discord.ui.ChannelSelect(
+            channel_types=[discord.ChannelType.text],
+            placeholder="Channel for ticket logs",
+            min_values=1,
+            max_values=1,
+            default_values=channel_defaults(tv.logging_channel_id),
+        )
+        self.mode_select = discord.ui.Select(
+            placeholder="How tickets are created",
+            options=[
+                discord.SelectOption(label=name, value=key, default=key == tv.ticket_type)
+                for key, name in TICKET_MODES.items()
+            ],
+        )
+        self.staff_select = discord.ui.RoleSelect(
+            placeholder="Roles that can manage tickets",
+            min_values=0,
+            max_values=25,
+            required=False,
+            default_values=role_defaults(tv.staff_role_ids),
+        )
+
+        self.add_item(discord.ui.Label(text="Logging Channel", component=self.log_select))
+        self.add_item(discord.ui.Label(text="Ticket Mode", component=self.mode_select))
+        self.add_item(discord.ui.Label(text="Higher Staff Roles", component=self.staff_select))
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
+
+        def mutate(config: dict[str, Any]) -> None:
+            basic = config["BasicConfigurations"]
+            basic["TicketLoggingHandler"] = self.log_select.values[0].id
+            basic["TicketType"] = self.mode_select.values[0]
+            basic["higher_staffs_role_id"] = [r.id for r in self.staff_select.values]
+
+        new_tv = await save_changes(interaction, self.panel_view.tv, mutate)
+        if new_tv is not None:
+            await self.panel_view.refresh(interaction, tv=new_tv)
+
+class RemoveTypeModal(discord.ui.Modal):
+    def __init__(self, panel_view: TicketPanelEdit) -> None:
+        super().__init__(title="Remove Ticket Type")
+        self.panel_view = panel_view
+
+        self.select = discord.ui.Select(
+            placeholder="Select a ticket type",
+            options=[
+                discord.SelectOption(label=t.label[:100], value=t.ticket_base_name)
+                for t in panel_view.tv.types
+            ],
+        )
+        self.add_item(discord.ui.Label(text="Ticket type to remove", component=self.select))
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
+        base_name = self.select.values[0]
+
+        def mutate(config: dict[str, Any]) -> None:
+            remaining = [t for t in config["Tickets"] if t["ticket_base_name"] != base_name]
+            if not remaining:
+                raise LilyError("A panel needs at least one ticket type.")
+            config["Tickets"] = remaining
+
+        new_tv = await save_changes(interaction, self.panel_view.tv, mutate)
+        if new_tv is not None:
+            await self.panel_view.refresh(interaction, tv=new_tv)
+
+class TicketTypeEdit(discord.ui.LayoutView):
+    def __init__(self, panel_view: TicketPanelEdit, tv: TicketView, base_name: str) -> None:
+        super().__init__(timeout=None)
+
+        self.panel_view = panel_view
+        self.tv = tv
+        self.base_name = base_name
+        self.ticket = tv.get_type(base_name)
+
+        back_button: discord.ui.Button = discord.ui.Button(style=discord.ButtonStyle.secondary, label="Back")
+        back_button.callback = self.back_callback
+
+        if self.ticket is None:
+            self.add_item(
+                discord.ui.Container(
+                    discord.ui.Section(
+                        discord.ui.TextDisplay(content="*This ticket type no longer exists.*"),
+                        accessory=back_button,
+                    )
+                )
+            )
+            return
+
+        t = self.ticket
+        pings = " ".join(f"<@&{r}>" for r in t.ping_roles) or "*None*"
+        category = f"<#{t.channel_id}>" if t.channel_id else "*Not set*"
+
+        details_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary, label="Details", emoji=emoji["pencil"]
+        )
+        details_button.callback = self.details_callback
+
+        options_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary, label="Options", emoji=emoji["pencil"]
+        )
+        options_button.callback = self.options_callback
+
+        fields_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary, label="Form Fields", emoji=emoji["pencil"]
+        )
+        fields_button.callback = self.fields_callback
+
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.Section(
+                    discord.ui.TextDisplay(content=f"### {t.emoji + ' ' if t.emoji else ''}{t.label}"),
+                    discord.ui.TextDisplay(content=f"- {t.description or '*None*'}"),
+                    accessory=back_button,
+                ),
+                discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+                discord.ui.TextDisplay(
+                    content=(
+                        f"**Base name:** `{t.ticket_base_name}`\n"
+                        f"**Category / channel:** {category}\n"
+                        f"**Channel emoji:** {t.channel_emoji or '*None*'}\n"
+                        f"**Ping roles:** {pings}\n"
+                    )
+                ),
+                discord.ui.ActionRow(details_button, options_button, fields_button)
+            )
+        )
+
+    async def back_callback(self, interaction: discord.Interaction) -> None:
+        await self.panel_view.refresh(interaction, tv=self.tv)
+
+    async def details_callback(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(TicketTypeModal(self.panel_view, self.tv, self.ticket))
+
+    async def options_callback(self, interaction: discord.Interaction) -> None:
+        assert self.ticket is not None
+        await interaction.response.send_modal(TicketTypeOptionsModal(self.panel_view, self.tv, self.ticket))
+
+    async def fields_callback(self, interaction: discord.Interaction) -> None:
+        await edit_view(interaction, TicketFieldsEdit(self.panel_view, self.tv, self.base_name))
+
+class TicketTypeModal(discord.ui.Modal):
+    def __init__(self, panel_view: TicketPanelEdit, tv: TicketView, ticket: TicketType | None = None) -> None:
+        super().__init__(title="Edit Ticket Type" if ticket else "Add Ticket Type")
+
+        self.panel_view = panel_view
+        self.tv = tv
+        self.ticket = ticket
+
+        self.label_input = discord.ui.TextInput(
+            label="Label", max_length=80, default=ticket.label if ticket else None
+        )
+        self.description_input = discord.ui.TextInput(
+            label="Description", required=False, max_length=100, default=ticket.description if ticket else None
+        )
+        self.emoji_input = discord.ui.TextInput(
+            label="Emoji", required=False, max_length=64, default=ticket.emoji if ticket else None
+        )
+        self.base_input = discord.ui.TextInput(
+            label="Base Name (unique, used for channel names)",
+            max_length=32,
+            placeholder="e.g. support",
+            default=ticket.ticket_base_name if ticket else None,
+        )
+        self.channel_select = discord.ui.ChannelSelect(
+            channel_types=[discord.ChannelType.category],
+            placeholder="Category where tickets of this type are created",
+            min_values=1,
+            max_values=1,
+            default_values=channel_defaults(ticket.channel_id if ticket else None),
+        )
+
+        self.add_item(self.label_input)
+        self.add_item(self.description_input)
+        self.add_item(self.emoji_input)
+        if ticket is None:
+            self.add_item(self.base_input)
+        self.add_item(discord.ui.Label(text="Category / Channel", component=self.channel_select))
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        label = self.label_input.value.strip()
+        if self.ticket is None:
+            base = self.base_input.value.strip().lower()
+            if not BASE_NAME_RE.match(base):
+                await interaction.response.send_message(
+                    embed=simple_embed("Base name must be 1-32 chars: lowercase letters, numbers, `-` or `_`.", "cross"),
+                    ephemeral=True,
+                )
+                return
+            if base in {t.ticket_base_name for t in self.tv.types}:
+                await interaction.response.send_message(
+                    embed=simple_embed(f"Base name `{base}` is already used in this panel.", "cross"),
+                    ephemeral=True,
+                )
+                return
+        else:
+            base = self.ticket.ticket_base_name
+
+        taken = {t.ticket_base_name for t in self.tv.types}
+        if self.ticket is not None:
+            taken.discard(self.ticket.ticket_base_name)
+        if base in taken:
+            await interaction.response.send_message(
+                embed=simple_embed(f"Base name `{base}` is already used in this panel.", "cross"),
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer()
+
+        values = {
+            "label": label,
+            "description": self.description_input.value.strip() or None,
+            "emoji": self.emoji_input.value.strip() or None,
+            "channel_id": self.channel_select.values[0].id if self.channel_select.values else None,
+            "ticket_base_name": base,
+        }
+
+        def mutate(config: dict[str, Any]) -> None:
+            if self.ticket is None:
+                if len(config["Tickets"]) >= 25:
+                    raise LilyError(f"A panel can hold at most {25} ticket types.")
+                config["Tickets"].append({**values, "channel_emoji": None, "fields": [dict(f) for f in DEFAULT_FIELDS], "ping_roles": []})
+            else:
+                find_ticket(config, self.ticket.ticket_base_name).update(values)
+
+        new_tv = await save_changes(interaction, self.tv, mutate)
+        if new_tv is not None:
+            await edit_view(interaction, TicketTypeEdit(self.panel_view, new_tv, base))
+
+class TicketTypeOptionsModal(discord.ui.Modal):
+    def __init__(self, panel_view: TicketPanelEdit, tv: TicketView, ticket: TicketType) -> None:
+        super().__init__(title="Ticket Type Options")
+
+        self.panel_view = panel_view
+        self.tv = tv
+        self.ticket = ticket
+
+        self.emoji_input = discord.ui.TextInput(
+            label="Channel Emoji", required=False, max_length=64, default=ticket.channel_emoji
+        )
+        self.ping_select = discord.ui.RoleSelect(
+            placeholder="Roles pinged when a ticket opens",
+            min_values=0,
+            max_values=25,
+            required=False,
+            default_values=role_defaults(ticket.ping_roles),
+        )
+
+        self.add_item(self.emoji_input)
+        self.add_item(discord.ui.Label(text="Ping Roles", component=self.ping_select))
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
+        base = self.ticket.ticket_base_name
+
+        def mutate(config: dict[str, Any]) -> None:
+            entry = find_ticket(config, base)
+            entry["channel_emoji"] = self.emoji_input.value.strip() or None
+            entry["ping_roles"] = [r.id for r in self.ping_select.values]
+
+        new_tv = await save_changes(interaction, self.tv, mutate)
+        if new_tv is not None:
+            await edit_view(interaction, TicketTypeEdit(self.panel_view, new_tv, base))
+
+class FieldTypePicker(discord.ui.LayoutView):
+    def __init__(self, fields_view: TicketFieldsEdit, index: int | None = None) -> None:
+        super().__init__(timeout=None)
+
+        assert fields_view.ticket is not None
+        self.fields_view = fields_view
+        self.index = index
+
+        fields = fields_view.ticket.fields
+        current = fields[index] if index is not None and index < len(fields) else None
+        self.current_type = current.get("type", "short") if current else None
+
+        self.type_select = discord.ui.Select(
+            placeholder="Choose a field type...",
+            options=[
+                discord.SelectOption(
+                    label=name, description=description, value=key, default=key == self.current_type
+                )
+                for key, (name, description) in FIELD_TYPES.items()
+            ],
+        )
+        self.type_select.callback = self.type_callback
+
+        back_button: discord.ui.Button = discord.ui.Button(style=discord.ButtonStyle.secondary, label="Back")
+        back_button.callback = self.back_callback
+
+        rows: List[discord.ui.Item] = [discord.ui.ActionRow(self.type_select)]
+        if self.current_type in FIELD_TYPES:
+            keep_button: discord.ui.Button = discord.ui.Button(
+                style=discord.ButtonStyle.secondary,
+                label=f"Keep {FIELD_TYPES[self.current_type][0]}",
+            )
+            keep_button.callback = self.keep_callback
+            rows.append(discord.ui.ActionRow(keep_button))
+
+        action = "Edit" if index is not None else "Add"
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.Section(
+                    discord.ui.TextDisplay(
+                        content=f"### {action} Form Field\n-# Step 1/2: choose the field type"
+                    ),
+                    accessory=back_button,
+                ),
+                discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+                *rows,
+            )
+        )
+
+    async def type_callback(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(
+            TicketFieldModal(self.fields_view, self.index, self.type_select.values[0])
+        )
+
+    async def keep_callback(self, interaction: discord.Interaction) -> None:
+        assert self.current_type is not None
+        await interaction.response.send_modal(
+            TicketFieldModal(self.fields_view, self.index, self.current_type)
+        )
+
+    async def back_callback(self, interaction: discord.Interaction) -> None:
+        await self.fields_view.refresh(interaction, self.fields_view.tv)
+
+class TicketFieldsEdit(discord.ui.LayoutView):
+    def __init__(self, panel_view: TicketPanelEdit, tv: TicketView, base_name: str) -> None:
+        super().__init__(timeout=None)
+
+        self.panel_view = panel_view
+        self.tv = tv
+        self.base_name = base_name
+        self.ticket = tv.get_type(base_name)
+
+        back_button: discord.ui.Button = discord.ui.Button(style=discord.ButtonStyle.secondary, label="Back")
+        back_button.callback = self.back_callback
+
+        if self.ticket is None:
+            self.add_item(
+                discord.ui.Container(
+                    discord.ui.Section(
+                        discord.ui.TextDisplay(content="*This ticket type no longer exists.*"),
+                        accessory=back_button,
+                    )
+                )
+            )
+            return
+
+        fields = list(self.ticket.fields)
+        types = [f.get("type", "short") for f in fields]
+
+        items: List[discord.ui.Item] = []
+        for index, field in enumerate(fields):
+            edit_button: discord.ui.Button = discord.ui.Button(
+                style=discord.ButtonStyle.secondary, emoji=emoji["pencil"]
+            )
+            edit_button.callback = self._edit_callback(index)
+
+            ftype = field.get("type", "short")
+            label, description = FIELD_TYPES.get(ftype, (ftype, ""))
+
+            details = [label, description] if description else [label]
+
+            if ftype in TEXT_FIELD_TYPES:
+                details.append(f"max {field.get('length', 100)} chars")
+
+            if field.get("metadata"):
+                details.append(f"options: {field['metadata'][:60]}")
+
+            if ftype in ("selector", "check_box") and field.get("min_values") is not None:
+                details.append(f"pick {field['min_values']}-{field['max_values']}")
+
+            items.append(
+                discord.ui.Section(
+                    discord.ui.TextDisplay(
+                        content=f"**{index + 1}. {field.get('label') or '?'}**\n-# {' | '.join(details)}"
+                    ),
+                    accessory=edit_button,
+                )
+            )
+
+        notes: list[str] = []
+        if not fields:
+            notes.append("Add at least one field, otherwise the ticket form can't open.")
+        if notes:
+            items.append(discord.ui.TextDisplay(content="\n".join(f"-# Note: {n}" for n in notes)))
+
+        self.add_item(
+            discord.ui.Container(
+                discord.ui.Section(
+                    discord.ui.TextDisplay(
+                        content=f"## Form Fields | {self.ticket.label}\n-# {len(fields)}/{5} fields",
+                    ),
+                    accessory=back_button,
+                ),
+                discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
+                *items,
+            )
+        )
+
+        add_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label="Add Field",
+            emoji=emoji["plus"],
+            disabled=len(fields) >= 5,
+        )
+        add_button.callback = self.add_callback
+
+        remove_button: discord.ui.Button = discord.ui.Button(
+            style=discord.ButtonStyle.secondary,
+            label="Remove Field",
+            emoji=emoji["trash"],
+            disabled=not fields,
+        )
+        remove_button.callback = self.remove_callback
+
+        self.add_item(discord.ui.ActionRow(add_button, remove_button))
+
+    async def refresh(self, interaction: discord.Interaction, tv: TicketView) -> None:
+        await edit_view(interaction, TicketFieldsEdit(self.panel_view, tv, self.base_name))
+
+    async def back_callback(self, interaction: discord.Interaction) -> None:
+        await edit_view(interaction, TicketTypeEdit(self.panel_view, self.tv, self.base_name))
+
+    async def add_callback(self, interaction: discord.Interaction) -> None:
+        await edit_view(interaction, FieldTypePicker(self))
+
+    def _edit_callback(self, index: int):
+        async def callback(interaction: discord.Interaction) -> None:
+            await edit_view(interaction, FieldTypePicker(self, index))
+
+        return callback
+
+    async def remove_callback(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(RemoveFieldModal(self))
+
+class TicketFieldModal(discord.ui.Modal):
+    def __init__(self, fields_view: TicketFieldsEdit, index: int | None = None, ftype: str = "short") -> None:
+        type_name = FIELD_TYPES.get(ftype, (ftype, ""))[0]
+        super().__init__(title=f"{'Edit' if index is not None else 'Add'} {type_name} Field"[:45])
+
+        assert fields_view.ticket is not None
+        self.fields_view = fields_view
+        self.index = index
+        self.ftype = ftype
+
+        existing = fields_view.ticket.fields
+        current = existing[index] if index is not None and index < len(existing) else {}
+        if current.get("type") != ftype:
+            current = {"label": current.get("label"), "description": current.get("description")}
+
+        self.label_input = discord.ui.TextInput(
+            label="Label (shown above the input)",
+            max_length=45,
+            default=current.get("label"),
+        )
+        self.description_input = discord.ui.TextInput(
+            label="Description",
+            required=False,
+            max_length=100,
+            default=current.get("description") or None,
+        )
+        self.add_item(self.label_input)
+        self.add_item(self.description_input)
+
+        self.length_input: discord.ui.TextInput | None = None
+        self.options_input: discord.ui.TextInput | None = None
+        self.min_input: discord.ui.TextInput | None = None
+        self.max_input: discord.ui.TextInput | None = None
+
+        if ftype in TEXT_FIELD_TYPES:
+            self.length_input = discord.ui.TextInput(
+                label="Max Length",
+                required=False,
+                max_length=4,
+                placeholder="100",
+                default=str(current["length"]) if current.get("length") is not None else None,
+            )
+            self.add_item(self.length_input)
+
+        if ftype in OPTION_FIELD_TYPES:
+            self.options_input = discord.ui.TextInput(
+                label="Options (comma separated)",
+                style=discord.TextStyle.paragraph,
+                max_length=1500,
+                placeholder="e.g. Bug report, Billing, Other",
+                default=current.get("metadata") or None,
+            )
+            self.add_item(self.options_input)
+
+        if ftype in ("selector", "check_box"):
+            self.min_input = discord.ui.TextInput(
+                label="Min Selections",
+                required=False,
+                max_length=2,
+                placeholder="1",
+                default=str(current["min_values"]) if current.get("min_values") is not None else None,
+            )
+            self.max_input = discord.ui.TextInput(
+                label="Max Selections",
+                required=False,
+                max_length=2,
+                placeholder="1",
+                default=str(current["max_values"]) if current.get("max_values") is not None else None,
+            )
+            self.add_item(self.min_input)
+            self.add_item(self.max_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        assert self.fields_view.ticket is not None
+
+        async def reject(text: str) -> None:
+            await interaction.response.send_message(embed=simple_embed(text, "cross"), ephemeral=True)
+
+        label = self.label_input.value.strip()
+        description = self.description_input.value.strip()
+        if not label:
+            await reject("A field needs a label.")
+            return
+
+        others = [f for i, f in enumerate(self.fields_view.ticket.fields) if i != self.index]
+        if self.ftype == "file_upload" and any(f.get("type") == "file_upload" for f in others):
+            await reject("A form can only have one file upload field.")
+            return
+
+        entry: dict[str, Any] = {"label": label, "type": self.ftype}
+        if description:
+            entry["description"] = description
+
+        if self.length_input is not None:
+            length_text = self.length_input.value.strip()
+            length = 100
+            if length_text:
+                if not length_text.isdigit() or not 1 <= int(length_text) <= 4000:
+                    await reject("Max length must be a number between 1 and 4000.")
+                    return
+                length = int(length_text)
+            entry["length"] = length
+
+        options: list[str] = []
+        if self.options_input is not None:
+            options = list(dict.fromkeys(o.strip() for o in self.options_input.value.split(",") if o.strip()))
+            limit = MAX_SELECT_OPTIONS if self.ftype == "selector" else MAX_RADIO_OPTIONS
+            minimum = 1 if self.ftype == "check_box" else 2
+            if not minimum <= len(options) <= limit:
+                await reject(f"Provide {minimum}-{limit} unique options, separated by commas.")
+                return
+            if any(len(o) > 100 for o in options):
+                await reject("Each option can be at most 100 characters.")
+                return
+            entry["metadata"] = ", ".join(options)
+
+        if self.ftype == "selector" or (self.ftype == "check_box" and len(options) > 1):
+            assert self.min_input is not None and self.max_input is not None
+            try:
+                min_values = int(self.min_input.value.strip() or 1)
+                max_default = len(options) if self.ftype == "check_box" else 1
+                max_values = int(self.max_input.value.strip() or max_default)
+            except ValueError:
+                await reject("Min and max selections must be numbers.")
+                return
+            if not 1 <= min_values <= max_values <= len(options):
+                await reject(f"Selections must satisfy 1 <= min <= max <= {len(options)} (the number of options).")
+                return
+            entry["min_values"] = min_values
+            entry["max_values"] = max_values
+
+        await interaction.response.defer()
+
+        base = self.fields_view.base_name
+
+        def mutate(config: dict[str, Any]) -> None:
+            fields = find_ticket(config, base)["fields"]
+            if self.index is None:
+                if len(fields) >= 5:
+                    raise LilyError("A form can hold at most 5 fields.")
+                fields.append(entry)
+            else:
+                if self.index >= len(fields):
+                    raise LilyError("That field no longer exists.")
+                old = fields[self.index]
+                for key in ("description", "length", "metadata", "min_values", "max_values"):
+                    old.pop(key, None)
+                old.update(entry)
+
+        new_tv = await save_changes(interaction, self.fields_view.tv, mutate)
+        if new_tv is not None:
+            await self.fields_view.refresh(interaction, new_tv)
+
+class RemoveFieldModal(discord.ui.Modal):
+    def __init__(self, fields_view: TicketFieldsEdit) -> None:
+        super().__init__(title="Remove Form Field")
+        assert fields_view.ticket is not None
+        self.fields_view = fields_view
+
+        self.select = discord.ui.Select(
+            placeholder="Select a field",
+            options=[
+                discord.SelectOption(label=f"{i + 1}. {f.get('label') or '?'}"[:100], value=str(i))
+                for i, f in enumerate(fields_view.ticket.fields)
+            ],
+        )
+        self.add_item(discord.ui.Label(text="Field to remove", component=self.select))
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer()
+        index = int(self.select.values[0])
+        base = self.fields_view.base_name
+
+        def mutate(config: dict[str, Any]) -> None:
+            fields = find_ticket(config, base)["fields"]
+            if index >= len(fields):
+                raise LilyError("That field no longer exists.")
+            fields.pop(index)
+
+        new_tv = await save_changes(interaction, self.fields_view.tv, mutate)
+        if new_tv is not None:
+            await self.fields_view.refresh(interaction, new_tv)

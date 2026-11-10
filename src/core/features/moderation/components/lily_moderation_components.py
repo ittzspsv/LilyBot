@@ -4,13 +4,20 @@ import discord
 from src.core.utils.embeds.sLilyEmbed import simple_embed
 from src.core.utils.lily_utility import format_duration
 from typing import Optional, cast, Any, TYPE_CHECKING, List, Dict, Tuple, Union, Callable, Literal
-from datetime import datetime
-from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
+from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess, LilyError
+from src.core.database.integrations.models import (
+    Appeal,
+    LeaderboardEntry,
+    ModLog,
+    ModStats,
+    Page,
+    PeriodCounts,
+)
 from src.core.logging.components.logging_components import ProofsComponentCommandModal
 from src.core.features.permissions.lily_permissions import has_app_permission
+from src.core.events.event_dispatcher import EventPayload, Events
 
 import src.core.configs.bot_details as Config
-import json
 import io
 from src.core.configs.bot_details import img, emoji
 from src.core.utils.lily_utility import purge_messages_by_user
@@ -23,7 +30,7 @@ if TYPE_CHECKING:
     from .....lily import Lily
 
 class Leaderboard(discord.ui.LayoutView):
-    def __init__(self, bot: discord.Member, leaderboard_type: str, ms_data: list):
+    def __init__(self, bot: discord.Member, leaderboard_type: str, ms_data: list[LeaderboardEntry]):
         super().__init__(timeout=None)
 
         self.leaderboard_type = leaderboard_type
@@ -31,16 +38,13 @@ class Leaderboard(discord.ui.LayoutView):
 
         self.bot = bot
 
-        self.top_ms_staff: int = self.ms_data[0].get("moderator_id")
-        self.least_ms_staff: int = self.ms_data[-1].get("moderator_id")
+        self.top_ms_staff: int = self.ms_data[0].member_id
+        self.least_ms_staff: int = self.ms_data[-1].member_id
 
         self.leaderboard_value = ""
 
-        for data in self.ms_data:
-            moderator_id: int = data.get("moderator_id")
-            ms: int = data.get("ms")
-
-            self.leaderboard_value += f"- **({ms}ms)** <@{moderator_id}>\n"
+        for entry in self.ms_data:
+            self.leaderboard_value += f"- **({entry.count}ms)** <@{entry.member_id}>\n"
 
 
         self.container = discord.ui.Container(
@@ -115,9 +119,8 @@ class ModerationInsights(discord.ui.LayoutView):
 
         try:
             selected_ms_leaderboard_option = self.ms_leaderboard_options.values[0]
-            ms_data_dict: dict = await self.logs_db.fetch_moderation_leaderboard(interaction.guild.id, selected_ms_leaderboard_option)
+            ms_data = await self.logs_db.fetch_moderation_leaderboard(interaction.guild.id, selected_ms_leaderboard_option)
 
-            ms_data: list = ms_data_dict.get("moderator_statistics_leaderboard", [])
             if not ms_data:
                 await interaction.response.send_message(embed=simple_embed("No Moderation Data Available", 'cross'))
                 return
@@ -142,21 +145,22 @@ class ModerationInsights(discord.ui.LayoutView):
 
 def build_ms_embed(
     moderator: discord.Member | discord.User,
-    logs: list[dict],
-    stats: dict,
-    total_logs: int,
+    stats: ModStats,
     page_start: int = 0,
     ban_limit: int = 0
 ) -> list[discord.Embed]:
 
+    actions = ["mute", "warn", "ban", "quarantine"]
+    counts = {action: stats.by_type.get(action, PeriodCounts()) for action in actions}
+
     embed1 = discord.Embed(
         title=f"{Config.emoji['arrow']} {moderator.display_name}'s Moderation Statistics",
         description=(
-            f"### Total Stats : **{total_logs}**\n"
-            f"> Mutes : **{stats['mute']['total']}**\n"
-            f"> Warns: **{stats['warn']['total']}**\n"
-            f"> Quarantines: **{stats['quarantine']['total']}**\n"
-            f"> Bans: **{stats['ban']['total']}**"
+            f"### Total Stats : **{stats.total_logs}**\n"
+            f"> Mutes : **{counts['mute'].total}**\n"
+            f"> Warns: **{counts['warn'].total}**\n"
+            f"> Quarantines: **{counts['quarantine'].total}**\n"
+            f"> Bans: **{counts['ban'].total}**"
         ),
         colour=16777215
     )
@@ -178,34 +182,33 @@ def build_ms_embed(
 
     embed2.set_image(url=Config.img['border'])
 
-    actions = ["mute", "warn", "ban", "quarantine"]
-
     for action in actions:
         embed2.add_field(
             name=f"{action.title()} • Today",
-            value=stats[action]["today"],
+            value=counts[action].today,
             inline=True
         )
         embed2.add_field(
             name=f"{action.title()} • 7d",
-            value=stats[action]["7d"],
+            value=counts[action].week,
             inline=True
         )
         embed2.add_field(
             name=f"{action.title()} • 30d",
-            value=stats[action]["30d"],
+            value=counts[action].month,
             inline=True
         )
 
     logs_text = ""
 
-    for index, log in enumerate(logs, start=page_start + 1):
-        ts_unix = int(log["timestamp"])
+    for index, log in enumerate(stats.logs, start=page_start + 1):
+        created_at = log.created_at
+        ts_unix = int(created_at.timestamp()) if created_at else 0
 
         logs_text += (
-            f"📌 **Log #{index} - {log['mod_type'].title()}**\n"
-            f"> {Config.emoji['member']} User: <@{log['target_user_id']}>\n"
-            f"> {Config.emoji['bookmark']} Reason: {log['reason']}\n"
+            f"📌 **Log #{index} - {(log.mod_type or 'Unknown').title()}**\n"
+            f"> {Config.emoji['member']} User: <@{log.target_user_id}>\n"
+            f"> {Config.emoji['bookmark']} Reason: {log.reason}\n"
             f"> {Config.emoji['clock']} Time: <t:{ts_unix}:R>\n\n"
         )
 
@@ -248,7 +251,7 @@ class Confirm(discord.ui.View):
             logger.exception("Failed to handle Cancel button press")
 
 class EditCaseModal(discord.ui.Modal):
-    def __init__(self,case_id: int, reason: str, case_list_view: CaseListView) -> None:
+    def __init__(self,case_id: int, reason: str | None, case_list_view: CaseListView) -> None:
         super().__init__(title="Edit Reason")
         self.reason = discord.ui.Label(
             text="Reason",
@@ -266,32 +269,38 @@ class EditCaseModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         try:
-            bot_db = cast("Lily", interaction.client).db
+            bot = cast("Lily", interaction.client)
+            bot_db = bot.db
             assert bot_db is not None
 
             assert isinstance(self.reason.component, discord.ui.TextInput)
 
-            result = await bot_db.edit_case(
+            edit = await bot_db.edit_case(
                 interaction.user.id,
                 case_id=self.case_id,
                 case_statement=self.reason.component.value,
                 absolute=False
             )
 
-            if not result["success"]:
-                await interaction.response.send_message(embed=simple_embed(result["message"], 'cross'), ephemeral=True)
-                return
-
             assert interaction.guild is not None
-            updated_case_data = await bot_db.get_case(self.case_id, interaction.guild.id)
+            appeal = await bot_db.get_appeal(case_id=self.case_id)
 
-            if updated_case_data is None:
-                await interaction.response.send_message(embed=simple_embed(result["message"]), ephemeral=True)
-                return
+            await bot.events.invoke(
+                name=Events.CASE_UPDATE,
+                payload=EventPayload(
+                    bot=bot,
+                    guild=interaction.guild
+                ),
+                before=edit.before,
+                after=edit.after,
+                user=interaction.user
+            )
 
-            new_view = CaseView(self.case_id, updated_case_data, self.case_list_view)
+            new_view = CaseView(self.case_id, edit.after, self.case_list_view, appeal, interaction.user.id)
             await interaction.response.edit_message(view=new_view, allowed_mentions=discord.AllowedMentions.none())
-            await interaction.followup.send(embed=simple_embed(result["message"]), ephemeral=True)
+            await interaction.followup.send(embed=simple_embed(f"Successfully edited case #{self.case_id}."), ephemeral=True)
+        except LilyError as e:
+            await interaction.response.send_message(embed=simple_embed(str(e), 'cross'), ephemeral=True)
         except Exception:
             logger.exception("Failed to submit case edit for case_id=%s by user_id=%s", self.case_id, interaction.user.id)
             if not interaction.response.is_done():
@@ -344,44 +353,28 @@ class AddProofsModal(discord.ui.Modal):
             )
 
 class CaseView(discord.ui.LayoutView):
-    def __init__(self, case_id: int, case_data: Dict[str, Any], case_list_view: CaseListView) -> None:
+    def __init__(self, case_id: int, case: ModLog, case_list_view: CaseListView, appeal: Appeal | None, interactor: int) -> None:
         super().__init__(timeout=None)
 
         self.case_id = case_id
-        self.case_data = case_data
+        self.case = case
 
-        moderator_id = case_data["moderator_id"]
-        mod_type = case_data["mod_type"]
-        self.reason = case_data["reason"]
-        self.guild_id = case_data["guild_id"]
-        timestamp = case_data["timestamp"]
-        self.appeal_status = case_data["appeal_status"]
-        self.appeal_thread = case_data["thread_id"] or 0
+        moderator_id = case.moderator_id
+        mod_type = case.mod_type
+        self.reason = case.reason
+        self.guild_id = case.guild_id
+        self.appeal = appeal
+        self.appeal_thread = (appeal.thread_id or 0) if appeal else 0
+        self.interactor = interactor
 
         self.channel = None
 
         self.case_list_view = case_list_view
 
-        try:
-            dt = datetime.fromisoformat(timestamp)
-        except Exception:
-            try:
-                dt = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
-            except Exception:
-                logger.exception(
-                    "Failed to parse timestamp '%s' for case_id=%s; falling back to epoch 0",
-                    timestamp,
-                    case_id,
-                )
-                dt = datetime.fromtimestamp(0)
-        ts_unix = int(dt.timestamp())
+        created_at = case.created_at
+        ts_unix = int(created_at.timestamp()) if created_at else 0
 
-        raw_metadata = case_data.get("metadata")
-        try:
-            metadata: Dict[str, Any] = json.loads(raw_metadata) if raw_metadata else {}
-        except (TypeError, json.JSONDecodeError):
-            logger.exception("Failed to parse metadata JSON for case_id=%s: %r", case_id, raw_metadata)
-            metadata = {}
+        metadata = case.metadata
 
         metadata_lines = ""
         if metadata:
@@ -451,7 +444,7 @@ class CaseView(discord.ui.LayoutView):
             discord.ui.Section(
                 discord.ui.TextDisplay(content="### Appeal Information"),
                 discord.ui.TextDisplay(
-                    f"- Appeal Status: **{self.appeal_status.title()}**"
+                    f"- Appeal Status: **{appeal.status.title()}**"
                 ),
                 accessory=discord.ui.Button(
                     url=f"https://discord.com/channels/{self.guild_id}/{self.appeal_thread}",
@@ -459,7 +452,7 @@ class CaseView(discord.ui.LayoutView):
                     label="View Appeal",
                 ),
             )
-            if self.appeal_status is not None
+            if appeal is not None
             else discord.ui.TextDisplay(
                 "- Appeal Status: Not appealed yet."
             )
@@ -491,6 +484,14 @@ class CaseView(discord.ui.LayoutView):
         )
         self.add_item(case_overview)
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.interactor:
+            return True
+        await interaction.response.send_message(
+            embed=simple_embed("Access denied", 'cross'), ephemeral=True
+        )
+        return False
+
     async def back_callback(self, interaction: discord.Interaction) -> None:
         await self.case_list_view._refresh_page(interaction, self.case_list_view.page)
 
@@ -513,7 +514,7 @@ class CaseView(discord.ui.LayoutView):
             bot_db = cast("Lily", interaction.client).db
             assert bot_db is not None
 
-            proofs_references = await bot_db.get_proof_references(interaction.guild.id, case_id=self.case_id)
+            proofs_references = await bot_db.get_proof_references(self.case_id, interaction.guild.id)
             if len(proofs_references) <= 0:
                 view = discord.ui.LayoutView().add_item(
                     discord.ui.Section(
@@ -662,10 +663,10 @@ class CaseView(discord.ui.LayoutView):
             else:
                 await interaction.followup.send(embed=simple_embed("Something went wrong while fetching proofs.", 'cross'), ephemeral=True)
 
-    
     async def delete_case_callback(self, interaction: discord.Interaction) -> None:
         try:
-            bot_db = cast("Lily", interaction.client).db
+            bot = cast("Lily", interaction.client)
+            bot_db = bot.db
             assert bot_db is not None
 
             view = Confirm()
@@ -682,13 +683,24 @@ class CaseView(discord.ui.LayoutView):
 
             assert interaction.guild is not None
 
-            await bot_db.delete_case(self.case_id, interaction.guild.id)
+            case = await bot_db.delete_case(self.case_id, interaction.guild.id)
+            await bot.events.invoke(
+                name=Events.CASE_DELETE,
+                payload=EventPayload(
+                    bot=bot,
+                    guild=interaction.guild
+                ),
+                user=interaction.user,
+                case=case
+            )
 
             await self.case_list_view.refresh()
 
             await interaction.edit_original_response(
                 embed=simple_embed(f"Successfully Deleted Case {self.case_id}"), view=None
             )
+        except LilyError as e:
+            await interaction.edit_original_response(embed=simple_embed(str(e), 'cross'), view=None)
         except Exception:
             logger.exception("Failed to delete case_id=%s", self.case_id)
             if not interaction.response.is_done():
@@ -703,13 +715,14 @@ class CaseListView(discord.ui.LayoutView):
     def __init__(
         self,
         user: Tuple[str, str],
-        case_list_data: Dict[str, Any],
+        case_list_data: Page[ModLog],
         db: BotGlobalsDatabaseAccess,
         *,
         guild_id: int,
         target_user_id: int,
         moderator_id: int | None = None,
-        mod_type: str = "all"
+        mod_type: str = "all",
+        interactor: int
     ) -> None:
         super().__init__(timeout=300)
 
@@ -725,10 +738,11 @@ class CaseListView(discord.ui.LayoutView):
         self.channel = None
         self.message: discord.Message | None = None
 
-        self.page = case_list_data["page"]
-        self.max_page = case_list_data["max_page"]
-        self.total_count = case_list_data["total_count"]
-        page_logs = case_list_data["results"]
+        self.page = case_list_data.page
+        self.max_page = case_list_data.max_page
+        self.total_count = case_list_data.total_count
+        page_logs = case_list_data.items
+        self.interactor = interactor
 
         case_info = discord.ui.Container(
             discord.ui.Section(
@@ -743,28 +757,13 @@ class CaseListView(discord.ui.LayoutView):
         cases: List[discord.ui.Item] = []
 
         for log in page_logs:
-            ts: str = cast(str, log.get("timestamp"))
-
-            try:
-                dt = datetime.fromisoformat(ts)
-            except Exception:
-                try:
-                    dt = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")
-                except Exception:
-                    logger.exception(
-                        "Failed to parse timestamp '%s' for case_id=%s in case list; falling back to epoch 0",
-                        ts,
-                        log.get("case_id"),
-                    )
-                    dt = datetime.fromtimestamp(0)
-
-            ts_unix = int(dt.timestamp())
-            case_id = log.get("case_id")
+            created_at = log.created_at
+            ts_unix = int(created_at.timestamp()) if created_at else 0
 
             info_button: discord.ui.Button = discord.ui.Button(
                 style=discord.ButtonStyle.secondary,
                 emoji=emoji["paper_clip"],
-                custom_id=str(case_id),
+                custom_id=str(log.id),
             )
             info_button.callback = self.case_info_callback
 
@@ -772,9 +771,9 @@ class CaseListView(discord.ui.LayoutView):
                 discord.ui.Section(
                     discord.ui.TextDisplay(
                         content=(
-                            f"### {emoji["pin"]} Log #{case_id} • {log['mod_type'].title()}\n"
-                            f"> {Config.emoji['shield']} Moderator: <@{log['moderator_id']}>\n"
-                            f"> {Config.emoji['pencil']} Reason: {log['reason']}\n"
+                            f"### {emoji["pin"]} Log #{log.id} • {(log.mod_type or 'Unknown').title()}\n"
+                            f"> {Config.emoji['shield']} Moderator: <@{log.moderator_id}>\n"
+                            f"> {Config.emoji['pencil']} Reason: {log.reason}\n"
                             f"> {Config.emoji['clock']} Time: <t:{ts_unix}:R>"
                         )
                     ),
@@ -792,13 +791,21 @@ class CaseListView(discord.ui.LayoutView):
         self.add_item(case_list)
         self.add_item(self.pagination())
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.interactor:
+            return True
+        await interaction.response.send_message(
+            embed=simple_embed("Access denied", 'cross'), ephemeral=True
+        )
+        return False
+
     def pagination(self) -> discord.ui.ActionRow:
         row = discord.ui.ActionRow()
 
         prev_button: discord.ui.Button = discord.ui.Button(
             style=discord.ButtonStyle.secondary,
             emoji=emoji["left"],
-            disabled=not self.case_list_data["has_prev"],
+            disabled=not self.case_list_data.has_prev,
         )
         prev_button.callback = self.previous_button_callback
         row.add_item(prev_button)
@@ -813,7 +820,7 @@ class CaseListView(discord.ui.LayoutView):
         next_button: discord.ui.Button = discord.ui.Button(
             style=discord.ButtonStyle.secondary,
             emoji=emoji["right"],
-            disabled=not self.case_list_data["has_next"],
+            disabled=not self.case_list_data.has_next,
         )
         next_button.callback = self.next_button_callback
         row.add_item(next_button)
@@ -837,7 +844,8 @@ class CaseListView(discord.ui.LayoutView):
                 guild_id=self.guild_id,
                 target_user_id=self.target_user_id,
                 moderator_id=self.moderator_id,
-                mod_type=self.mod_type
+                mod_type=self.mod_type,
+                interactor=interaction.user.id
             )
             new_view.message = self.message
             await interaction.response.edit_message(view=new_view, allowed_mentions=discord.AllowedMentions.none())
@@ -876,6 +884,7 @@ class CaseListView(discord.ui.LayoutView):
                 target_user_id=self.target_user_id,
                 moderator_id=self.moderator_id,
                 mod_type=self.mod_type,
+                interactor=self.interactor
             )
 
             new_view.message = self.message
@@ -904,13 +913,15 @@ class CaseListView(discord.ui.LayoutView):
             assert bot_db is not None
 
             case_id = int(custom_id)
-            case_data = await bot_db.get_case(case_id, interaction.guild.id)
+            case = await bot_db.get_case(case_id, interaction.guild.id)
 
-            if case_data is None:
+            if case is None or case.deleted:
                 await interaction.response.send_message(embed=simple_embed("Case not found", 'cross'), ephemeral=True)
                 return
 
-            view = CaseView(case_id, case_data, self)
+            appeal = await bot_db.get_appeal(case_id=case_id)
+
+            view = CaseView(case_id, case, self, appeal, self.interactor)
             await interaction.response.edit_message(view=view, allowed_mentions=discord.AllowedMentions.none())
         except Exception:
             logger.exception("Failed to open case info for custom_id=%s", getattr(interaction, "custom_id", None))
@@ -1027,7 +1038,7 @@ class AppealHandleButton(
         except Exception:
             logger.exception("Failed to disable appeal buttons for case %s", self.case_id)
 
-    async def _finalize(self, interaction: discord.Interaction, appeal: Any) -> None:
+    async def _finalize(self, interaction: discord.Interaction, appeal: Appeal) -> None:
         guild = interaction.guild
         thread = interaction.channel
         assert guild is not None and isinstance(thread, discord.Thread)
@@ -1056,13 +1067,13 @@ class AppealHandleButton(
                 await thread.edit(applied_tags=[tag], locked=True, archived=True)
         except Exception:
             logger.exception(
-                "Failed to archive thread after appeal %s (case %s)", self.action, appeal["case_id"]
+                "Failed to archive thread after appeal %s (case %s)", self.action, appeal.case_id
             )
 
     def _build_dm_embed(
         self,
         guild: discord.Guild,
-        case: Any | None,
+        case: ModLog | None,
         *,
         accepted: bool,
         reason: str | None = None,
@@ -1084,10 +1095,10 @@ class AppealHandleButton(
 
         embed.add_field(name="Case ID", value=f"#{self.case_id}", inline=False)
         if case is not None:
-            embed.add_field(name="Case Type", value=str(case["mod_type"]).title(), inline=False)
+            embed.add_field(name="Case Type", value=str(case.mod_type).title(), inline=False)
             embed.add_field(
                 name="Case Reason",
-                value=(case.get("reason") or "No reason provided")[:1024],
+                value=(case.reason or "No reason provided")[:1024],
                 inline=False,
             )
 
@@ -1098,13 +1109,15 @@ class AppealHandleButton(
         self,
         interaction: discord.Interaction,
         bot_db: BotGlobalsDatabaseAccess,
-        appeal: Any,
-        case: Any,
+        appeal: Appeal,
+        case: ModLog,
         member: discord.Member | None,
     ) -> None:
         guild = interaction.guild
         assert guild is not None
-        mod_type = case["mod_type"]
+        mod_type = case.mod_type
+
+        bot = cast("Lily", interaction.client)
 
         if member is not None:
             try:
@@ -1137,9 +1150,7 @@ class AppealHandleButton(
                         )
                         return
 
-                    metadata_raw = case.get("metadata") or {}
-                    metadata = json.loads(metadata_raw) if isinstance(metadata_raw, str) else metadata_raw
-                    role_ids = metadata.get("roles_before_quarantine", [])
+                    role_ids = case.metadata.get("roles_before_quarantine", [])
 
                     roles_to_restore: list[discord.Role] = []
                     for role_id in role_ids:
@@ -1174,15 +1185,15 @@ class AppealHandleButton(
                 return
             except Exception:
                 logger.exception(
-                    "Failed to lift %s for case %s in guild %s", mod_type, appeal["case_id"], guild.id
+                    "Failed to lift %s for case %s in guild %s", mod_type, appeal.case_id, guild.id
                 )
                 await self._reply(interaction, "Failed to lift the punishment. Please try again.", "cross")
                 return
 
         try:
-            await bot_db.set_appeal_status(appeal["case_id"], "accepted")
+            await bot_db.set_appeal_status(appeal.case_id, "accepted")
         except Exception:
-            logger.exception("Failed to set appeal %s to accepted", appeal["case_id"])
+            logger.exception("Failed to set appeal %s to accepted", appeal.case_id)
             await self._reply(interaction, "The punishment was lifted but I couldn't update the appeal status.", "cross")
             return
 
@@ -1192,36 +1203,58 @@ class AppealHandleButton(
             except discord.HTTPException:
                 pass
 
+    
+        await bot.events.invoke(
+            name=Events.APPEAL_HANDLED,
+            payload=EventPayload(
+                bot=bot,
+                guild=guild
+            ),
+            type="accepted",
+            user=member,
+            moderator=interaction.user,
+            case_id=self.case_id,
+            reason=f"Appeal accepted by {interaction.user}"
+        )
         await self._finalize(interaction, appeal)
 
     async def _reject(
         self,
         interaction: discord.Interaction,
         bot_db: BotGlobalsDatabaseAccess,
-        appeal: Any,
+        appeal: Appeal,
         member: discord.Member | None,
         reason: str,
     ) -> None:
         try:
-            await bot_db.set_appeal_status(appeal["case_id"], "rejected")
+            await bot_db.set_appeal_status(appeal.case_id, "rejected")
         except Exception:
-            logger.exception("Failed to set appeal %s to rejected", appeal["case_id"])
+            logger.exception("Failed to set appeal %s to rejected", appeal.case_id)
             await self._reply(interaction, "Failed to update the appeal status. Please try again.", "cross")
             return
 
-        if member is not None:
-            guild = interaction.guild
-            assert guild is not None
-            try:
-                case = await bot_db.get_case(appeal["case_id"], guild.id)
-            except Exception:
-                logger.exception("Failed to fetch case %s for rejection DM", appeal["case_id"])
-                case = None
+        bot = cast("Lily", interaction.client)
 
+        guild = interaction.guild
+        assert guild is not None
+        if member is not None:
             try:
-                await member.send(embed=self._build_dm_embed(guild, case, accepted=False, reason=reason))
+                await member.send(embed=self._build_dm_embed(guild, appeal.case, accepted=False, reason=reason))
             except discord.HTTPException:
                 pass
+
+        await bot.events.invoke(
+            name=Events.APPEAL_HANDLED,
+            payload=EventPayload(
+                bot=bot,
+                guild=guild
+            ),
+            type="rejected",
+            user=member,
+            moderator=interaction.user,
+            case_id=self.case_id,
+            reason=reason
+        )
 
         await self._finalize(interaction, appeal)
 
@@ -1241,38 +1274,29 @@ class AppealHandleButton(
             await interaction.response.defer()
 
         try:
-            appeal = await bot_db.get_appeal(thread.id)
+            appeal = await bot_db.get_appeal(thread_id=thread.id)
         except Exception:
             logger.exception("Failed to fetch appeal for thread %s", thread.id)
             await self._reply(interaction, "An unexpected error occurred while fetching this appeal.", "cross")
             return
 
-        if appeal is None or appeal["case_id"] != self.case_id:
+        if appeal is None or appeal.case_id != self.case_id:
             await self._reply(interaction, f"Unable to {action_type} an invalid instigator appeal.", "cross")
             return
 
-        if appeal["status"] != "pending":
+        if not appeal.is_pending:
             await self._disable_buttons(interaction)
             await self._reply(interaction, "This appeal is no longer in a valid state for this action.", "cross")
             return
 
-        try:
-            case = await bot_db.get_case(appeal["case_id"], guild.id)
-        except Exception:
-            logger.exception("Failed to fetch case %s for appeal on thread %s", appeal["case_id"], thread.id)
-            await self._reply(interaction, "An unexpected error occurred while fetching the related case.", "cross")
-            return
-
-        if case is None:
-            await self._reply(interaction, "Unable to find the case", "cross")
-            return
+        case = appeal.case
 
         try:
-            member: discord.Member | None = await guild.fetch_member(case["target_user_id"])
+            member: discord.Member | None = await guild.fetch_member(case.target_user_id)
         except discord.NotFound:
             member = None
         except discord.HTTPException:
-            logger.exception("Failed to fetch member %s in guild %s", case["target_user_id"], guild.id)
+            logger.exception("Failed to fetch member %s in guild %s", case.target_user_id, guild.id)
             await self._reply(interaction, "Failed to fetch the appealing member. Please try again.", "cross")
             return
 
@@ -1293,7 +1317,7 @@ class RejectAppealModal(discord.ui.Modal, title="Reject Appeal"):
     def __init__(
         self,
         button: AppealHandleButton,
-        appeal: Any,
+        appeal: Appeal,
         member: discord.Member | None,
     ) -> None:
         super().__init__()
@@ -1317,11 +1341,11 @@ class AppealRequestView(discord.ui.LayoutView):
         case_id: int,
         appealer: discord.User | discord.Member,
         appeal_answers: dict[str, str],
-        case_details: dict,
+        case_details: ModLog,
     ) -> None:
         super().__init__(timeout=None)
 
-        reason = (case_details["reason"] or "No reason provided")[:500]
+        reason = (case_details.reason or "No reason provided")[:500]
 
         answers_text = "\n".join(
             f"### {question}\n{answer.strip() or '-'}"
@@ -1342,9 +1366,9 @@ class AppealRequestView(discord.ui.LayoutView):
         case_container = discord.ui.Container(
             discord.ui.TextDisplay("### Case Information"),
             discord.ui.Separator(),
-            discord.ui.TextDisplay(f"{emoji['bookmark']} **Case Type**\n{case_details['mod_type'].title()}"),
+            discord.ui.TextDisplay(f"{emoji['bookmark']} **Case Type**\n{(case_details.mod_type or 'Unknown').title()}"),
             discord.ui.TextDisplay(f"{emoji['pencil']} **Reason**\n{reason}"),
-            discord.ui.TextDisplay(f"{emoji['shield']} **Moderator**\n<@{case_details['moderator_id']}>")
+            discord.ui.TextDisplay(f"{emoji['shield']} **Moderator**\n<@{case_details.moderator_id}>")
         )
 
         self.add_item(appeal_container)
@@ -1363,7 +1387,7 @@ class AppealModal(discord.ui.Modal):
         case_id: int,
         guild_id: int,
         config: List[Dict[str, Any]],
-        _case
+        _case: ModLog
     ) -> None:
         super().__init__(
             title="Moderation Appeal",
@@ -1466,7 +1490,7 @@ class AppealModal(discord.ui.Modal):
             tag = discord.utils.get(appeal_forum.available_tags, name="Pending")
 
             thread, _ = await appeal_forum.create_thread(
-                name=f"{interaction.user.name.capitalize()}'s {self.case['mod_type'].title()} Appeal",
+                name=f"{interaction.user.name.capitalize()}'s {(self.case.mod_type or 'Unknown').title()} Appeal",
                 applied_tags=[tag] if tag else [],
                 view=view,
                 allowed_mentions=discord.AllowedMentions.none()
@@ -1474,7 +1498,7 @@ class AppealModal(discord.ui.Modal):
 
             assert interaction.client.user is not None
             await thread.send(
-                content=f"<@{self.case['moderator_id']}> Please review your {self.case['mod_type'].title()} appeal. To reply, mention me (<@{interaction.client.user.id}>) and type your message."
+                content=f"<@{self.case.moderator_id}> Please review your {(self.case.mod_type or 'Unknown').title()} appeal. To reply, mention me (<@{interaction.client.user.id}>) and type your message."
             )
 
             await self.db.create_appeal(
@@ -1482,8 +1506,21 @@ class AppealModal(discord.ui.Modal):
                 thread.id
             )
 
+            bot = cast("Lily", interaction.client)
+            await bot.events.invoke(
+                Events.APPEAL_REQUESTED,
+                payload=EventPayload(
+                    bot=bot,
+                    guild=guild
+                ),
+                user=interaction.user,
+                case_id=self.case_id,
+                appeal_response=answers,
+                thread=thread
+            )
+
             """ Get Proofs """
-            case_proofs = await self.db.get_proof_references(self.guild_id, self.case_id)
+            case_proofs = await self.db.get_proof_references(self.case_id, self.guild_id)
             attachments: list[discord.File] = []
 
             if case_proofs:
@@ -1584,7 +1621,7 @@ class AppealButton(discord.ui.DynamicItem[discord.ui.Button], template=r'button:
 
             """ Check the validity of the case first """
             _case = await db.get_case(self.case_id)
-            if _case is None:
+            if _case is None or _case.deleted:
                 await interaction.response.send_message(
                     embed=simple_embed(
                         "Maybe This case has been already resolved???",
@@ -1596,11 +1633,10 @@ class AppealButton(discord.ui.DynamicItem[discord.ui.Button], template=r'button:
                 return
             
             """ Check the status of the case """
-            appeal_exists = await db.appeal_exists(self.case_id)
-            logger.debug("appeal_exists for case_id=%s: %s", self.case_id, appeal_exists)
-            if appeal_exists:
-                appeal_status = await db.get_appeal_status(self.case_id)
-                logger.debug("appeal_status for case_id=%s: %s", self.case_id, appeal_status)
+            appeal = await db.get_appeal(case_id=self.case_id)
+            logger.debug("appeal for case_id=%s: %s", self.case_id, appeal)
+            if appeal is not None:
+                appeal_status = appeal.status
 
                 if appeal_status == "pending":
                     await interaction.response.send_message(
@@ -1636,11 +1672,11 @@ class AppealButton(discord.ui.DynamicItem[discord.ui.Button], template=r'button:
                     return
 
             else:
-                _config = await db.get_appeal_forum_config(_case["guild_id"])
+                _config = await db.get_appeal_forum_config(_case.guild_id)
                 await interaction.response.send_modal(AppealModal(
                     db,
                     self.case_id,
-                    _case["guild_id"],
+                    _case.guild_id,
                     _config,
                     _case
                 )
@@ -1787,7 +1823,13 @@ class CaseProofsPurgeViewAbsolute(discord.ui.View):
             logger.exception("Failed to update purge button for case_id")
 
 class AppealMessageView(discord.ui.LayoutView):
-    def __init__(self, message: str, server: str, attachments: List[discord.Attachment]) -> None:
+    def __init__(
+            self, 
+            message: str, 
+            bot: discord.Member, 
+            server: discord.Guild, 
+            attachments: List[discord.Attachment]
+        ) -> None:
         super().__init__(timeout=None)
 
         gallery_items = [
@@ -1796,48 +1838,30 @@ class AppealMessageView(discord.ui.LayoutView):
         ]
 
         components: List[
-            Union[discord.ui.TextDisplay, discord.ui.MediaGallery, discord.ui.Separator]
+            Union[discord.ui.TextDisplay, discord.ui.Section, discord.ui.MediaGallery, discord.ui.Separator]
         ] = [
-            discord.ui.TextDisplay(content=f"### {message}"),
+            discord.ui.Section(
+                discord.ui.TextDisplay(content=f"### You've received a message"),
+                discord.ui.TextDisplay(content=f"Server: **{server.name}**"),
+                discord.ui.TextDisplay(content=f"> {message or 'No message received'}"),
+                accessory=discord.ui.Thumbnail(
+                    media=server.icon.url if server.icon else bot.display_avatar.url
+                )
+            )   
+            
         ]
-
-        if gallery_items:
-            components.append(discord.ui.MediaGallery(*gallery_items))
 
         components.append(
             discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small)
         )
-        components.append(
-            discord.ui.TextDisplay(content=f"-# Message From {server}'s Staff Team")
-        )
 
+        if gallery_items:
+            components.append(discord.ui.TextDisplay(content="### Attachments"))
+            components.append(discord.ui.MediaGallery(*gallery_items))
+
+        
         self.container1 = discord.ui.Container(*components)
         self.add_item(self.container1)
-
-commands_list: Dict[str, Dict[str, str]] = {
-    "ban": {"app_permission": "ban"},
-    "quarantine": {"app_permission": "quarantine"},
-    "unban": {"app_permission": "unban"},
-    "release": {"app_permission": "unban"},
-    "mute": {"app_permission": "mute"},
-    "warn": {"app_permission": "warn"},
-    "unmute": {"app_permission": "unmute"},
-    "mod_stats": {"app_permission": "ms"},
-    "case_list": {"app_permission": "modlogs"},
-    "mod_insights": {"app_permission": "moderation_insights"},
-    "case_edit": {"app_permission": "case_edit"},
-    "case_edit_absolute": {"app_permission": "case_edit_absolute"},
-    "case_delete": {"app_permission": "case_delete"},
-    "mod_acronym_add": {"app_permission": "mod_acronym_add"},
-    "mod_acronym_remove": {"app_permission": "mod_acronym_remove"},
-    "mod_acronym_update": {"app_permission": "mod_acronym_update"},
-    "mod_acronyms": {"app_permission": "mod_acronyms"},
-    "mod_acronym_transfer": {"app_permission": "mod_acronym_transfer"},
-    "appeal_setup": {"app_permission": "mod_appeal_management"},
-    "appeal_forum": {"app_permission": "mod_appeal_management"},
-    "appeal_accept": {"app_permission": "mod_appeal_handlers"},
-    "appeal_reject": {"app_permission": "mod_appeal_handlers"},
-}
 
 class PermissionConfigureModal(discord.ui.Modal):
     def __init__(self, command_name: str, app_permission: str, roles: List[int]) -> None:
@@ -1905,18 +1929,6 @@ class ModerationDashboard(discord.ui.LayoutView):
         super().__init__(timeout=None)
 
         self.functions: Dict[str, Callable] = functions
-        
-        self.commands_select = discord.ui.Select(
-            options=[
-                discord.SelectOption(
-                    label=name.replace("_", " ").title()[:45],
-                    value=name,
-                )
-                for name in commands_list
-            ],
-        )
-
-        self.commands_select.callback = self.commands_select_callback
 
         self.appeal_handling_btn = discord.ui.Button(
             style=discord.ButtonStyle.secondary,
@@ -1973,9 +1985,6 @@ class ModerationDashboard(discord.ui.LayoutView):
                 "### Command Permission Systems\n"
                 "- Setup Command permissions for roles (for administrator / guild owner no setup needed)"
             )),
-            discord.ui.ActionRow(
-                self.commands_select
-            ),
 
             discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
 
@@ -2119,28 +2128,6 @@ class ModerationDashboard(discord.ui.LayoutView):
                 )
             except discord.HTTPException:
                 logger.exception("Failed to edit original response after quarantine role setup error")
-
-    async def commands_select_callback(self, interaction: discord.Interaction):
-        try:
-            command_name = self.commands_select.values[0]
-            app_permission = commands_list[command_name]["app_permission"]
-
-            """ Send the prefilled values """
-            bot_db = cast("Lily", interaction.client).db
-            assert bot_db is not None
-            assert interaction.guild is not None
-
-            roles = bot_db.get_permission_roles(interaction.guild.id, app_permission)
-            
-            await interaction.response.send_modal(PermissionConfigureModal(command_name, app_permission, roles))
-        except Exception:
-            logger.exception(
-                "Failed to open permission configure modal for command='%s' guild_id=%s",
-                self.commands_select.values[0] if self.commands_select.values else None,
-                getattr(interaction.guild, "id", None),
-            )
-            if not interaction.response.is_done():
-                await interaction.response.send_message(embed=simple_embed("Something went wrong opening the permission configuration.", 'cross'), ephemeral=True)
 
     async def appeal_channel_select_callback(self, interaction: discord.Interaction):
         """ Configure appeal handling using an existing forum channel """

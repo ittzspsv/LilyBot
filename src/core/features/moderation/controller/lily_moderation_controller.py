@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import asyncio
+
 import io
 import numpy as np
 from scipy.interpolate import make_interp_spline
-from datetime import datetime, timedelta
-import json
+from datetime import timedelta
 from typing import Optional, List, Tuple, cast, TYPE_CHECKING
 
 import discord
@@ -14,7 +13,7 @@ from discord.ext import commands
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
-from src.core.database.integrations.bot_globals import BanLimitStatus
+from src.core.database.integrations.bot_globals import BanLimitStatus, LilyError
 from src.core.features.moderation.components.lily_moderation_components import (
     CaseListView,
     CaseProofsView,
@@ -591,8 +590,7 @@ async def release(
 
         roles_to_restore: list[discord.Role] = []
         if result:
-            metadata = result.get("metadata", {})
-            role_ids = metadata.get("roles_before_quarantine", [])
+            role_ids = result.metadata.get("roles_before_quarantine", [])
 
             for role_id in role_ids:
                 role = ctx.guild.get_role(role_id)
@@ -682,53 +680,6 @@ async def warn(
         logger.exception("Failed to warn user %s in guild %s", member.id, ctx.guild.id)
         await bot.send(ctx, embed=simple_embed("Failed to warn this user due to an unexpected error.", 'cross'))
 
-async def case_edit(
-    interaction: discord.Interaction,
-    case_id: int,
-    case_statement: str,
-    absolute: bool = False
-):
-    bot = cast("Lily", interaction.client)
-
-    assert bot.db is not None
-    bot_db = bot.db
-
-    assert bot_db is not None
-
-    try:
-        response = await bot_db.edit_case(**{"staff_id": interaction.user.id, "case_id": case_id, "case_statement": case_statement, "absolute": absolute})
-    except Exception:
-        logger.exception("Failed to edit case %s", case_id)
-        await interaction.response.send_message(embed=simple_embed("An unexpected error occurred while editing this case.", 'cross'))
-        return
-
-    if response.get("success"):
-        await interaction.response.send_message(embed=simple_embed(str(response.get("message"))))
-    else:
-        await interaction.response.send_message(embed=simple_embed(str(response.get("message")), 'cross'))
-
-async def case_delete(
-    interaction: discord.Interaction,
-    case_id: int
-):
-    bot = cast("Lily", interaction.client)
-
-    assert bot.db is not None
-    bot_db = bot.db
-
-    try:
-        assert interaction.guild is not None
-        response = await bot_db.delete_case(case_id, interaction.guild.id)
-    except Exception:
-        logger.exception("Failed to delete case %s", case_id)
-        await interaction.response.send_message(embed=simple_embed("An unexpected error occurred while deleting this case.", 'cross'))
-        return
-
-    if response.get("success"):
-        await interaction.response.send_message(embed=simple_embed(str(response.get("message"))))
-    else:
-        await interaction.response.send_message(embed=simple_embed(str(response.get("message")), 'cross'))
-
 async def ms(
     ctx: discord.Interaction | commands.Context,
     moderator: discord.Member | discord.User,
@@ -765,7 +716,7 @@ async def ms(
             await ctx.reply(embed=embed)
         return
 
-    if not result["success"]:
+    if result.total_logs == 0:
         embed = simple_embed("No stats found for the given moderator ID", "cross")
         if isinstance(ctx, discord.Interaction):
             await ctx.response.send_message(embed=embed)
@@ -779,9 +730,7 @@ async def ms(
 
         embeds = build_ms_embed(
             moderator=moderator,
-            logs=result["logs"],
-            stats=result["stats"],
-            total_logs=result["total_logs"],
+            stats=result,
             page_start=page_start,
             ban_limit=max(0, ban_limit_status.remaining_count - 1)
         )
@@ -832,7 +781,7 @@ async def mod_logs(
             await ctx.reply(embed=embed)
         return
 
-    if not result["success"]:
+    if result.total_count == 0:
         embed = simple_embed("No cases found.", 'cross')
         if isinstance(ctx, discord.Interaction):
             await ctx.response.send_message(embed=embed, ephemeral=True)
@@ -849,6 +798,7 @@ async def mod_logs(
             target_user_id=user.id,
             moderator_id=moderator.id if moderator else None,
             mod_type=mod_type,
+            interactor=ctx.author.id if isinstance(ctx, commands.Context) else ctx.user.id
         )
 
         if isinstance(ctx, discord.Interaction):
@@ -887,15 +837,8 @@ async def moderation_insights(
     try:
         """ Create an image of moderation last 30 days analytics using matplotlib """
         data = await bot_db.get_moderation_monthly_analysis(interaction.guild.id)
-        days = [
-            datetime.strptime(item["day"], "%Y-%m-%d")
-            for item in data
-        ]
 
-        totals = [
-            item["total"]
-            for item in data
-        ]
+        totals = list(data.values())
 
         x = np.arange(1, len(totals) + 1)
 
@@ -1253,238 +1196,3 @@ async def setup_mod_appeal_existing_channel(
         raise discord.app_commands.CheckFailure(
             "An unexpected error occurred while configuring the moderation appeal forum."
         )
-
-async def accept_appeal(
-    interaction: discord.Interaction
-) -> None:
-    if interaction.guild is None:
-        return
-
-    bot = cast("Lily", interaction.client)
-    assert bot.db is not None
-    bot_db = bot.db
-
-    if not isinstance(interaction.channel, discord.Thread):
-        await interaction.response.send_message(
-            embed=simple_embed(
-                "Unable to accept an invalid instigator appeal.",
-                "cross",
-            ),
-            delete_after=5,
-        )
-
-        return
-
-    try:
-        appeal = await bot_db.get_appeal(interaction.channel.id)
-    except Exception:
-        logger.exception("Failed to fetch appeal for thread %s", interaction.channel.id)
-        await interaction.response.send_message(embed=simple_embed("An unexpected error occurred while fetching this appeal.", "cross"))
-        return
-
-    if appeal is None:
-        await interaction.response.send_message(
-            embed=simple_embed(
-                "Unable to accept an invalid instigator appeal.",
-                "cross",
-            ),
-            delete_after=5,
-        )
-        return
-    if appeal["status"] != "pending":
-        await interaction.response.send_message(
-            embed=simple_embed(
-                "This appeal is no longer in a valid state for this action.",
-                "cross",
-            ),
-            delete_after=5,
-        )
-
-        return
-
-    try:
-        case = await bot_db.get_case(appeal["case_id"], interaction.guild.id)
-    except Exception:
-        logger.exception("Failed to fetch case %s for appeal on thread %s", appeal["case_id"], interaction.channel.id)
-        await interaction.response.send_message(embed=simple_embed("An unexpected error occurred while fetching the related case.", 'cross'))
-        return
-
-    if case is None:
-        await interaction.response.send_message(embed=simple_embed("Unable to find the case", 'cross'))
-        return
-
-    moderator = case["moderator_id"]
-    if (
-        interaction.user.id != moderator
-        and
-        has_app_permission(interaction, "mod_appeal_management") is False
-    ):
-        await interaction.response.send_message(embed=simple_embed(f"This action has been denied.  Only <@{moderator}> can Initiate it.", 'cross'))
-        return
-
-    try:
-        member = await interaction.guild.fetch_member(case["target_user_id"])
-        if case["mod_type"] == "mute":
-            await member.edit(timed_out_until=None, reason=f"Appeal accepted by {interaction.user.mention}")
-            await bot_db.log_moderation_action(
-                interaction.guild.id,
-                interaction.user.id,
-                member.id,
-                "unmute",
-                "Appealed"
-            )
-
-        elif case["mod_type"] == "quarantine":
-            quarantine_role_id = await bot.db.get_role_of_type(interaction.guild.id, "quarantine")
-            if len(quarantine_role_id) <= 0:
-                await bot.send(interaction, embed=simple_embed("Quarantine role has not been configured, Please configure it through /mod dashboard or /configure role", 'cross'))
-                return
-    
-            role = interaction.guild.get_role(quarantine_role_id[0])
-            if role:
-                roles_to_restore: list[discord.Role] = []
-                metadata_raw = case.get("metadata", {})
-                metadata = json.loads(metadata_raw)
-                role_ids = metadata.get("roles_before_quarantine", [])
-
-                for role_id in role_ids:
-                    restored_role = interaction.guild.get_role(role_id)
-                    if restored_role is None:
-                        continue
-                    if restored_role >= interaction.guild.me.top_role:
-                        continue
-                    roles_to_restore.append(restored_role)
-
-                new_roles = [
-                    r for r in member.roles if r != role
-                ] + roles_to_restore
-
-                try:
-                    await member.edit(roles=new_roles, reason=f"Appeal accepted by {interaction.user}")
-                except discord.Forbidden:
-                    logger.exception(
-                        "Missing permissions to restore roles for user %s in guild %s",
-                        member.id, interaction.guild.id
-                    )
-                except discord.HTTPException:
-                    logger.exception(
-                        "Failed to restore roles for user %s in guild %s",
-                        member.id, interaction.guild.id
-                    )
-
-                await bot_db.log_moderation_action(
-                    interaction.guild.id,
-                    interaction.user.id,
-                    member.id,
-                    "quarantine_release",
-                    "Appealed"
-                )
-
-            else:
-                await interaction.response.send_message(
-                    content="Seems like I can’t find a Quarantined role. Did you assign that first?",
-                    ephemeral=True
-                )
-
-
-        await member.send(content=f"Your {case['mod_type'].title()} appeal has been accepted and the action has been lifted. ")
-    except Exception:
-        logger.exception("Failed to fully process appeal acceptance for case %s in guild %s", appeal["case_id"], interaction.guild.id)
-
-    assert isinstance(interaction.channel, discord.Thread)
-    assert isinstance(interaction.channel.parent, discord.ForumChannel)
-    accepted = discord.utils.get(interaction.channel.parent.available_tags, name="Accepted")
-
-    if accepted is None:
-        return
-
-    try:
-        await bot_db.set_appeal_status(appeal["case_id"], "accepted")
-        await interaction.response.send_message(embed=simple_embed(f"Successfully Accepted the appeal and their punishment has been lifted.\n This thread will be archived.\n-# Note: This command is deprecated and will be removed eventually"))
-        await interaction.channel.edit(applied_tags=[accepted], locked=True, archived=True)
-    except Exception:
-        logger.exception("Failed to finalize appeal acceptance for case %s in guild %s", appeal["case_id"], interaction.guild.id)
-
-async def reject_appeal(
-    interaction: discord.Interaction,
-    reason: str | None = None
-):
-    if interaction.guild is None:
-        return
-
-    if not isinstance(interaction.channel, discord.Thread):
-        return await interaction.response.send_message(
-            embed=simple_embed(
-                "Unable to reject an invalid instigator appeal.",
-                "cross",
-            ),
-            delete_after=5,
-        )
-
-    bot = cast("Lily", interaction.client)
-    assert bot.db is not None
-    bot_db = bot.db
-
-    try:
-        appeal = await bot_db.get_appeal(interaction.channel.id)
-    except Exception:
-        logger.exception("Failed to fetch appeal for thread %s", interaction.channel.id)
-        return await interaction.response.send_message(embed=simple_embed("An unexpected error occurred while fetching this appeal.", "cross"))
-
-    if appeal is None:
-        return await interaction.response.send_message(
-            embed=simple_embed(
-                "Unable to reject an invalid instigator appeal.",
-                "cross",
-            ),
-            delete_after=5,
-        )
-
-    if appeal["status"] != "pending":
-        return await interaction.response.send_message(
-            embed=simple_embed(
-                "This appeal is no longer in a valid state for this action.",
-                "cross",
-            ),
-            delete_after=5,
-        )
-
-    try:
-        case = await bot_db.get_case(appeal["case_id"], interaction.guild.id)
-    except Exception:
-        logger.exception("Failed to fetch case %s for appeal on thread %s", appeal["case_id"], interaction.channel.id)
-        await interaction.response.send_message(embed=simple_embed("An unexpected error occurred while fetching the related case.", 'cross'))
-        return
-
-    if case is None:
-        await interaction.response.send_message(embed=simple_embed("Unable to find the case", 'cross'))
-        return
-
-    moderator = case["moderator_id"]
-    if (
-        interaction.user.id != moderator
-        and
-        has_app_permission(interaction, "mod_appeal_management") is False
-    ):
-        await interaction.response.send_message(embed=simple_embed(f"This action has been denied.  Only <@{moderator}> can Initiate it.", 'cross'))
-        return
-    try:
-        member = await interaction.guild.fetch_member(case["target_user_id"])
-        await member.send(embed=simple_embed(f"Your appeal has been denied. Sorry\n- Reason: {reason or "No reason Provided"}", 'cross'))
-    except Exception:
-        logger.exception("Failed to notify user of appeal rejection for case %s in guild %s", appeal["case_id"], interaction.guild.id)
-
-    assert isinstance(interaction.channel, discord.Thread)
-    assert isinstance(interaction.channel.parent, discord.ForumChannel)
-    rejected = discord.utils.get(interaction.channel.parent.available_tags, name="Denied")
-
-    if rejected is None:
-        logger.error("Denied tag not found on appeal forum for guild %s", interaction.guild.id)
-        return
-
-    try:
-        await bot_db.set_appeal_status(appeal["case_id"], "rejected")
-        await interaction.response.send_message(embed=simple_embed(f"Successfully rejected the appeal, This thread will be archived!\n-# Note: This command is deprecated and will be removed eventually"))
-        await interaction.channel.edit(applied_tags=[rejected], locked=True, archived=True)
-    except Exception:
-        logger.exception("Failed to finalize appeal rejection for case %s in guild %s", appeal["case_id"], interaction.guild.id)

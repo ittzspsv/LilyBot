@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ....database.integrations.bot_globals import BotGlobalsDatabaseAccess
+from ....database.integrations.bot_globals import BotGlobalsDatabaseAccess, LilyError
 from src.core.configs.bot_details import emoji, img
 from src.core.utils.embeds.sLilyEmbed import simple_embed
 from ..types.staff_management_types import QuotaCheckBy
@@ -52,12 +52,12 @@ async def fetch_staff_detail(ctx: discord.Interaction | commands.Context, staff:
         bot_db = cast("Lily", client).db
         assert bot_db is not None
 
-        data_dict = await bot_db.fetch_staff_detail(staff.id, ctx.guild.id)
+        profile = await bot_db.get_staff_profile(staff.id, ctx.guild.id)
 
-        if not data_dict:
+        if profile is None:
             raise ValueError("Staff data not found in database.")
 
-        view = StaffDataView(staff, data_dict)
+        view = StaffDataView(staff, profile)
 
         if isinstance(ctx, discord.Interaction):
             await ctx.response.send_message(view=view, allowed_mentions=discord.AllowedMentions.none())
@@ -110,103 +110,6 @@ async def fetch_all_staffs(ctx: discord.Interaction | commands.Context) -> None:
         else:
             await ctx.reply(embed=embed, ephemeral=True)
 
-async def update_all_staffs(interaction: discord.Interaction) -> None:
-    if interaction.guild is None:
-        embed = discord.Embed(
-            title=f"{emoji['cross']} Error",
-            description="Cannot execute this command without a guild object",
-            colour=0xf50000
-        )
-        await interaction.response.send_message(embed=embed)
-        return
-
-    bot_db = cast("Lily", interaction.client).db
-    assert bot_db is not None
-
-    guild_id = interaction.guild.id
-
-    rows = await bot_db.fetch_all(
-        "SELECT staff_id FROM staffs WHERE retired = 0 AND on_loa = 0 AND guild_id = ?",
-        (guild_id,)
-    )
-    staff_ids = [row["staff_id"] for row in rows]
-
-    db_roles = await bot_db.fetch_all(
-        "SELECT role_id, role_type FROM roles WHERE guild_id = ?",
-        (guild_id,)
-    )
-    staff_role_ids          = {r["role_id"] for r in db_roles if r["role_type"] == "staff"}
-    responsibility_role_ids = {r["role_id"] for r in db_roles if r["role_type"] == "responsibility"}
-
-    for staff_id in staff_ids:
-        try:
-            staff_member = interaction.guild.get_member(staff_id)
-            if not staff_member:
-                try:
-                    staff_member = await interaction.guild.fetch_member(staff_id)
-                except discord.NotFound:
-                    logger.warning(f"[UpdateAllStaffs] Member not found in guild, skipping: staff_id={staff_id} guild_id={guild_id}")
-                    continue
-
-            top_staff_role = None
-            for role in reversed(staff_member.roles):
-                if role.id in staff_role_ids:
-                    top_staff_role = role
-                    break
-
-            discord_responsibilities = {
-                role.id for role in staff_member.roles
-                if role.id in responsibility_role_ids
-            }
-
-            await bot_db.execute(
-                "DELETE FROM staff_roles WHERE staff_id = ? AND guild_id = ?",
-                (staff_id, guild_id)
-            )
-
-            if top_staff_role is None and not discord_responsibilities:
-                await bot_db.execute(
-                    "UPDATE staffs SET retired = 1 WHERE staff_id = ? AND guild_id = ?",
-                    (staff_id, guild_id)
-                )
-                continue
-
-            await bot_db.execute(
-                """
-                UPDATE staffs
-                SET retired = 0, avatar_url = ?
-                WHERE staff_id = ? AND guild_id = ?
-                """,
-                (staff_member.display_avatar.url, staff_id, guild_id)
-            )
-
-            if top_staff_role is not None:
-                await bot_db.execute(
-                    """
-                    INSERT OR IGNORE INTO staff_roles (staff_id, guild_id, role_id)
-                    VALUES (?, ?, ?)
-                    """,
-                    (staff_id, guild_id, top_staff_role.id)
-                )
-
-            if discord_responsibilities:
-                await bot_db.executemany(
-                    """
-                    INSERT OR IGNORE INTO staff_roles (staff_id, guild_id, role_id)
-                    VALUES (?, ?, ?)
-                    """,
-                    [(staff_id, guild_id, rid) for rid in discord_responsibilities]
-                )
-
-            logger.info(f"[UpdateAllStaffs] Updated {staff_member.name} (staff_id={staff_id}, guild_id={guild_id})")
-
-        except Exception:
-            logger.exception(f"[UpdateAllStaffs] Exception while updating staff_id={staff_id} guild_id={guild_id}")
-            continue
-
-        await asyncio.sleep(1)
-
-    await interaction.response.send_message(embed=simple_embed("Updated every staff role in the database!"))
 
 async def add_staff(interaction: discord.Interaction, staff: discord.Member, rank: discord.Role | None = None) -> None:
     if interaction.guild is None:
@@ -238,24 +141,20 @@ async def add_staff(interaction: discord.Interaction, staff: discord.Member, ran
     bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
     try:
-        response = await bot_db.add_staff(staff.id, interaction.guild.id, staff.display_name, staff.display_avatar.url, role_id=rank.id if rank else None)
-
-        if not response.get("success"):
-            await interaction.response.send_message(embed=simple_embed(response.get("message") or "Unknown Object Passed and Failed", "cross"))
-            return
-
-        roles_to_add = set(response.get("roles_to_add", ()))
+        changes = await bot_db.add_staff(staff.id, interaction.guild.id, staff.display_name, staff.display_avatar.url, role_id=rank.id if rank else None)
 
         add_roles = {
             interaction.guild.get_role(role_id)
-            for role_id in roles_to_add
+            for role_id in changes.roles_to_add
         }
         add_roles = {r for r in add_roles if r}
 
         if add_roles:
             await staff.add_roles(*add_roles, reason=f"Staff added by {interaction.user.id}")
 
-        await interaction.response.send_message(embed=simple_embed(response.get("message") or "Unknown object passed as an output, But it's a success!"))
+        await interaction.response.send_message(embed=simple_embed(f"Successfully added {staff.mention} as staff."))
+    except LilyError as e:
+        await interaction.response.send_message(embed=simple_embed(str(e), "cross"))
     except Exception:
         logger.exception(f"[AddStaff] Failed to add staff_id={staff.id} in guild_id={interaction.guild.id}")
         await interaction.response.send_message(embed=simple_embed("Failed to add staff.", "cross"))
@@ -273,13 +172,8 @@ async def remove_staff(interaction: discord.Interaction, staff: discord.Member |
     bot_db = cast("Lily", interaction.client).db
     assert bot_db is not None
     try:
-        response = await bot_db.remove_staff(staff.id, interaction.guild.id)
+        changes = await bot_db.remove_staff(staff.id, interaction.guild.id)
 
-        if not response.get("success"):
-            await interaction.response.send_message(embed=simple_embed(response.get("message") or "Unknown object has been passed and it failed!", "cross"))
-            return
-
-        roles_to_remove = set(response.get("roles_to_remove", ()))
         channel_id = bot_db.get_channel(interaction.guild.id, "staff_updates")
 
         staff_updates_channel: discord.TextChannel | None = None
@@ -300,7 +194,7 @@ async def remove_staff(interaction: discord.Interaction, staff: discord.Member |
         if staff:
             remove_roles = {
                 interaction.guild.get_role(role_id)
-                for role_id in roles_to_remove
+                for role_id in changes.roles_to_remove
             }
             remove_roles = {r for r in remove_roles if r}
 
@@ -327,7 +221,7 @@ async def remove_staff(interaction: discord.Interaction, staff: discord.Member |
                 except Exception:
                     logger.exception(f"[RemoveStaff] Failed to send staff update embed to channel_id={staff_updates_channel.id} in guild_id={interaction.guild.id}")
 
-        await interaction.response.send_message(embed=simple_embed(response.get("message") or "Unknown object has been passed, but it's an success!"))
+        await interaction.response.send_message(embed=simple_embed(f"Successfully removed {staff.mention} from staff."))
         """ Send DM'S If Available """
 
         if staff is not None:
@@ -342,6 +236,8 @@ async def remove_staff(interaction: discord.Interaction, staff: discord.Member |
                 )
             except Exception:
                 logger.exception(f"[RemoveStaff] Failed to DM staff_id={staff.id} about their removal (likely DMs closed)")
+    except LilyError as e:
+        await interaction.response.send_message(embed=simple_embed(str(e), "cross"))
     except Exception:
         logger.exception(f"[RemoveStaff] Unhandled exception while removing staff_id={staff.id} in guild_id={interaction.guild.id}")
 
@@ -367,20 +263,11 @@ async def edit_staff(interaction: discord.Interaction, staff_id: int, name: str,
 
         bot_db = cast("Lily", interaction.client).db
         assert bot_db is not None
-        result = await bot_db.edit_staff(**payload)
+        await bot_db.edit_staff(**payload)
 
-        if result.get("success"):
-            await interaction.response.send_message(
-                embed=simple_embed(
-                    result["message"]
-                )
-            )
-        else:
-            await interaction.response.send_message(
-                embed=simple_embed(
-                    result["message"], 'cross'
-                )
-            )
+        await interaction.response.send_message(embed=simple_embed(f"Successfully edited <@{staff_id}>."))
+    except LilyError as e:
+        await interaction.response.send_message(embed=simple_embed(str(e), "cross"))
     except Exception:
         logger.exception(f"[EditStaff] Failed to edit staff_id={staff_id} in guild_id={interaction.guild.id}")
         await interaction.response.send_message(embed=simple_embed("Failed to edit staff.", "cross"))
@@ -436,7 +323,10 @@ async def strike_staff(
     }
 
     try:
-        response = await bot_db.strike_staff(**payload)
+        strike = await bot_db.strike_staff(**payload)
+    except LilyError as e:
+        await _safe_followup(interaction, str(e), is_error=True)
+        return
     except Exception:
         logger.exception(
             "strike_staff: strike_staff DB call failed (staff_id=%s, guild_id=%s)",
@@ -444,13 +334,6 @@ async def strike_staff(
         )
         await _safe_followup(interaction, "An unknown error occurred while recording the infraction.", is_error=True)
         return
-
-    if not response.get("success"):
-        await _safe_followup(interaction, response.get("message") or "An unknown object has been returned and failed", is_error=True)
-        return
-
-    message = response.get("message")
-    strike_reason = response.get("reason")
 
     if notify_staff:
         try:
@@ -461,7 +344,7 @@ async def strike_staff(
                 staff.id,
             )
 
-    await _safe_followup(interaction, message or "An unknown object has been returned, but It's an success!")
+    await _safe_followup(interaction, f"Successfully issued strike #{strike.id} to {staff.mention}.")
 
     if not notify_staff_updates:
         return
@@ -494,7 +377,7 @@ async def strike_staff(
 
     embed.add_field(
         name="Reason",
-        value=f"- {strike_reason}",
+        value=f"- {strike.reason}",
         inline=False,
     )
 
@@ -558,34 +441,25 @@ async def remove_strike_staff(interaction: discord.Interaction, strike_id: int):
 
         bot_db = cast("Lily", interaction.client).db
         assert bot_db is not None
-        result = await bot_db.remove_strike(**payload)
+        strike = await bot_db.remove_strike(**payload)
 
-        status: bool = bool(result.get("success"))
-        message: str = str(result.get("message") or "An unknown error occurred")
+        await interaction.response.send_message(embed=simple_embed(f"Successfully removed strike #{strike.id}."))
 
-        if status:
-            await interaction.response.send_message(embed=simple_embed(message))
-
-            """ Notify the staff that his strike has been removed """
-            staff_id: int = cast(int, result.get("issued_to"))
-            issued_by: int = cast(int, result.get("issued_by"))
-            reason: str = cast(str, result.get("reason"))
-
-            staff_member = interaction.guild.get_member(staff_id)
-            if staff_member is None:
-                try:
-                    staff_member = await interaction.guild.fetch_member(staff_id)
-                except Exception:
-                    logger.exception(f"[RemoveStrikeStaff] Failed to fetch staff_id={staff_id} in guild_id={interaction.guild.id} to notify strike removal")
-                    return
-            assert isinstance(interaction.user, discord.Member)
+        """ Notify the staff that his strike has been removed """
+        staff_member = interaction.guild.get_member(strike.issued_to_id)
+        if staff_member is None:
             try:
-                await staff_member.send(embed=staff_strike_remove_embed(interaction.user, issued_by, reason, interaction.guild.name))
+                staff_member = await interaction.guild.fetch_member(strike.issued_to_id)
             except Exception:
-                logger.exception(f"[RemoveStrikeStaff] Failed to DM staff_id={staff_id} about strike removal (likely DMs closed)")
-
-        else:
-            await interaction.response.send_message(embed=simple_embed(message, "cross"))
+                logger.exception(f"[RemoveStrikeStaff] Failed to fetch staff_id={strike.issued_to_id} in guild_id={interaction.guild.id} to notify strike removal")
+                return
+        assert isinstance(interaction.user, discord.Member)
+        try:
+            await staff_member.send(embed=staff_strike_remove_embed(interaction.user, strike.issued_by_id, strike.reason, interaction.guild.name))
+        except Exception:
+            logger.exception(f"[RemoveStrikeStaff] Failed to DM staff_id={strike.issued_to_id} about strike removal (likely DMs closed)")
+    except LilyError as e:
+        await interaction.response.send_message(embed=simple_embed(str(e), "cross"))
     except Exception:
         logger.exception(f"[RemoveStrikeStaff] Unhandled exception while removing strike_id={strike_id} in guild_id={interaction.guild.id}")
 
@@ -597,14 +471,14 @@ async def list_strikes(interaction: discord.Interaction, staff: discord.Member):
     try:
         bot_db = cast("Lily", interaction.client).db
         assert bot_db is not None
-        strikes_list_data = await bot_db.fetch_staff_strikes(
+        strikes_page = await bot_db.fetch_staff_strikes(
             staff_id=staff.id,
             guild_id=interaction.guild.id
         )
 
         view = StrikesListView(
             (staff.name.capitalize(), staff.display_avatar.url),
-            strikes_list_data=strikes_list_data,
+            strikes_list_data=strikes_page,
             db=bot_db,
             guild_id=interaction.guild.id,
             staff_id=staff.id,
@@ -615,7 +489,7 @@ async def list_strikes(interaction: discord.Interaction, staff: discord.Member):
             view=view,
             ephemeral=True
         )
-        
+
     except Exception:
         logger.exception(f"[ListStrikes] Failed to fetch strikes for staff_id={staff.id} in guild_id={interaction.guild.id}")
         await interaction.response.send_message(embed=simple_embed("Failed to fetch strikes.", "cross"))
@@ -633,18 +507,16 @@ async def edit_strike(interaction: discord.Interaction, strike_id: int, new_reas
     try:
         bot_db = cast("Lily", interaction.client).db
         assert bot_db is not None
-        response = await bot_db.edit_strike(**{
+        await bot_db.edit_strike(**{
             "guild_id": interaction.guild.id,
             "strike_id": strike_id,
             "staff_id": interaction.user.id,
             "new_reason": new_reason
         })
 
-        if not response.get("success"):
-            await interaction.response.send_message(embed=simple_embed(str(response.get("message")), 'cross'))
-            return
-
-        await interaction.response.send_message(embed=simple_embed(str(response.get("message"))))
+        await interaction.response.send_message(embed=simple_embed(f"Successfully edited strike #{strike_id}."))
+    except LilyError as e:
+        await interaction.response.send_message(embed=simple_embed(str(e), "cross"))
     except Exception:
         logger.exception(f"[EditStrike] Failed to edit strike_id={strike_id} in guild_id={interaction.guild.id}")
         await interaction.response.send_message(embed=simple_embed("Failed to edit strike.", "cross"))
@@ -661,31 +533,24 @@ async def add_loa(interaction: discord.Interaction, staff: discord.Member, reaso
     try:
         bot_db = cast("Lily", interaction.client).db
         assert bot_db is not None
-        response = await bot_db.add_loa(**{
+        changes = await bot_db.add_loa(**{
             "staff_id": staff.id,
             "reason": reason,
             "loa_issued_by": interaction.user.id,
             "guild_id": interaction.guild.id
         })
 
-        if not response.get("success"):
-            await interaction.response.send_message(embed=simple_embed(str(response.get("message")), 'cross'))
-            return
-
-        roles_to_remove = set(response.get("roles_to_remove", ()))
-        roles_to_add = set(response.get("roles_to_add", ()))
-
         current_roles = set(staff.roles)
 
         remove_roles = {
             interaction.guild.get_role(rid)
-            for rid in roles_to_remove
+            for rid in changes.roles_to_remove
         }
         remove_roles = {r for r in remove_roles if r}
 
         add_roles = {
             interaction.guild.get_role(rid)
-            for rid in roles_to_add
+            for rid in changes.roles_to_add
         }
         add_roles = {r for r in add_roles if r}
 
@@ -696,7 +561,9 @@ async def add_loa(interaction: discord.Interaction, staff: discord.Member, reaso
             reason="LOA assigned"
         )
 
-        await interaction.response.send_message(embed=simple_embed(str(response.get("message"))))
+        await interaction.response.send_message(embed=simple_embed(f"Successfully added LOA for {staff.mention}."))
+    except LilyError as e:
+        await interaction.response.send_message(embed=simple_embed(str(e), "cross"))
     except Exception:
         logger.exception(f"[AddLOA] Failed to add LOA for staff_id={staff.id} in guild_id={interaction.guild.id}")
         await interaction.response.send_message(embed=simple_embed("Failed to add LOA.", "cross"))
@@ -713,26 +580,19 @@ async def remove_loa(interaction: discord.Interaction, staff: discord.Member):
     try:
         bot_db = cast("Lily", interaction.client).db
         assert bot_db is not None
-        response = await bot_db.remove_loa(**{"staff_id": staff.id, "guild_id": interaction.guild.id})
-
-        if not response.get("success"):
-            await interaction.response.send_message(embed=simple_embed(str(response.get("message"))))
-            return
-
-        roles_to_remove = set(response.get("roles_to_remove", ()))
-        roles_to_add = set(response.get("roles_to_add", ()))
+        changes = await bot_db.remove_loa(**{"staff_id": staff.id, "guild_id": interaction.guild.id})
 
         current_roles = set(staff.roles)
 
         remove_roles = {
             interaction.guild.get_role(rid)
-            for rid in roles_to_remove
+            for rid in changes.roles_to_remove
         }
         remove_roles = {r for r in remove_roles if r}
 
         add_roles = {
             interaction.guild.get_role(rid)
-            for rid in roles_to_add
+            for rid in changes.roles_to_add
         }
         add_roles = {r for r in add_roles if r}
 
@@ -743,7 +603,9 @@ async def remove_loa(interaction: discord.Interaction, staff: discord.Member):
             reason="LOA removed"
         )
 
-        await interaction.response.send_message(embed=simple_embed(str(response.get("message"))))
+        await interaction.response.send_message(embed=simple_embed(f"Successfully removed LOA for {staff.mention}."))
+    except LilyError as e:
+        await interaction.response.send_message(embed=simple_embed(str(e), "cross"))
     except Exception:
         logger.exception(f"[RemoveLOA] Failed to remove LOA for staff_id={staff.id} in guild_id={interaction.guild.id}")
         await interaction.response.send_message(embed=simple_embed("Failed to remove LOA.", "cross"))
@@ -755,9 +617,9 @@ async def list_loa(interaction: discord.Interaction, staff: discord.Member):
     try:
         bot_db = cast("Lily", interaction.client).db
         assert bot_db is not None
-        results = await bot_db.loa_list(staff.id, interaction.guild.id)
+        leaves = await bot_db.loa_list(staff.id, interaction.guild.id)
 
-        if len(results) <= 0:
+        if not leaves:
             return await interaction.response.send_message(embed=simple_embed("No LOA found for this user", 'cross'))
 
         embed = discord.Embed(
@@ -768,10 +630,10 @@ async def list_loa(interaction: discord.Interaction, staff: discord.Member):
         embed.set_thumbnail(url=staff.display_avatar.url)
         embed.set_image(url=img['border'])
 
-        for result in results:
+        for leave in leaves:
             embed.add_field(
-                name=f"📌 LOA #{result['leave_id']}",
-                value=f"- **Reason**: {result['reason']}\n- **Assigned by**: <@{result['issued_by']}>",
+                name=f"📌 LOA #{leave.id}",
+                value=f"- **Reason**: {leave.reason}\n- **Assigned by**: <@{leave.issued_by}>",
                 inline=False
             )
 
@@ -907,13 +769,6 @@ async def update_staff(interaction: discord.Interaction, staff: discord.Member, 
             rank_id=rank.id if rank else None
         )
 
-        if not result.get("success"):
-            await interaction.response.send_message(embed=simple_embed(
-                str(result.get("message")),
-                "cross"
-            ))
-            return
-
         channel_id = bot_db.get_channel(
             interaction.guild.id,
             "staff_updates"
@@ -934,8 +789,8 @@ async def update_staff(interaction: discord.Interaction, staff: discord.Member, 
             if isinstance(channel, discord.TextChannel):
                 staff_updates_channel = channel
 
-        old_role_id = result.get("old_role_id")
-        new_role_id = result.get("new_role_id")
+        old_role_id = result.old_role_id
+        new_role_id = result.new_role_id
 
         old_role = interaction.guild.get_role(old_role_id) if old_role_id else None
         new_role = interaction.guild.get_role(new_role_id) if new_role_id else None
@@ -985,6 +840,8 @@ async def update_staff(interaction: discord.Interaction, staff: discord.Member, 
         await interaction.response.send_message(
             embed=simple_embed(f"{staff.mention} has been {act}.")
         )
+    except LilyError as e:
+        await interaction.response.send_message(embed=simple_embed(str(e), "cross"))
     except Exception:
         logger.exception(f"[UpdateStaff] Unhandled exception while updating staff_id={staff.id} in guild_id={interaction.guild.id}")
         await interaction.response.send_message(embed=simple_embed("Failed to update staff.", "cross"))
@@ -1010,13 +867,11 @@ async def add_staff_quota(interaction: discord.Interaction, quota_role: discord.
         }
         bot_db = cast("Lily", interaction.client).db
         assert bot_db is not None
-        result = await bot_db.add_staff_quota(**payload)
+        quota = await bot_db.add_staff_quota(**payload)
 
-        if not result.get("success"):
-            await interaction.response.send_message(embed=simple_embed(str(result.get("message")), 'cross'))
-            return
-
-        await interaction.response.send_message(embed=simple_embed(str(result.get("message"))))
+        await interaction.response.send_message(embed=simple_embed(f"Added quota #{quota.id} for {quota_role.mention}."))
+    except LilyError as e:
+        await interaction.response.send_message(embed=simple_embed(str(e), "cross"))
     except Exception:
         logger.exception(f"[AddStaffQuota] Failed to add quota for role_id={quota_role.id} in guild_id={interaction.guild.id}")
         await interaction.response.send_message(embed=simple_embed("Failed to add staff quota.", "cross"))
@@ -1037,13 +892,11 @@ async def remove_staff_quota(interaction: discord.Interaction, quota_id: str):
         }
         bot_db = cast("Lily", interaction.client).db
         assert bot_db is not None
-        result = await bot_db.remove_staff_quota(**payload)
+        quota = await bot_db.remove_staff_quota(**payload)
 
-        if not result.get("success"):
-            await interaction.response.send_message(embed=simple_embed(str(result.get("message")), 'cross'))
-            return
-
-        await interaction.response.send_message(embed=simple_embed(str(result.get("message"))))
+        await interaction.response.send_message(embed=simple_embed(f"Removed quota #{quota.id}."))
+    except LilyError as e:
+        await interaction.response.send_message(embed=simple_embed(str(e), "cross"))
     except Exception:
         logger.exception(f"[RemoveStaffQuota] Failed to remove quota_id={quota_id} in guild_id={interaction.guild.id}")
         await interaction.response.send_message(embed=simple_embed("Failed to remove staff quota.", "cross"))
@@ -1061,7 +914,7 @@ async def fetch_staff_quota(interaction: discord.Interaction):
     try:
         bot_db = cast("Lily", interaction.client).db
         assert bot_db is not None
-        quotas = await bot_db.fetch_staff_quota(interaction.guild.id)
+        quotas = await bot_db.get_quotas(interaction.guild.id)
 
         if not quotas:
             return await interaction.response.send_message(embed=simple_embed("No staff quotas configured.", 'cross'))
@@ -1077,16 +930,16 @@ async def fetch_staff_quota(interaction: discord.Interaction):
         embed.set_image(url=img['border'])
 
         for quota in quotas:
-            role = interaction.guild.get_role(quota["role_id"])
-            role_mention = role.mention if role else f"`{quota['role_id']}`"
+            role = interaction.guild.get_role(quota.role_id)
+            role_mention = role.mention if role else f"`{quota.role_id}`"
 
             embed.add_field(
-                name=f"Quota #{quota['quota_id']}",
+                name=f"Quota #{quota.id}",
                 value=(
                     f"- Role : {role_mention}\n"
-                    f"- Minimum Messages : {quota['min_msg']}\n"
-                    f"- Minimum Moderation Stats : {quota['min_ms']}\n"
-                    f"- Quota Check By : {quota['check_by'] or 'None'}"
+                    f"- Minimum Messages : {quota.min_msg}\n"
+                    f"- Minimum Moderation Stats : {quota.min_ms}\n"
+                    f"- Quota Check By : {quota.check_by or 'None'}"
                 ),
                 inline=False
             )
@@ -1124,46 +977,47 @@ async def check_staff_quota(interaction: discord.Interaction, staff: discord.Mem
         await interaction.response.send_message(embed=embed)
         return
 
-    await interaction.response.defer()
 
     try:
         bot_db = cast("Lily", interaction.client).db
         assert bot_db is not None
 
-        response = await bot_db.evaluate_staff_quotas(interaction.guild.id, staff.id)
+        results = await bot_db.evaluate_quotas(interaction.guild.id, staff_id=staff.id)
 
-        if not response["success"]:
-            return await interaction.followup.send(
-                embed=simple_embed(response["message"], "cross")
+        if not results:
+            return await interaction.response.send_message(
+                embed=simple_embed("No quota applies to this staff member.", "cross")
             )
 
-        on_loa = response["on_loa"]
-        results = response["results"]
+        on_loa = results[0].staff.on_loa
         total = len(results)
 
         embeds: list[discord.Embed] = []
 
         for index, r in enumerate(results[:10], start=1):
-            role = interaction.guild.get_role(r["role_id"])
-            role_mention = role.mention if role else f"`{r['role_id']}`"
+            role = interaction.guild.get_role(r.quota.role_id)
+            role_mention = role.mention if role else f"`{r.quota.role_id}`"
 
-            ratio = _progress(r["messages"], r["min_msg"], r["ms"], r["min_ms"])
+            min_msg = r.quota.min_msg or 0
+            min_ms = r.quota.min_ms or 0
+
+            ratio = _progress(r.messages, min_msg, r.mod_stats, min_ms)
             progress = f"{_bar(ratio)} {int(ratio * 100)}%"
 
             if on_loa:
                 colour, status = 0xFFF0F3, "## On LOA (exempt)"
-            elif r["passed"]:
+            elif r.passed:
                 colour, status = 0xFFF0F3, f"## {emoji['checked']} Passed"
             else:
                 colour, status = 0xFFF0F3, f"## {emoji['cross']} Failed"
 
             embed = discord.Embed(
-                title=f"{r['period']} Quota #{r['quota_id']}",
+                title=f"{r.period} Quota #{r.quota.id}",
                 description=(
                     f"{status}\n"
                     f"- **Role:** {role_mention}\n"
-                    f"- **Messages:** {_line(r['messages'], r['min_msg'])}\n"
-                    f"- **Moderation:** {_line(r['ms'], r['min_ms'])}\n"
+                    f"- **Messages:** {_line(r.messages, min_msg)}\n"
+                    f"- **Moderation:** {_line(r.mod_stats, min_ms)}\n"
                     f"- **Progress:** {progress}"
                 ),
                 color=colour
@@ -1174,12 +1028,14 @@ async def check_staff_quota(interaction: discord.Interaction, staff: discord.Mem
             embed.set_footer(text=f"Quota {index} of {total}")
             embeds.append(embed)
 
-        await interaction.followup.send(embeds=embeds)
+        await interaction.response.send_message(embeds=embeds)
+    except LilyError as e:
+        await interaction.response.send_message(embed=simple_embed(str(e), "cross"))
     except Exception:
         logger.exception(
             f"[CheckStaffQuota] Failed to check quota for staff_id={staff.id} in guild_id={interaction.guild.id}"
         )
-        await interaction.followup.send(embed=simple_embed("Failed to check staff quota.", "cross"))
+        await interaction.response.send_message(embed=simple_embed("Failed to check staff quota.", "cross"))
 
 
 async def remove_role(interaction: discord.Interaction, role: int):
@@ -1194,12 +1050,11 @@ async def remove_role(interaction: discord.Interaction, role: int):
     try:
         bot_db = cast("Lily", interaction.client).db
         assert bot_db is not None
-        response = await bot_db.remove_role(interaction.guild.id, role)
+        removed = await bot_db.remove_role(interaction.guild.id, role)
 
-        if response.get("success"):
-            await interaction.response.send_message(embed=simple_embed(f"{response.get('message')}"), allowed_mentions=discord.AllowedMentions.none())
-        else:
-            await interaction.response.send_message(embed=simple_embed(f"{response.get('message')}", 'cross'))
+        await interaction.response.send_message(embed=simple_embed(f"Removed the configuration of {removed.mention}."), allowed_mentions=discord.AllowedMentions.none())
+    except LilyError as e:
+        await interaction.response.send_message(embed=simple_embed(str(e), "cross"))
     except Exception:
         logger.exception(f"[RemoveRole] Failed to remove role_id={role} in guild_id={interaction.guild.id}")
         await interaction.response.send_message(embed=simple_embed("Failed to remove role.", "cross"))
@@ -1216,76 +1071,53 @@ async def evaluate_staff_quota(interaction: discord.Interaction, role: discord.R
     try:
         bot_db = cast("Lily", interaction.client).db
         assert bot_db is not None
-        quota_id = await bot_db.get_quota_id_from_role(interaction.guild.id, role.id)
-        if quota_id is None:
+        quotas = await bot_db.get_quotas(interaction.guild.id, role_id=role.id)
+        if not quotas:
             return await interaction.response.send_message(
                 embed=simple_embed("No quota has been defined for this role", 'cross')
             )
 
-        response = await bot_db.get_quota_status(
-            interaction.guild.id,
-            quota_id,
-        )
+        embeds=[]
 
-        if not response.get("success"):
-            return await interaction.response.send_message(
-                embed=simple_embed(
-                    response.get("message", "Error occurred"),
-                    'cross'
+        for i, quota in enumerate(quotas):
+            results = await bot_db.evaluate_quotas(interaction.guild.id, quota_id=quota.id)
+
+            passed_staff_str = ", ".join(r.staff.mention for r in results if r.passed) or "None"
+            failed_staff_str = ", ".join(r.staff.mention for r in results if not r.passed) or "None"
+            passed_count = sum(1 for r in results if r.passed)
+
+            embed = discord.Embed(
+                color=0xFFFFFF,
+                description=(
+                    f"### Quota Evaluation for <@&{quota.role_id}>"
+                    if i == 0 else None
                 )
             )
 
-        quota = response["quota"]
-        summary = response["summary"]
-
-        passed_staff = response["passed_staff"]
-        failed_staff = response["failed_staff"]
-
-        passed_staff_str = "\n".join(
-            f"<@{s['staff_id']}>"
-            for s in passed_staff
-        ) or "None"
-
-        failed_staff_str = "\n".join(
-            (
-                f"<@{s['staff_id']}>"
+            embed.add_field(
+                name=f"Passed ({passed_count})",
+                value=passed_staff_str,
+                inline=False,
             )
-            for s in failed_staff
-        ) or "None"
 
-        embed = discord.Embed(
-            color=0xFFFFFF,
-            description=f"### Quota Evaluation for <@&{quota['role_id']}>"
-        )
+            embed.add_field(
+                name=f"Failed ({len(results) - passed_count})",
+                value=failed_staff_str,
+                inline=False,
+            )
 
-        embed.add_field(
-            name="Quota Summary",
-            value=(
-                f"Total Staff: **{summary['total_staff']}**\n"
-                f"Passed: **{summary['passed']}**\n"
-                f"Failed: **{summary['failed']}**"
-            ),
-            inline=False,
-        )
+            embed.set_footer(text=f"Quota ID #{quota.id}")
 
-        embed.add_field(
-            name="Passed Staff",
-            value=passed_staff_str,
-            inline=False,
-        )
+            if interaction.guild.icon:
+                embed.set_thumbnail(url=interaction.guild.icon.url)
 
-        embed.add_field(
-            name="Failed Staff",
-            value=failed_staff_str,
-            inline=False,
-        )
+            embed.set_image(url=img['border'])
 
-        if interaction.guild.icon:
-            embed.set_thumbnail(url=interaction.guild.icon.url)
+            embeds.append(embed)
 
-        embed.set_image(url=img['border'])
-
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embeds=embeds)
+    except LilyError as e:
+        await interaction.response.send_message(embed=simple_embed(str(e), "cross"))
     except Exception:
         logger.exception(f"[EvaluateStaffQuota] Failed to evaluate quota for role_id={role.id} in guild_id={interaction.guild.id}")
         await interaction.response.send_message(embed=simple_embed("Failed to evaluate staff quota.", "cross"))
@@ -1385,22 +1217,15 @@ async def _record_quota_history(
     bot_db,
     guild_id: int,
     quota_id: int,
-    passed_staff: list[dict],
-    failed_staff: list[dict],
+    results,
     timestamp: str,
 ) -> None:
-    try:
-        rows = [(s["staff_id"], "pass") for s in (passed_staff or [])]
-        rows += [(s["staff_id"], "fail") for s in (failed_staff or [])]
-    except Exception:
-        logger.exception(f"[AutomaticQuotaEvaluator] Failed to prepare history rows for guild_id={guild_id} quota_id={quota_id}")
-        return
-
-    for staff_id, status in rows:
+    for r in results:
+        status = "pass" if r.passed else "fail"
         try:
             await bot_db.create_quota_history(
                 quota_id=quota_id,
-                staff_id=staff_id,
+                staff_id=r.staff.id,
                 guild_id=guild_id,
                 status=status,
                 timestamp=timestamp,
@@ -1408,7 +1233,7 @@ async def _record_quota_history(
         except Exception:
             logger.exception(
                 f"[AutomaticQuotaEvaluator] Failed to create quota history "
-                f"guild_id={guild_id} quota_id={quota_id} staff_id={staff_id} status={status}"
+                f"guild_id={guild_id} quota_id={quota_id} staff_id={r.staff.id} status={status}"
             )
 
 
@@ -1419,10 +1244,14 @@ async def automatic_quota_evaluator(check_by: str, bot):
     assert bot_db is not None
 
     try:
-        quotas_by_guild = await bot_db.get_quota_ids_grouped_by_guild(check_by)
+        quotas = await bot_db.get_quotas(check_by=check_by)
     except Exception:
         logger.exception(f"[AutomaticQuotaEvaluator] Failed to fetch quotas for check_by={check_by}")
         return
+
+    quotas_by_guild: dict[int, list] = {}
+    for quota in quotas:
+        quotas_by_guild.setdefault(quota.guild_id, []).append(quota)
 
     live_guild_ids = {g.id for g in _bot.guilds}
 
@@ -1434,7 +1263,7 @@ async def automatic_quota_evaluator(check_by: str, bot):
 
     run_timestamp = datetime.now(timezone.utc).isoformat()
 
-    for guild_id, quota_ids in quotas_by_guild.items():
+    for guild_id, guild_quotas in quotas_by_guild.items():
         if guild_id not in live_guild_ids:
             logger.info(f"[AutomaticQuotaEvaluator] Skipping guild_id={guild_id}: bot is not in this guild")
             continue
@@ -1447,45 +1276,28 @@ async def automatic_quota_evaluator(check_by: str, bot):
             except ValueError:
                 logger.warning(f"[AutomaticQuotaEvaluator] Invalid webhook URL for guild_id={guild_id}, history will still be recorded")
 
-        for quota_id in quota_ids:
+        for quota in guild_quotas:
             try:
-                response = await bot_db.get_quota_status(guild_id, quota_id)
-
-                if not response.get("success"):
-                    logger.warning(f"[AutomaticQuotaEvaluator] Quota evaluation failed: {response.get('message')} guild_id={guild_id} quota_id={quota_id}")
-                    continue
-
-                passed_staff = response["passed_staff"]
-                failed_staff = response["failed_staff"]
+                results = await bot_db.evaluate_quotas(guild_id, quota_id=quota.id)
 
                 await _record_quota_history(
-                    bot_db, guild_id, quota_id, passed_staff, failed_staff, run_timestamp
+                    bot_db, guild_id, quota.id, results, run_timestamp
                 )
 
                 if webhook is None:
                     continue
 
-                quota = response["quota"]
-                summary = response["summary"]
-
-                passed_staff_str = "\n".join(f"<@{s['staff_id']}>" for s in passed_staff) or "None"
-                failed_staff_str = "\n".join(f"<@{s['staff_id']}>" for s in failed_staff) or "None"
+                passed_staff_str = ", ".join(r.staff.mention for r in results if r.passed) or "None"
+                failed_staff_str = ", ".join(r.staff.mention for r in results if not r.passed) or "None"
+                passed_count = sum(1 for r in results if r.passed)
 
                 embed = discord.Embed(
                     color=0xFFFFFF,
-                    description=f"### Quota Evaluation for <@&{quota['role_id']}>",
+                    description=f"### Quota Evaluation for <@&{quota.role_id}>",
                 )
-                embed.add_field(
-                    name="Quota Summary",
-                    value=(
-                        f"Total Staff: **{summary['total_staff']}**\n"
-                        f"Passed: **{summary['passed']}**\n"
-                        f"Failed: **{summary['failed']}**"
-                    ),
-                    inline=False,
-                )
-                embed.add_field(name="Passed Staff", value=passed_staff_str, inline=False)
-                embed.add_field(name="Failed Staff", value=failed_staff_str, inline=False)
+                embed.add_field(name=f"Passed Staff ({passed_count})", value=passed_staff_str, inline=False)
+                embed.add_field(name=f"Failed Staff ({len(results) - passed_count})", value=failed_staff_str, inline=False)
+                embed.set_footer(text=f"Total Staffs {len(results)}")
                 embed.set_image(url=img["border"])
 
                 bot_name = _bot.user.name if _bot.user else "Lily"
@@ -1499,8 +1311,8 @@ async def automatic_quota_evaluator(check_by: str, bot):
                 try:
                     await webhook.send(**payload)
                 except Exception:
-                    logger.exception(f"[AutomaticQuotaEvaluator] Failed to send webhook for guild_id={guild_id} quota_id={quota_id}")
+                    logger.exception(f"[AutomaticQuotaEvaluator] Failed to send webhook for guild_id={guild_id} quota_id={quota.id}")
                     continue
             except Exception:
-                logger.exception(f"[AutomaticQuotaEvaluator] Unhandled exception while evaluating quota_id={quota_id} for guild_id={guild_id}")
+                logger.exception(f"[AutomaticQuotaEvaluator] Unhandled exception while evaluating quota_id={quota.id} for guild_id={guild_id}")
                 continue

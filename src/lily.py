@@ -228,3 +228,32 @@ class Lily(commands.Bot):
                     return None
 
         raise TypeError(f"Unsupported context type: {type(ctx)!r}")
+
+    async def edit(
+        self,
+        ctx: commands.Context | discord.Interaction,
+        message: discord.Message | None = None,
+        **kwargs,
+    ) -> discord.Message:
+        if isinstance(ctx, commands.Context):
+            if message is None:
+                raise ValueError(
+                    "Editing a prefix command reply requires the bot's reply message; "
+                    "ctx.message is the invoker's message and cannot be edited by the bot."
+                )
+            return await message.edit(**kwargs)
+
+        if isinstance(ctx, discord.Interaction):
+            if ctx.response.is_done():
+                return await ctx.edit_original_response(**kwargs)
+
+            if ctx.message is None:
+                raise ValueError(
+                    "No message is attached to this interaction (slash command or modal "
+                    "not opened from a component); respond or defer before editing."
+                )
+
+            await ctx.response.edit_message(**kwargs)
+            return await ctx.original_response()
+
+        raise TypeError(f"Unsupported context type: {type(ctx)!r}")
