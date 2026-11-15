@@ -1686,6 +1686,12 @@ class AppealButton(discord.ui.DynamicItem[discord.ui.Button], template=r'button:
             if not interaction.response.is_done():
                 await interaction.response.send_message(embed=simple_embed("Something went wrong while processing your appeal request.", 'cross'), ephemeral=True)
 
+class AppealReplyButton(discord.ui.DynamicItem[discord.ui.Button], template=r'button:case:(?P<id>[0-9]+)'):
+    ...
+
+class AppealReplyModal(discord.ui.Modal):
+    ...
+
 class CaseProofsView(discord.ui.View):
     def __init__(
         self,
@@ -1789,12 +1795,27 @@ class CaseProofsPurgeViewAbsolute(discord.ui.View):
 
         self.target_user = target_user
         self.interaction_user = interaction_user
+        self.message: Optional[discord.Message] = None
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.interaction_user.id:
             await interaction.response.send_message(ephemeral=True, content="Permission Denied!")
             return False
         return True
+
+    async def on_timeout(self):
+        for item in self.children:
+            if isinstance(item, discord.ui.Button):
+                item.disabled = True
+
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                logger.exception(
+                    "Failed to disable purge button after timeout for user_id=%s",
+                    self.target_user.id
+                )
 
     @discord.ui.button(
         label="Purge",
