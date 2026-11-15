@@ -152,9 +152,11 @@ async def ban_user(
     ctx: commands.Context | discord.Interaction,
     user_input,
     reason="No reason provided",
-    proofs: list = [],
+    proofs: list | None = None,
     delete_message_days: int = 7
 ):
+    proofs = proofs or []
+
     if isinstance(ctx, commands.Context):
         bot = cast("Lily", ctx.bot)
         author = ctx.author
@@ -181,7 +183,9 @@ async def ban_user(
     result = await _validate_moderation_target(ctx, user_input)
     if result is None:
         return
-    member, status, author_roles = result
+    member, _, _ = result
+
+    processing = await bot.send(ctx, embed=simple_embed(f"Banning <@{member.id}>..."))
 
     try:
         await ctx.guild.ban(
@@ -191,36 +195,30 @@ async def ban_user(
         )
     except discord.Forbidden:
         logger.exception("Missing permissions to ban user %s in guild %s", member.id, ctx.guild.id)
-        await bot.send(ctx, embed=simple_embed("I don't have permission to ban this user.", "cross"))
+        await bot.edit(ctx, processing, embed=simple_embed("I don't have permission to ban this user.", "cross"))
         return
     except discord.HTTPException:
         logger.exception("Failed to ban user %s in guild %s", member.id, ctx.guild.id)
-        await bot.send(ctx, embed=simple_embed("Failed to ban this user due to a Discord API error.", "cross"))
+        await bot.edit(ctx, processing, embed=simple_embed("Failed to ban this user due to a Discord API error.", "cross"))
         return
 
-    remaining_message = f"**Remaining:** {max(0, status.remaining_count - 1)}" # Not used for now
-    ban_message: str = f"Banned <@{member.id}>"
+    """ The ban already happened, a logging failure must not turn it into an error """
+    view = None
+    try:
+        case_id = await logging_controller.log_moderation_action(
+            ctx, author, member, "ban", reason, proofs.copy()
+        )
+        if case_id and not proofs:
+            view = CaseProofsView(author, case_id, None)
+    except Exception:
+        logger.exception("Failed to log ban for user %s in guild %s", member.id, ctx.guild.id)
 
     try:
-        if proofs:
-            await bot.send(ctx, embed=simple_embed(ban_message))
-            await logging_controller.log_moderation_action(
-                ctx, author, member, "ban", reason, proofs.copy()
-            )
-        else:
-            case_id = await logging_controller.log_moderation_action(
-                ctx, author, member, "ban", reason, proofs.copy()
-            )
-            if case_id:
-                view = CaseProofsView(author, case_id, None)
-                msg = await bot.send(ctx, embed=simple_embed(ban_message), view=view)
-                view.message = msg
-            else:
-                await bot.send(ctx, embed=simple_embed(ban_message))
-    except Exception:
-        logger.exception("Failed to log/send ban confirmation for user %s in guild %s", member.id, ctx.guild.id)
-
-
+        message = await bot.edit(ctx, processing, embed=simple_embed(f"Banned <@{member.id}>"), view=view)
+        if view:
+            view.message = message
+    except (discord.HTTPException, ValueError):
+        logger.exception("Failed to edit ban confirmation for user %s in guild %s", member.id, ctx.guild.id)
 
 async def quarantine_user(
     ctx: commands.Context | discord.Interaction,
@@ -247,7 +245,7 @@ async def quarantine_user(
     result = await _validate_moderation_target(ctx, user_input)
     if result is None:
         return
-    member, status, _ = result
+    member, _, _ = result
 
     if not isinstance(member, discord.Member):
         await bot.send(ctx, embed=simple_embed("User should be in the guild inorder to quarantine them", 'cross'))
@@ -280,6 +278,9 @@ async def quarantine_user(
         )
 
     author = ctx.author if isinstance(ctx, commands.Context) else ctx.user
+    if not isinstance(author, discord.Member):
+        await bot.send(ctx, embed=simple_embed("Command requires member object inorder to execute", 'cross'))
+        return
 
     roles_before_quarantine = [
         role.id
@@ -304,6 +305,8 @@ async def quarantine_user(
 
     roles.append(quarantine_role)
 
+    processing = await bot.send(ctx, embed=simple_embed(f"Quarantining <@{member.id}>..."))
+
     try:
         await member.edit(
             roles=roles,
@@ -311,60 +314,44 @@ async def quarantine_user(
         )
     except discord.Forbidden:
         logger.exception("Missing permissions to quarantine user %s in guild %s", member.id, ctx.guild.id)
-        await bot.send(ctx, embed=simple_embed("I don't have permission to add the Quarantine role.", "cross"))
+        await bot.edit(ctx, processing, embed=simple_embed("I don't have permission to add the Quarantine role.", "cross"))
         return
     except discord.HTTPException:
         logger.exception("Failed to quarantine user %s in guild %s", member.id, ctx.guild.id)
-        await bot.send(ctx, embed=simple_embed("Failed to quarantine this user due to a Discord API error.", "cross"))
+        await bot.edit(ctx, processing, embed=simple_embed("Failed to quarantine this user due to a Discord API error.", "cross"))
         return
 
-    remaining_message = f"**Remaining:** {max(0, status.remaining_count - 1)}"  
-    quarantine_message: str = f"Quarantined <@{member.id}>\n"
-    log_metadata = {"roles_before_quarantine": roles_before_quarantine}
+    view = None
+    try:
+        case_id = await logging_controller.log_moderation_action(
+            ctx, author, member, "quarantine", reason, proofs.copy(),
+            metadata={"roles_before_quarantine": roles_before_quarantine},
+        )
+
+        if not _force_no_proofs:
+            if proofs or not case_id:
+                view = CaseProofsPurgeViewAbsolute(author, member)
+            else:
+                view = CaseProofsPurgeView(author, case_id, None, target_user=member)
+    except Exception:
+        logger.exception("Failed to log quarantine for user %s in guild %s", member.id, ctx.guild.id)
 
     try:
-        if _force_no_proofs:
-            await logging_controller.log_moderation_action(
-                ctx, author, member, "quarantine", reason, proofs.copy(), metadata=log_metadata
-            )
-            await bot.send(ctx, embed=simple_embed(quarantine_message))
-
-        elif proofs:
-            assert isinstance(author, discord.Member)
-            await bot.send(
-                ctx,
-                embed=simple_embed(quarantine_message),
-                view=CaseProofsPurgeViewAbsolute(author, member),
-            )
-            await logging_controller.log_moderation_action(
-                ctx, author, member, "quarantine", reason, proofs.copy(), metadata=log_metadata
-            )
-
-        else:
-            assert isinstance(author, discord.Member)
-            case_id = await logging_controller.log_moderation_action(
-                ctx, author, member, "quarantine", reason, [], metadata=log_metadata
-            )
-            if case_id:
-                view = CaseProofsPurgeView(author, case_id, None, target_user=member)
-                msg = await bot.send(ctx, embed=simple_embed(quarantine_message), view=view)
-                view.message = msg
-            else:
-                await bot.send(
-                    ctx,
-                    embed=simple_embed(quarantine_message),
-                    view=CaseProofsPurgeViewAbsolute(author, member),
-                )
-    except Exception:
-        logger.exception("Failed to log/send quarantine confirmation for user %s in guild %s", member.id, ctx.guild.id)
+        message = await bot.edit(ctx, processing, embed=simple_embed(f"Quarantined <@{member.id}>"), view=view)
+        if view:
+            view.message = message
+    except (discord.HTTPException, ValueError):
+        logger.exception("Failed to edit quarantine confirmation for user %s in guild %s", member.id, ctx.guild.id)
 
 async def mute_user(
     ctx: commands.Context | discord.Interaction,
     user: discord.Member | discord.User,
     duration: str,
     reason: str = "No reason provided",
-    proofs: list = []
+    proofs: list | None = None
 ):
+    proofs = proofs or []
+
     if isinstance(ctx, commands.Context):
         bot = cast("Lily", ctx.bot)
         author = ctx.author
@@ -382,11 +369,11 @@ async def mute_user(
 
     assert bot.user is not None
     if user.id == bot.user.id:
-        await bot.send(ctx, embed=simple_embed("You cannot mute me baka~.", "cross"))
+        await bot.send(ctx, embed=simple_embed("You cannot mute me baka~", "cross"))
         return
 
     if isinstance(user, discord.User):
-        await bot.send(ctx, embed=simple_embed("The user has left the server", 'cross'))
+        await bot.send(ctx, embed=simple_embed("The user is not in this guild", 'cross'))
         return
 
     if user.timed_out_until and user.timed_out_until > discord.utils.utcnow():
@@ -413,43 +400,47 @@ async def mute_user(
 
     logging_controller = bot.logging_controller
 
+    processing = await bot.send(ctx, embed=simple_embed(f"Muting <@{user.id}>..."))
+
     try:
         seconds = mute_parser(duration)
         until = utcnow() + timedelta(seconds=seconds)
 
         await user.edit(timed_out_until=until, reason=reason)
-
-        if len(proofs) > 0:
-            await bot.send(ctx, embed=simple_embed(
-                f"Muted <@{user.id}>"
-            ))
-
-        case_id: int | None = await logging_controller.log_moderation_action(ctx, author, user, "mute", reason, proofs, {"duration": seconds})
-
-        if case_id and len(proofs) <= 0:
-            view = CaseProofsView(author, case_id, None)
-            msg = await bot.send(
-                ctx,
-                embed=simple_embed(
-                    f"Muted <@{user.id}>"
-                ),
-                view=view
-            )
-
-            view.message = msg
-
     except ValueError:
         logger.exception("Invalid mute duration '%s' provided for user %s", duration, user.id)
-        await bot.send(ctx, embed=simple_embed("Invalid duration format.", 'cross'))
+        await bot.edit(ctx, processing, embed=simple_embed("Invalid duration format.", 'cross'))
+        return
     except discord.Forbidden:
         logger.exception("Missing permissions to mute user %s in guild %s", user.id, ctx.guild.id)
-        await bot.send(ctx, embed=simple_embed("I don't have permission to mute this user.", 'cross'))
+        await bot.edit(ctx, processing, embed=simple_embed("I don't have permission to mute this user.", 'cross'))
+        return
     except discord.HTTPException:
         logger.exception("Failed to mute user %s in guild %s", user.id, ctx.guild.id)
-        await bot.send(ctx, embed=simple_embed("Failed to mute the user due to a Discord API error.", 'cross'))
+        await bot.edit(ctx, processing, embed=simple_embed("Failed to mute the user due to a Discord API error.", 'cross'))
+        return
     except Exception:
         logger.exception("Unexpected error while muting user %s in guild %s", user.id, ctx.guild.id)
-        await bot.send(ctx, embed=simple_embed("Failed to mute the user", 'cross'))
+        await bot.edit(ctx, processing, embed=simple_embed("Failed to mute the user", 'cross'))
+        return
+
+    """ The timeout is already applied, a logging failure must not turn it into an error """
+    view = None
+    try:
+        case_id = await logging_controller.log_moderation_action(
+            ctx, author, user, "mute", reason, proofs, {"duration": seconds}
+        )
+        if case_id and not proofs:
+            view = CaseProofsView(author, case_id, None)
+    except Exception:
+        logger.exception("Failed to log mute for user %s in guild %s", user.id, ctx.guild.id)
+
+    try:
+        message = await bot.edit(ctx, processing, embed=simple_embed(f"Muted <@{user.id}>"), view=view)
+        if view:
+            view.message = message
+    except (discord.HTTPException, ValueError):
+        logger.exception("Failed to edit mute confirmation for user %s in guild %s", user.id, ctx.guild.id)
 
 async def unmute(
     ctx: commands.Context | discord.Interaction,
@@ -468,7 +459,7 @@ async def unmute(
         return
 
     if isinstance(user, discord.User):
-        await bot.send(ctx, embed=simple_embed("The user has left the server", 'cross'))
+        await bot.send(ctx, embed=simple_embed("The user is not in this server", 'cross'))
         return
     if not user.timed_out_until or user.timed_out_until <= discord.utils.utcnow():
         await bot.send(ctx, embed=simple_embed("That user is not muted currently", 'cross'))
@@ -624,13 +615,14 @@ async def release(
         logger.exception("Unexpected error while releasing user %s in guild %s", member.id, ctx.guild.id)
         await bot.send(ctx, embed=simple_embed("An unexpected error occurred while releasing this user.", "cross"))
 
-
 async def warn(
     ctx: commands.Context | discord.Interaction,
     member: discord.Member | discord.User,
     reason: str,
-    proofs=[]
+    proofs: list | None = None
 ):
+    proofs = proofs or []
+
     if isinstance(ctx, commands.Context):
         bot = cast("Lily", ctx.bot)
         author = ctx.author
@@ -666,19 +658,25 @@ async def warn(
     assert bot.logging_controller is not None
     logging_controller = bot.logging_controller
 
+    processing = await bot.send(ctx, embed=simple_embed(f"Warning {member.mention}..."))
+
     try:
-        if len(proofs) > 0:
-            await bot.send(ctx, embed=simple_embed(f"{member.mention} has been warned"))
-
-        case_id: int | None = await logging_controller.log_moderation_action(ctx, author, member, "warn", reason, proofs)
-
-        if case_id and len(proofs) <= 0:
-            view = CaseProofsView(author, case_id, None)
-            msg = await bot.send(ctx, embed=simple_embed(f"{member.mention} has been warned"), view=view)
-            view.message = msg
+        case_id: int | None = await logging_controller.log_moderation_action(
+            ctx, author, member, "warn", reason, proofs
+        )
     except Exception:
         logger.exception("Failed to warn user %s in guild %s", member.id, ctx.guild.id)
-        await bot.send(ctx, embed=simple_embed("Failed to warn this user due to an unexpected error.", 'cross'))
+        await bot.edit(ctx, processing, embed=simple_embed("Failed to warn this user due to an unexpected error.", 'cross'))
+        return
+
+    view = CaseProofsView(author, case_id, None) if case_id and not proofs else None
+
+    try:
+        message = await bot.edit(ctx, processing, embed=simple_embed(f"{member.mention} has been warned"), view=view)
+        if view:
+            view.message = message
+    except (discord.HTTPException, ValueError):
+        logger.exception("Failed to edit warn confirmation for user %s in guild %s", member.id, ctx.guild.id)
 
 async def ms(
     ctx: discord.Interaction | commands.Context,
