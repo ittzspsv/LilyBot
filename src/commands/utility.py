@@ -443,7 +443,10 @@ class LilyUtility(commands.Cog):
         except ValueError as e:
             await interaction.followup.send(embed=simple_embed(f"Invalid parameter value: {e}", 'cross'), ephemeral=True)
         except discord.HTTPException as e:
-            await interaction.followup.send(embed=simple_embed(f"An Unknown error occured while editing a role", 'cross'), ephemeral=True)
+            await interaction.followup.send(embed=simple_embed(f"An Unknown error occured while editing a role {e}", 'cross'), ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(embed=simple_embed(f"An Unknown error occured while editing a role {e}", 'cross'), ephemeral=True)
+
 
     @app_permission(command_name="set_rolecustomize")
     @set.command(name="rolecustomize", description="Allows a person to customize a role without manage roles")
