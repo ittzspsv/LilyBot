@@ -790,7 +790,7 @@ class CaseListView(discord.ui.LayoutView):
                 discord.SelectOption(
                     label=case_type.replace("_", " ").title(),
                     value=case_type,
-                    default=case_type == "all",
+                    default=case_type == self.mod_type,
                 )
                 for case_type in self.case_types
             ],
@@ -799,7 +799,7 @@ class CaseListView(discord.ui.LayoutView):
         self.case_selector.callback = self.case_selector_callback
 
         case_list = discord.ui.Container(
-            self.case_selector,
+            discord.ui.ActionRow(self.case_selector),
             discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
             *cases,
         )
@@ -862,7 +862,8 @@ class CaseListView(discord.ui.LayoutView):
                 target_user_id=self.target_user_id,
                 moderator_id=self.moderator_id,
                 mod_type=self.mod_type,
-                interactor=interaction.user.id
+                interactor=interaction.user.id,
+                case_types=self.case_types
             )
             new_view.message = self.message
             await interaction.response.edit_message(view=new_view, allowed_mentions=discord.AllowedMentions.none())
@@ -946,9 +947,9 @@ class CaseListView(discord.ui.LayoutView):
             if not interaction.response.is_done():
                 await interaction.response.send_message(embed=simple_embed("Something went wrong opening that case.", 'cross'), ephemeral=True)
 
-    async def case_selector_callback(self, interaction: discord.Interaction):
+    async def case_selector_callback(self, interaction: discord.Interaction) -> None:
         self.mod_type = self.case_selector.values[0]
-        await self.refresh()
+        await self._refresh_page(interaction, 1)
 
     async def on_timeout(self) -> None:
         ...
