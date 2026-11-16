@@ -747,9 +747,7 @@ async def ms(
 
 async def mod_logs(
     ctx: discord.Interaction | commands.Context,
-    user: discord.Member | discord.User,
-    moderator: discord.User | discord.Member | None = None,
-    mod_type: str = "all"
+    user: discord.Member | discord.User
 ) -> None:
     if ctx.guild is None:
         embed = simple_embed("Command requires guild object in order to execute", "cross")
@@ -768,9 +766,11 @@ async def mod_logs(
         result = await bot_db.fetch_mod_logs(
             guild_id=ctx.guild.id,
             target_user_id=user.id,
-            moderator_id=moderator.id if moderator else None,
-            mod_type=mod_type,
+            moderator_id=None,
+            mod_type="all",
         )
+
+        case_types = await bot_db.fetch_mod_types(ctx.guild.id, user_id=user.id) + ["all"]
     except Exception:
         logger.exception("Failed to fetch mod logs for user %s in guild %s", user.id, ctx.guild.id)
         embed = simple_embed("An unexpected error occurred while fetching moderation logs.", 'cross')
@@ -795,9 +795,10 @@ async def mod_logs(
             bot_db,
             guild_id=ctx.guild.id,
             target_user_id=user.id,
-            moderator_id=moderator.id if moderator else None,
-            mod_type=mod_type,
-            interactor=ctx.author.id if isinstance(ctx, commands.Context) else ctx.user.id
+            moderator_id=None,
+            mod_type="all",
+            interactor=ctx.author.id if isinstance(ctx, commands.Context) else ctx.user.id,
+            case_types=case_types
         )
 
         if isinstance(ctx, discord.Interaction):

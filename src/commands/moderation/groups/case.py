@@ -17,9 +17,7 @@ class CaseCommands(app_commands.Group):
 
     @app_commands.command(name='list', description='Checks case logs for a particular user')
     @app_commands.describe(
-        member="The user whose cases you want to see (defaults to you)",
-        mod_type="Only show this type of case",
-        moderator="Only show cases handled by this moderator"
+        member="The user whose cases you want to see (defaults to you)"
     )
     @app_permission(
         command_name="modlogs",
@@ -29,9 +27,7 @@ class CaseCommands(app_commands.Group):
     async def list(
         self,
         interaction: discord.Interaction,
-        member: discord.User | discord.Member | None = None,
-        mod_type: ModType = ModType.All,
-        moderator: discord.User | discord.Member | None = None
+        member: discord.User | discord.Member | None = None
     ):
         target_id = member.id if member else interaction.user.id
 
@@ -43,9 +39,7 @@ class CaseCommands(app_commands.Group):
         try:
             await mod_logs(
                 interaction,
-                user=user,
-                moderator=moderator,
-                mod_type=mod_type.value
+                user=user
             )
 
         except Exception as e:

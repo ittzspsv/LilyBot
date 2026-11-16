@@ -25,8 +25,6 @@ class LilyError(Exception):
     ...
 
 
-
-
 def _to_int(value: Any) -> int | None:
     """Discord IDs sometimes arrive as strings in hand-written configs."""
     if value is None or isinstance(value, bool):
@@ -821,6 +819,25 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
             timestamp=timestamp,
             metadata=metadata,
         )
+
+    async def fetch_mod_types(
+        self,
+        guild_id: int | None = None,
+        user_id: int | None = None,
+    ):
+        query = "SELECT DISTINCT mod_type FROM modlogs WHERE 1 = 1"
+        params = ()
+
+        if guild_id is not None:
+            query += " AND guild_id = ?"
+            params += (guild_id,)
+
+        if user_id is not None:
+            query += " AND moderator_id = ?"
+            params += (user_id,)
+
+        rows = await self.fetch_all(query, params)
+        return [row["mod_type"] for row in rows if row["mod_type"] is not None]
 
     async def log_proof_action(
         self, guild_id: int, case_id: int, proof_reference: int, author: int
@@ -2768,3 +2785,40 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
             score_cutoff=score_cutoff,
         )
         return [name for name, _score, _idx in matches]
+
+
+
+
+
+    async def block_user(
+        self,
+        guild_id: int,
+        member_id: int,
+        blocked_by: int,
+        reason: str,
+        type: str,
+    ) -> bool:
+        return bool(
+            await self.execute(
+                "INSERT INTO blocked_users (guild_id, member_id, blocked_by, reason, type) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT (guild_id, member_id) DO UPDATE SET "
+                "blocked_by = excluded.blocked_by, "
+                "reason = excluded.reason, "
+                "type = excluded.type, "
+                "blocked_at = CURRENT_TIMESTAMP",
+                (guild_id, member_id, blocked_by, reason, type),
+                row_count=True,
+            )
+        )
+
+    async def is_blocked(
+        self,
+        guild_id: int,
+        member_id: int,
+    ) -> bool:
+        row = await self.fetch_one(
+            "SELECT 1 FROM blocked_users WHERE guild_id = ? AND member_id = ?",
+            (guild_id, member_id),
+        )
+        return row is not None

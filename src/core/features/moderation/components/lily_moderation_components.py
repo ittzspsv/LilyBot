@@ -722,7 +722,8 @@ class CaseListView(discord.ui.LayoutView):
         target_user_id: int,
         moderator_id: int | None = None,
         mod_type: str = "all",
-        interactor: int
+        interactor: int,
+        case_types: List[str]
     ) -> None:
         super().__init__(timeout=300)
 
@@ -734,6 +735,7 @@ class CaseListView(discord.ui.LayoutView):
         self.target_user_id = target_user_id
         self.moderator_id = moderator_id
         self.mod_type = mod_type
+        self.case_types = case_types
 
         self.channel = None
         self.message: discord.Message | None = None
@@ -746,8 +748,8 @@ class CaseListView(discord.ui.LayoutView):
 
         case_info = discord.ui.Container(
             discord.ui.Section(
-                discord.ui.TextDisplay(content=f"# {user[0]}'s Case List"),
-                discord.ui.TextDisplay(content=f"### Total Logs\n- {self.total_count}"),
+                discord.ui.TextDisplay(content=f"## [{user[0]}'s Cases](https://discord.com/users/{target_user_id})"),
+                discord.ui.TextDisplay(content=f"Total Cases: `{self.total_count}`"),
                 accessory=discord.ui.Thumbnail(
                     media=user[1],
                 ),
@@ -781,8 +783,23 @@ class CaseListView(discord.ui.LayoutView):
                 )
             )
 
+        self.case_selector = discord.ui.Select(
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(
+                    label=case_type.replace("_", " ").title(),
+                    value=case_type,
+                    default=case_type == "all",
+                )
+                for case_type in self.case_types
+            ],
+        )
+
+        self.case_selector.callback = self.case_selector_callback
+
         case_list = discord.ui.Container(
-            discord.ui.TextDisplay(content="# Log's Overview"),
+            self.case_selector,
             discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small),
             *cases,
         )
@@ -884,7 +901,8 @@ class CaseListView(discord.ui.LayoutView):
                 target_user_id=self.target_user_id,
                 moderator_id=self.moderator_id,
                 mod_type=self.mod_type,
-                interactor=self.interactor
+                interactor=self.interactor,
+                case_types=self.case_types
             )
 
             new_view.message = self.message
@@ -927,6 +945,10 @@ class CaseListView(discord.ui.LayoutView):
             logger.exception("Failed to open case info for custom_id=%s", getattr(interaction, "custom_id", None))
             if not interaction.response.is_done():
                 await interaction.response.send_message(embed=simple_embed("Something went wrong opening that case.", 'cross'), ephemeral=True)
+
+    async def case_selector_callback(self, interaction: discord.Interaction):
+        self.mod_type = self.case_selector.values[0]
+        await self.refresh()
 
     async def on_timeout(self) -> None:
         ...
@@ -1606,7 +1628,7 @@ class AppealButton(discord.ui.DynamicItem[discord.ui.Button], template=r'button:
         self.case_id: int | None = case_id
 
     @classmethod
-    async def from_custom_id(cls, interaction: discord.Interaction, item: discord.ui.Item[Any], match: re.Match[str], /):
+    async def from_custom_id(cls, interaction: discord.Interaction, item: discord.ui.Item[Any], match: re.Match[str], /) -> AppealButton:
         case_id = int(match['id'])
         return cls(case_id)
 
