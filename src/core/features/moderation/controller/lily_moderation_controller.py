@@ -185,7 +185,7 @@ async def ban_user(
         return
     member, _, _ = result
 
-    processing = await bot.send(ctx, embed=simple_embed(f"Banning <@{member.id}>..."))
+    processing = await bot.send(ctx, embed=simple_embed(f"Attempting to eliminate <@{member.id}>", 'loader'))
 
     try:
         await ctx.guild.ban(
@@ -240,6 +240,7 @@ async def quarantine_user(
 
     assert isinstance(ctx.guild, discord.Guild)
     assert bot.logging_controller is not None
+    assert bot.db is not None
     logging_controller = bot.logging_controller
 
     result = await _validate_moderation_target(ctx, user_input)
@@ -305,7 +306,7 @@ async def quarantine_user(
 
     roles.append(quarantine_role)
 
-    processing = await bot.send(ctx, embed=simple_embed(f"Quarantining <@{member.id}>..."))
+    processing = await bot.send(ctx, embed=simple_embed(f"Attempting to quarantine <@{member.id}>", 'loader'))
 
     try:
         await member.edit(
@@ -400,7 +401,7 @@ async def mute_user(
 
     logging_controller = bot.logging_controller
 
-    processing = await bot.send(ctx, embed=simple_embed(f"Muting <@{user.id}>..."))
+    processing = await bot.send(ctx, embed=simple_embed(f"Attempting to mute <@{user.id}>", 'loader'))
 
     try:
         seconds = mute_parser(duration)
@@ -658,7 +659,7 @@ async def warn(
     assert bot.logging_controller is not None
     logging_controller = bot.logging_controller
 
-    processing = await bot.send(ctx, embed=simple_embed(f"Warning {member.mention}..."))
+    processing = await bot.send(ctx, embed=simple_embed(f"Processing warn for {member.mention}...",'loader'))
 
     try:
         case_id: int | None = await logging_controller.log_moderation_action(
