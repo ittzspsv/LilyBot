@@ -1864,7 +1864,7 @@ class AppealMessageView(discord.ui.LayoutView):
             discord.ui.Section(
                 discord.ui.TextDisplay(content=f"### You've received a message"),
                 discord.ui.TextDisplay(content=f"Server: **{server.name}**"),
-                discord.ui.TextDisplay(content=f"> {message or 'No message received'}"),
+                discord.ui.TextDisplay(content=f">>> {message or 'No message received'}"),
                 accessory=discord.ui.Thumbnail(
                     media=server.icon.url if server.icon else bot.display_avatar.url
                 )
