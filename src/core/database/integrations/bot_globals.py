@@ -833,7 +833,7 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
             params += (guild_id,)
 
         if user_id is not None:
-            query += " AND moderator_id = ?"
+            query += " AND target_user_id = ?"
             params += (user_id,)
 
         rows = await self.fetch_all(query, params)
