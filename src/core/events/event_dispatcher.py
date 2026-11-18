@@ -32,6 +32,17 @@ class Events(str, Enum):
     APPEAL_REQUESTED = "on_appeal_requested"
     APPEAL_HANDLED = "on_appeal_handled"
 
+    TICKET_CREATED = "on_ticket_created"
+    TICKET_CLOSED = "on_ticket_closed"
+    TICKET_CLAIMED = "on_ticket_claimed"
+    TICKET_REVOKED = "on_ticket_revoked"
+
+
+    STAFF_INFRACTION_ISSUED = "on_staff_infraction_issued"
+    STAFF_ADDED = "on_staff_added"
+    STAFF_REMOVED = "on_staff_removed"
+    STAFF_UPDATE = "on_staff_update"
+
 
 class EventDispatcher:
     def __init__(self) -> None:
