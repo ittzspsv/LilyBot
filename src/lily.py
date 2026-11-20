@@ -1,10 +1,12 @@
 from typing import Optional
 from discord import app_commands
+from functools import reduce
 import discord
 from discord.ext import commands, tasks
 
 from src.core.database.integrations.bot_globals import BotGlobalsDatabaseAccess
 from src.core.database.integrations.archive import ArchiveAccess
+from src.core.configs.bot_details import img
 from src.core.logging.lily_logging import LilyLoggingController
 from src.core.utils.embeds.sLilyEmbed import simple_embed
 from src.core.features.moderation.components.lily_moderation_components import AppealButton, AppealHandleButton
@@ -24,7 +26,7 @@ logger = logging.getLogger("lily")
 
 class Lily(commands.Bot):
     def __init__(self, events: EventDispatcher):
-        intents = discord.Intents.all() 
+        intents = discord.Intents.all()
         intents.presences = False
         intents.members = False
         intents.message_content = True
@@ -84,7 +86,7 @@ class Lily(commands.Bot):
         self.modify_status.start()
 
         self.tree.on_error = self.on_app_command_error
-            
+
     def prefix(self, bot: commands.Bot, message: discord.Message):
         if bot.user is None:
             return []
@@ -129,7 +131,7 @@ class Lily(commands.Bot):
 
     async def on_ready(self):
         print('Logged on as', self.user)
-        
+
 
     async def on_guild_join(self, guild: discord.Guild):
         if self.db is not None:
@@ -162,8 +164,8 @@ class Lily(commands.Bot):
         ):
             try:
                 await self.adb.record_message(
-                    message_id=message.id, 
-                    channel_id=message.channel.id, 
+                    message_id=message.id,
+                    channel_id=message.channel.id,
                     guild_id=message.guild.id,
                     author_id=message.author.id
                 )
@@ -171,6 +173,70 @@ class Lily(commands.Bot):
                 logger.exception("failed to record message %s", message.id)
 
         await self.process_commands(message)
+
+    async def on_message_delete(self, message: discord.Message):
+        if message.author.bot:
+            return
+
+        if message.guild is None:
+            return
+
+        assert self.db is not None
+        
+        webhook_url = await self.db.get_webhook(guild_id=message.guild.id, channel_type="on_message_deleted")
+        if not webhook_url:
+            return
+
+        try:
+            webhook = discord.Webhook.from_url(
+                webhook_url,
+                client=self,
+            )
+
+            reactions = sorted(message.reactions, key=lambda r: r.count, reverse=True)
+            content = message.content[:1900] or "*No text content*"
+            quoted = "\n".join(f"> {line}" for line in content.splitlines())
+
+            footer = f"ID: {message.id}"
+
+            embed = discord.Embed(
+                description=(
+                    f"Message sent by {message.author.mention} deleted in <#{message.channel.id}>\n\n"
+                    f"{quoted}"
+                ),
+                timestamp=discord.utils.utcnow(),
+                color=0xFFF5F5
+            )
+            embed.set_thumbnail(url=message.author.display_avatar.url)
+            embed.set_footer(text=footer)
+            embed.set_image(url=img["border"])
+
+            view = reduce(
+                lambda v, reaction: v.add_item(
+                    discord.ui.Button(
+                        style=discord.ButtonStyle.secondary,
+                        emoji=reaction.emoji,
+                        label=str(reaction.count),
+                        disabled=True,
+                    )
+                ),
+                reactions[:4],
+                discord.ui.View(),
+            )
+
+            if reactions:
+                await webhook.send(
+                    embed=embed, 
+                    view=view
+                )
+            else:
+                await webhook.send(
+                    embed=embed
+                )
+
+        except ValueError:
+            return
+
 
     async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent):
         if self.adb is not None and payload.guild_id is not None:

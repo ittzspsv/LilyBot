@@ -579,6 +579,7 @@ class LilyUtility(commands.Cog):
         app_commands.Choice(name="Monthly Messages Leaderboard", value="monthly_messages_leaderboard"),
         app_commands.Choice(name="Quota Updates", value="quota_updates"),
         app_commands.Choice(name="Audit Role Updates", value="audit_role_updates"),
+        app_commands.Choice(name="Message Deleted", value="on_message_deleted")
     ])
     async def set_notifiers(self, interaction: discord.Interaction, type: app_commands.Choice[str], channel: discord.TextChannel | None = None, webhook_url: str | None = None):
         if interaction.guild is None:
