@@ -4,6 +4,7 @@ from ....database.integrations.bot_globals import BotGlobalsDatabaseAccess, Lily
 from src.core.configs.bot_details import emoji, img
 from src.core.utils.embeds.sLilyEmbed import simple_embed
 from ..types.staff_management_types import QuotaCheckBy
+from src.core.events.event_dispatcher import Events, EventPayload
 from typing import Optional, cast, Final, TYPE_CHECKING
 from ..embeds.staff_management_embed import *
 from src.core.features.permissions.lily_permissions import has_app_permission
@@ -110,7 +111,6 @@ async def fetch_all_staffs(ctx: discord.Interaction | commands.Context) -> None:
         else:
             await ctx.reply(embed=embed, ephemeral=True)
 
-
 async def add_staff(interaction: discord.Interaction, staff: discord.Member, rank: discord.Role | None = None) -> None:
     if interaction.guild is None:
         embed = discord.Embed(
@@ -138,7 +138,8 @@ async def add_staff(interaction: discord.Interaction, staff: discord.Member, ran
         )
         return
 
-    bot_db = cast("Lily", interaction.client).db
+    bot = cast("Lily", interaction.client)
+    bot_db = bot.db
     assert bot_db is not None
     try:
         changes = await bot_db.add_staff(staff.id, interaction.guild.id, staff.display_name, staff.display_avatar.url, role_id=rank.id if rank else None)
@@ -153,6 +154,16 @@ async def add_staff(interaction: discord.Interaction, staff: discord.Member, ran
             await staff.add_roles(*add_roles, reason=f"Staff added by {interaction.user.id}")
 
         await interaction.response.send_message(embed=simple_embed(f"Successfully added {staff.mention} as staff."))
+        await bot.events.invoke(
+            Events.STAFF_ADDED.value,
+            EventPayload(
+                bot=bot,
+                guild=interaction.guild
+            ),
+            member=staff,
+            added_by=interaction.user,
+            assigned_roles=add_roles
+        )
     except LilyError as e:
         await interaction.response.send_message(embed=simple_embed(str(e), "cross"))
     except Exception:
@@ -169,7 +180,8 @@ async def remove_staff(interaction: discord.Interaction, staff: discord.Member |
 
         await interaction.response.send_message(embed=embed)
         return
-    bot_db = cast("Lily", interaction.client).db
+    bot = cast("Lily", interaction.client)
+    bot_db = bot.db
     assert bot_db is not None
     try:
         changes = await bot_db.remove_staff(staff.id, interaction.guild.id)
@@ -191,6 +203,7 @@ async def remove_staff(interaction: discord.Interaction, staff: discord.Member |
             if isinstance(channel, discord.TextChannel):
                 staff_updates_channel = channel
 
+        remove_roles = set()
         if staff:
             remove_roles = {
                 interaction.guild.get_role(role_id)
@@ -222,7 +235,17 @@ async def remove_staff(interaction: discord.Interaction, staff: discord.Member |
                     logger.exception(f"[RemoveStaff] Failed to send staff update embed to channel_id={staff_updates_channel.id} in guild_id={interaction.guild.id}")
 
         await interaction.response.send_message(embed=simple_embed(f"Successfully removed {staff.mention} from staff."))
-        """ Send DM'S If Available """
+        await bot.events.invoke(
+            Events.STAFF_REMOVED,
+            EventPayload(
+                bot=bot,
+                guild=interaction.guild
+            ),
+            staff=staff,
+            removed_by=interaction.user,
+            reason=reason,
+            removed_roles=remove_roles
+        )
 
         if staff is not None:
             assert isinstance(interaction.user, discord.Member)
@@ -750,7 +773,8 @@ async def update_staff(interaction: discord.Interaction, staff: discord.Member, 
         return
 
     try:
-        bot_db = cast("Lily", interaction.client).db
+        bot = cast("Lily", interaction.client)
+        bot_db = bot.db
         assert bot_db is not None
         assert isinstance(interaction.user, discord.Member)
 
@@ -840,12 +864,25 @@ async def update_staff(interaction: discord.Interaction, staff: discord.Member, 
         await interaction.response.send_message(
             embed=simple_embed(f"{staff.mention} has been {act}.")
         )
+        await bot.events.invoke(
+            Events.STAFF_UPDATE.value,
+            EventPayload(
+                bot=bot,
+                guild=interaction.guild
+            ),
+            staff=staff,
+            updated_by=interaction.user,
+            update_type=update_type,
+            reason=reason,
+            old_role=old_role,
+            new_role=new_role,
+            elevated=elevated
+        )
     except LilyError as e:
         await interaction.response.send_message(embed=simple_embed(str(e), "cross"))
     except Exception:
         logger.exception(f"[UpdateStaff] Unhandled exception while updating staff_id={staff.id} in guild_id={interaction.guild.id}")
         await interaction.response.send_message(embed=simple_embed("Failed to update staff.", "cross"))
-
 
 async def add_staff_quota(interaction: discord.Interaction, quota_role: discord.Role, minimum_ms: int, minimum_msg: int, check_by: QuotaCheckBy):
     if interaction.guild is None:
@@ -949,7 +986,6 @@ async def fetch_staff_quota(interaction: discord.Interaction):
         logger.exception(f"[FetchStaffQuota] Failed to fetch quotas for guild_id={interaction.guild.id}")
         await interaction.response.send_message(embed=simple_embed("Failed to fetch staff quotas.", "cross"))
 
-
 async def check_staff_quota(interaction: discord.Interaction, staff: discord.Member | discord.User):
     def _line(current: int, required: int) -> str:
         if current >= required:
@@ -1036,7 +1072,6 @@ async def check_staff_quota(interaction: discord.Interaction, staff: discord.Mem
             f"[CheckStaffQuota] Failed to check quota for staff_id={staff.id} in guild_id={interaction.guild.id}"
         )
         await interaction.response.send_message(embed=simple_embed("Failed to check staff quota.", "cross"))
-
 
 async def remove_role(interaction: discord.Interaction, role: int):
     if interaction.guild is None:
@@ -1211,8 +1246,6 @@ async def get_staffs_timezone_coverage(interaction: discord.Interaction) -> None
         logger.exception(f"[GetStaffsTimezoneCoverage] Failed to generate timezone coverage chart for guild_id={interaction.guild.id}")
         await interaction.followup.send(embed=simple_embed("Failed to generate timezone coverage chart.", "cross"))
 
-
-
 async def _record_quota_history(
     bot_db,
     guild_id: int,
@@ -1235,8 +1268,6 @@ async def _record_quota_history(
                 f"[AutomaticQuotaEvaluator] Failed to create quota history "
                 f"guild_id={guild_id} quota_id={quota_id} staff_id={r.staff.id} status={status}"
             )
-
-
 
 async def automatic_quota_evaluator(check_by: str, bot):
     _bot = cast("Lily", bot)
