@@ -2352,13 +2352,6 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
     async def evaluate_quotas(
         self, guild_id: int, *, staff_id: int | None = None, quota_id: int | None = None
     ) -> list[QuotaResult]:
-        """One ``QuotaResult`` per (staff, applicable quota).
-
-        * ``staff_id`` given  -> that staff only (LOA allowed, retired raises).
-        * ``quota_id`` given  -> only that quota.
-        * neither             -> every active, non-LOA staff against every quota.
-        Each quota is judged over its own ``check_by`` period (default 7d).
-        """
         conditions = ["q.guild_id = ?", "s.retired = 0"]
         params: list[Any] = [guild_id]
 
@@ -2451,6 +2444,72 @@ class BotGlobalsDatabaseAccess(LilyDatabaseAccess):
             status=status,
             timestamp=timestamp,
         )
+
+    async def get_staff_quota_history(
+        self,
+        staff_id: int,
+        guild_id: int,
+        limit: int = 10,
+        *,
+        quota_id: int | None = None,
+        include_quota: bool = False,
+    ) -> list[StaffQuotaHistory]:
+        if limit < 1:
+            raise ValueError("limit must be >= 1")
+
+        conditions = ["h.guild_id = ?", "h.staff_id = ?"]
+        params: list[Any] = [guild_id, staff_id]
+
+        if quota_id is not None:
+            conditions.append("h.quota_id = ?")
+            params.append(quota_id)
+
+        quota_columns = join = ""
+        if include_quota:
+            quota_columns = """,
+                q.quota_id        AS q_quota_id,
+                q.guild_id        AS q_guild_id,
+                q.role_id         AS q_role_id,
+                q.min_msg         AS q_min_msg,
+                q.min_ms          AS q_min_ms,
+                q.on_quota_passed AS q_on_quota_passed,
+                q.on_quota_failed AS q_on_quota_failed,
+                q.check_by        AS q_check_by"""
+            join = """
+            LEFT JOIN staff_quota q
+                ON q.quota_id = h.quota_id AND q.guild_id = h.guild_id"""
+
+        rows = await self.fetch_all(
+            f"""
+            SELECT h.id, h.quota_id, h.staff_id, h.guild_id, h.status, h.timestamp
+                {quota_columns}
+            FROM staff_quota_history h{join}
+            WHERE {' AND '.join(conditions)}
+            ORDER BY h.id DESC
+            LIMIT ?
+            """,
+            (*params, limit),
+        )
+
+        history: list[StaffQuotaHistory] = []
+        for row in rows:
+            entry = StaffQuotaHistory.from_row(row)
+            if include_quota and row["q_quota_id"] is not None:
+                entry = replace(
+                    entry,
+                    quota=StaffQuota(
+                        id=row["q_quota_id"],
+                        guild_id=row["q_guild_id"],
+                        role_id=row["q_role_id"],
+                        min_msg=row["q_min_msg"],
+                        min_ms=row["q_min_ms"],
+                        on_quota_passed=row["q_on_quota_passed"],
+                        on_quota_failed=row["q_on_quota_failed"],
+                        check_by=row["q_check_by"],
+                    ),
+                )
+            history.append(entry)
+        return history
 
     # ----------------------------------------------------------------------- #
     # Messages / XP / leaderboard
