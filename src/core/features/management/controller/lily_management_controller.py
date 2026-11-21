@@ -54,11 +54,12 @@ async def fetch_staff_detail(ctx: discord.Interaction | commands.Context, staff:
         assert bot_db is not None
 
         profile = await bot_db.get_staff_profile(staff.id, ctx.guild.id)
+        quota_history = await bot_db.get_staff_quota_history(staff_id=staff.id, guild_id=ctx.guild.id, include_quota=True)
 
         if profile is None:
             raise ValueError("Staff data not found in database.")
 
-        view = StaffDataView(staff, profile)
+        view = StaffDataView(staff, profile, quota_history=quota_history)
 
         if isinstance(ctx, discord.Interaction):
             await ctx.response.send_message(view=view, allowed_mentions=discord.AllowedMentions.none())

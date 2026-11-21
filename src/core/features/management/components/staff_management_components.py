@@ -19,6 +19,7 @@ from src.core.database.integrations.models import (
     StaffCounts,
     StaffProfile,
     Strike,
+    StaffQuotaHistory
 )
 
 
@@ -39,7 +40,12 @@ class StaffPage:
 class StaffDataView(discord.ui.LayoutView):
     DEFAULT_PAGE = "basic"
 
-    def __init__(self, member: discord.Member, profile: StaffProfile) -> None:
+    def __init__(
+            self, 
+            member: discord.Member, 
+            profile: StaffProfile, 
+            quota_history: List[StaffQuotaHistory]
+        ) -> None:
         super().__init__(timeout=300)
 
         staff = profile.staff
@@ -102,7 +108,27 @@ class StaffDataView(discord.ui.LayoutView):
                 "Infractions Information",
                 Configs.emoji["warn"],
                 f"> {Configs.emoji['warn']} **Strike Count:** **{profile.strikes_count}**",
-            )
+            ),
+            "quota_history": StaffPage(
+                "Quota History",
+                Configs.emoji["calender"],
+                "\n".join(
+                    "> "
+                    + (f"{Configs.emoji['checked']} Passed" if entry.passed else f"{Configs.emoji['cross']} Failed")
+                    + " Quota #"
+                    + str(entry.quota_id)
+                    + " ("
+                    + (f"<@&{entry.quota.role_id}>" if entry.quota else "Deleted")
+                    + ")"
+                    + (
+                        " • <t:" + str(int(entry.recorded_at.timestamp())) + ":R>"
+                        if entry.recorded_at
+                        else ""
+                    )
+                    for entry in quota_history
+                )
+                or "> No quota history found.",
+            ),
         }
 
         header = discord.ui.Container()
@@ -168,7 +194,7 @@ class StaffDataView(discord.ui.LayoutView):
             option.default = option.value == key
 
         self.details_text.content = self.pages[key].body
-        await interaction.response.edit_message(view=self)
+        await interaction.response.edit_message(view=self, allowed_mentions=discord.AllowedMentions.none())
 
 class StaffListView(discord.ui.LayoutView):
     def __init__(
