@@ -238,7 +238,6 @@ class Staff:
         if not self.joined_on:
             return None
         try:
-            # `joined_on` is stored as dd/mm/YYYY
             return datetime.strptime(self.joined_on, "%d/%m/%Y").replace(tzinfo=timezone.utc)
         except ValueError:
             return parse_dt(self.joined_on)
@@ -376,6 +375,7 @@ class StaffQuotaHistory:
     guild_id: int
     status: Literal["pass", "fail"]
     timestamp: str
+    quota: Optional[StaffQuota] = None
 
     @property
     def passed(self) -> bool:
@@ -395,6 +395,7 @@ class StaffQuotaHistory:
             status=row["status"],
             timestamp=row["timestamp"],
         )
+
 
 @dataclass(frozen=True, slots=True)
 class RankUpdate:
